@@ -27,6 +27,7 @@ class AssetClass(str, Enum):
     COMMODITY = "commodity"
     REIT = "reit"
     CASH = "cash"
+    MIXED = "mixed"
 
 
 class Region(str, Enum):

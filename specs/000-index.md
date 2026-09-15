@@ -14,6 +14,7 @@
 | [060](060-performance-metrics.md) | 性能指标 | Draft | Planned |
 | [070](070-cli.md) | CLI 接口 | Draft | Planned |
 | [080](080-feishu-card.md) | 飞书 interactive card | Draft | Planned |
+| [090](090-portfolio-journal.md) | 实盘持仓账本 | Draft | Planned |
 
 **Legend**：Stable = 流程规范不再改；Draft = 还在迭代；Planned = 还没动代码。
 

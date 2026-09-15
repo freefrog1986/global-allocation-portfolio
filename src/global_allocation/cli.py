@@ -40,6 +40,11 @@ data_app = typer.Typer(help="管理数据", no_args_is_help=True)
 app.add_typer(strategy_app, name="strategy")
 app.add_typer(data_app, name="data")
 
+# 实盘持仓账本
+from global_allocation.portfolio.cli import app as portfolio_app  # noqa: E402
+
+app.add_typer(portfolio_app, name="portfolio")
+
 
 # ────────────────────────────────────────────────────────────────────
 # 顶层
