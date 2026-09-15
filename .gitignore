@@ -1,0 +1,55 @@
+# ─── Python ───────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+.nox/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# ─── Project data (local state, never commit) ────────────
+data/cache/
+data/state/
+data/output/
+*.db
+*.sqlite
+*.sqlite3
+data/raw/*.pdf
+data/raw/*.csv
+
+# ─── Environment / secrets ──────────────────────────────
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+
+# ─── IDE ─────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+.cursor/
+
+# ─── Logs ────────────────────────────────────────────────
+*.log
+logs/
+
+# ─── Local botmux / claudebox artifacts (in case anyone mounts these here) ──
+.claude/settings.local.json

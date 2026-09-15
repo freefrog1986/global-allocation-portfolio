@@ -1,0 +1,37 @@
+# 自定义策略示例：简单双 ETF 配置
+# 用法：gap strategy validate examples/my_strategy.yaml
+
+id: my_60_40_custom
+name: 我的 60/40（自定义）
+description: |
+  60% 全球股票 ETF + 40% 美国债 ETF，按年再平衡。
+  这是用户自定义策略的示例，实际使用时按需要修改。
+
+target_weights:
+  - symbol: VT
+    name: Vanguard Total World Stock ETF
+    asset_class: equity
+    region: global
+    currency: usd
+    data_source: yfinance
+    weight: 0.60
+
+  - symbol: BND
+    name: Vanguard Total Bond Market ETF
+    asset_class: bond
+    region: us
+    currency: usd
+    data_source: yfinance
+    weight: 0.40
+
+rebalance:
+  frequency: yearly
+  threshold: 0.05  # 偏离目标超过 5% 也触发再平衡
+
+base_currency: usd
+inception: 2007-09-26
+metadata:
+  tags: [classic, retirement]
+  notes: |
+    BND 成立于 2007-09-26，更早的数据不可得。
+    回测建议从 2008 年开始。
