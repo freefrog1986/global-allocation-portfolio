@@ -22,7 +22,6 @@ from global_allocation.models import (
 )
 from global_allocation.strategies.base import StrategyBase
 
-
 # ────────────────────────────────────────────────────────────────────
 # Fixtures
 # ────────────────────────────────────────────────────────────────────
@@ -274,7 +273,6 @@ class TestValidate:
 
     def test_validate_is_final_no_override(self) -> None:
         # Arrange —— 子类不能重写 validate
-        from typing import final
 
         # Act / Assert
         # `final` 在运行时是 hint，不阻止；但我们应该用 __final__ 标记

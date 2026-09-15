@@ -14,7 +14,6 @@ from global_allocation.models import (
     AssetClass,
     Currency,
     DataSource,
-    Region,
 )
 from global_allocation.strategies.base import StrategyBase
 from global_allocation.strategies.builtin import (
@@ -23,7 +22,6 @@ from global_allocation.strategies.builtin import (
     RiskParity,
     SixtyForty,
 )
-
 
 # ────────────────────────────────────────────────────────────────────
 # SixtyForty

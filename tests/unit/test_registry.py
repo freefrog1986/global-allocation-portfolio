@@ -6,9 +6,6 @@ import pytest
 
 from global_allocation.strategies.base import StrategyBase
 from global_allocation.strategies.builtin import (
-    AllWeather,
-    PermanentPortfolio,
-    RiskParity,
     SixtyForty,
 )
 from global_allocation.strategies.registry import (

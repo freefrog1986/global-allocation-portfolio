@@ -6,12 +6,12 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
-
-import pytest
 
 # 把 src 加到 sys.path，避免 editable install 失败时的 import error
 import sys
+from pathlib import Path
+
+import pytest
 
 SRC = Path(__file__).resolve().parent.parent / "src"
 if str(SRC) not in sys.path:

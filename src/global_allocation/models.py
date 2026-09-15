@@ -14,7 +14,6 @@ from typing import Any, Literal
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-
 # ────────────────────────────────────────────────────────────────────
 # Enums
 # ────────────────────────────────────────────────────────────────────

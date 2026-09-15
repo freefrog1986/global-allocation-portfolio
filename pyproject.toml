@@ -46,6 +46,7 @@ dev = [
     "ruff>=0.5,<0.7",
     "mypy>=1.10,<2",
     "types-PyYAML",
+    "pandas-stubs>=2.2,<3",
 ]
 
 [project.scripts]
@@ -73,10 +74,13 @@ select = [
     "UP",           # pyupgrade
     "N",            # pep8-naming
 ]
-ignore = ["E501"]  # line-length handled by formatter
+ignore = [
+    "E501",   # line-length handled by formatter
+    "UP042",  # str+Enum → StrEnum：保持兼容
+]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 warn_unused_ignores = true
 warn_return_any = true
@@ -90,7 +94,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
-addopts = "-ra --strict-markers --cov=src/global_allocation --cov-report=term-missing --cov-fail-under=80"
+addopts = "-ra --strict-markers -m 'not integration' --cov=src/global_allocation --cov-report=term-missing --cov-fail-under=80"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests that hit the network",

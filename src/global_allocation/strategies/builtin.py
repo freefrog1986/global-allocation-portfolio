@@ -25,7 +25,6 @@ from global_allocation.models import (
 )
 from global_allocation.strategies.base import StrategyBase
 
-
 # ────────────────────────────────────────────────────────────────────
 # 1. 60/40 — 经典股债
 # ────────────────────────────────────────────────────────────────────
