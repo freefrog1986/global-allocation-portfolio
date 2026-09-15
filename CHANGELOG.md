@@ -7,6 +7,12 @@
 ## [Unreleased]
 
 ### Added
+- 实盘持仓账本（specs/090）：手动录入基金 / 买卖 / 持仓聚合 / 周快照 / 飞书周报
+  - 数据模型：`Fund` / `Transaction` / `Holding` / `WeeklySnapshot`（Pydantic v2 frozen）
+  - 存储：独立 SQLite（`$XDG_DATA_HOME/gap/portfolio.db`），Decimal 存为 text 保精度
+  - 估值：`ManualPriceSource`（测试）/ `AkshareFundPriceSource`（生产，`ak.fund_open_fund_info_em`）
+  - CLI：`gap portfolio {init,show,snapshot,report,publish,buy,sell}` + 子命令 `fund {add,list}` / `tx list`
+  - 飞书卡片：summary + 持仓 pie + NAV line + 最近 10 笔交易 table，含 3-retry 指数退避
 - 用户文档（`docs/user-guide.md` / `docs/strategies.md` / `docs/feishu-setup.md`）
 
 ### Fixed

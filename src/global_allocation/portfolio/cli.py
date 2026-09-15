@@ -191,20 +191,43 @@ def cmd_report(
 
 @app.command("publish")
 def cmd_publish(
-    weekly: bool = typer.Option(False, "--weekly", help="周报模式"),
+    weekly: bool = typer.Option(False, "--weekly", help="周报模式（先拍快照再发）"),
     dry_run: bool = typer.Option(False, "--dry-run", help="只生成卡片 JSON，不真发"),
+    chat: str | None = typer.Option(None, "--chat", help="覆盖默认 chat_id"),
+    title: str | None = typer.Option(None, "--title", help="卡片标题"),
 ) -> None:
-    """发飞书卡片（MVP 仅 dry-run，TODO: 接入 publisher）。"""
+    """发飞书卡片（实盘账本 + 周快照）。"""
+    from datetime import date as _date
+
     journal = _default_journal()
     holdings = journal.compute_holdings()
     if not holdings:
         console.print("[yellow]暂无持仓，无可发内容[/yellow]")
         return
 
-    # MVP：只打一个简单 summary
-    total = sum((h.market_value for h in holdings if h.market_value is not None), Decimal("0"))
-    console.print(f"[cyan]dry-run[/cyan] 当前持仓 {len(holdings)} 个，总市值 {float(total):,.2f} CNY")
-    console.print("[yellow]TODO: 接入飞书卡片（publisher.publish_portfolio）[/yellow]")
+    # --weekly 模式：先拍一张今天（或上一交易日）的快照
+    if weekly:
+        try:
+            journal.take_snapshot(week_end_date=_date.today())
+            console.print("[green]✓[/green] 已拍最新快照")
+        except ValueError as e:
+            console.print(f"[yellow]![/yellow] 跳过快照：{e}")
+
+    from global_allocation.portfolio.publisher import publish_portfolio_report
+
+    try:
+        result = publish_portfolio_report(
+            journal, chat_id=chat, title=title, dry_run=dry_run
+        )
+    except Exception as e:
+        console.print(f"[red]✗[/red] 发送失败：{e}")
+        raise typer.Exit(code=1) from e
+
+    if dry_run:
+        console.print("[cyan]dry-run[/cyan] 卡片 JSON（前 200 字符）：")
+        console.print(result[:200] + ("..." if len(result) > 200 else ""))
+    else:
+        console.print(f"[green]✓[/green] 已发送：message_id = {result}")
 
 
 # ─── fund subcommand ───
