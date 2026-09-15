@@ -420,6 +420,10 @@ class BacktestEngine:
                 )
                 total_cost += fee
 
+        # 把极小的负 cash（rounding error）clamp 到 0
+        if new_cash < 0 and abs(new_cash) < Decimal("1E-20"):
+            new_cash = Decimal("0")
+
         return new_positions, new_cash, trades, total_cost
 
 
