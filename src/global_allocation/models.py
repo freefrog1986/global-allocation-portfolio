@@ -192,12 +192,12 @@ class PortfolioSnapshot(_FrozenModel):
 class PerformanceMetrics(_FrozenModel):
     """性能指标。"""
 
-    cagr: Decimal
-    sharpe: Decimal
+    cagr: Decimal = Field(allow_inf_nan=True)
+    sharpe: Decimal = Field(allow_inf_nan=True)
     max_drawdown: Decimal  # 负数
-    volatility: Decimal
+    volatility: Decimal = Field(allow_inf_nan=True)
     total_return: Decimal
-    annual_return: Decimal
+    annual_return: Decimal = Field(allow_inf_nan=True)
     # correlation: pd.DataFrame 在 Pydantic 序列化上有限制，
     # 这里用 Any 字段存，类型由 spec 060 保证
     correlation: Any
