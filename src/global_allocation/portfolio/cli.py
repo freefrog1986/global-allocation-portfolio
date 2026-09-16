@@ -148,6 +148,74 @@ def cmd_show() -> None:
     console.print(f"\n[bold]总市值：{float(total):,.2f} CNY[/bold]")
 
 
+@app.command("import")
+def cmd_import(
+    file: Annotated[Path, typer.Option("--file", "-f", help="JSON 文件路径")],
+    asset_class_default: str = typer.Option(
+        "mixed",
+        "--asset-class-default",
+        help="JSON 里没指定 asset_class 时的默认（equity/bond/commodity/reit/cash/mixed）",
+    ),
+) -> None:
+    """从 JSON 文件批量导入当前持仓（券商截图 → 落库）。
+
+    JSON 格式（每条）：
+      {"code": "...", "name": "...", "asset_class": "equity",
+       "current_value": "...", "cumulative_pnl": "..."}
+
+    asset_class 可省略（用 --asset-class-default）。
+    """
+    import json as _json
+
+    if not file.exists():
+        console.print(f"[red]✗[/red] 文件不存在：{file}")
+        raise typer.Exit(code=1)
+
+    try:
+        data = _json.loads(file.read_text(encoding="utf-8"))
+    except _json.JSONDecodeError as e:
+        console.print(f"[red]✗[/red] JSON 解析失败：{e}")
+        raise typer.Exit(code=1) from e
+
+    if not isinstance(data, list):
+        console.print("[red]✗[/red] JSON 顶层必须是数组")
+        raise typer.Exit(code=1)
+
+    default_ac = _parse_asset_class(asset_class_default)
+    holdings: list[dict[str, Any]] = []
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        ac_str = row.get("asset_class")
+        try:
+            ac = _parse_asset_class(ac_str) if ac_str else default_ac
+        except typer.BadParameter:
+            ac = default_ac
+        holdings.append(
+            {
+                "code": str(row["code"]),
+                "name": str(row["name"]),
+                "asset_class": ac,
+                "current_value": str(row.get("current_value", "0")),
+                "cumulative_pnl": str(row.get("cumulative_pnl", "0")),
+            }
+        )
+
+    journal = _default_journal()
+    try:
+        n = journal.import_holdings(holdings)
+    except Exception as e:
+        console.print(f"[red]✗[/red] 导入失败：{e}")
+        raise typer.Exit(code=1) from e
+
+    skipped = len(holdings) - n
+    console.print(f"[green]✓[/green] 已导入 {n} 只基金")
+    if skipped > 0:
+        console.print(f"[yellow]![/yellow] 跳过 {skipped} 条（current_value=0 或拿不到当前价）")
+    console.print("提示：cost_basis 起点 = 当前市值；之后所有盈亏从这次开始跟踪。")
+    console.print("      历史的累计盈亏暂不入库（合成 buy 在当前价买入）。")
+
+
 @app.command("snapshot")
 def cmd_snapshot(
     on: str = typer.Option(

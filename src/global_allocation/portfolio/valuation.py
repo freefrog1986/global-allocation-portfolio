@@ -41,7 +41,7 @@ class AkshareFundPriceSource:
             return None
 
         try:
-            df = ak.fund_open_fund_info_em(symbol=code, indicator="单位净值")
+            df = ak.fund_open_fund_info_em(symbol=code, indicator="单位净值走势")
             if df is None or df.empty:
                 return None
             # 找 on 当天或之前最近一行
@@ -53,7 +53,23 @@ class AkshareFundPriceSource:
                 return None
             return Decimal(str(df.iloc[0]["单位净值"]))
         except Exception:
+            # 货币基金接口（fund_open_fund_info_em 会 ReferenceError）→ NAV=1.0
+            return self._try_money_market_fallback(code, on)
+
+    def _try_money_market_fallback(self, code: str, on: date) -> Decimal | None:
+        """货币基金 NAV 恒为 1.0。"""
+        try:
+            import akshare as ak
+        except ImportError:
             return None
+        try:
+            df = ak.fund_money_fund_daily_em()
+            if df is not None and not df.empty and "基金代码" in df.columns:
+                if (df["基金代码"] == code).any():
+                    return Decimal("1.0000")
+        except Exception:
+            pass
+        return None
 
 
 __all__ = ["PriceSource", "ManualPriceSource", "AkshareFundPriceSource"]

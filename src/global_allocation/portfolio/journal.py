@@ -224,6 +224,66 @@ class PortfolioJournal:
     def list_snapshots(self) -> list[WeeklySnapshot]:
         return self._db.list_snapshots()
 
+    # ─── import ───
+
+    def import_holdings(
+        self,
+        holdings: list[dict[str, Any]],
+    ) -> int:
+        """从当前快照（券商截图 / app 导出）批量导入持仓。
+
+        每条 holdings 字段：
+          - code: str
+          - name: str
+          - asset_class: AssetClass
+          - current_value: str | Decimal  当前市值
+          - cumulative_pnl: str | Decimal  累计盈亏（负数 = 亏损）
+
+        每条 holdings 会：
+          1. upsert_fund
+          2. 写一笔合成 buy 交易：date=today, shares=current_value / current_price,
+             price=current_price, fee=0, strategy="[imported] baseline",
+             tags=["import"]
+          3. 跳过 current_value=0 或拿不到当前价的
+
+        返回成功导入的条数。
+        """
+        imported = 0
+        for h in holdings:
+            code = h["code"]
+            name = h["name"]
+            asset_class = h["asset_class"]
+            current_value = Decimal(str(h["current_value"]))
+            # cumulative_pnl 暂不写库（合成 buy 在当前价买入 → cost_basis = current_value）
+
+            if current_value <= 0:
+                continue
+
+            market_price = self._price_source.get_price(code, date.today())
+            if market_price is None or market_price <= 0:
+                continue
+
+            self.add_fund(code, name, asset_class)
+
+            # shares = current_value / market_price（保留 4 位小数，模拟券商精度）
+            shares = (current_value / market_price).quantize(Decimal("0.0001"))
+
+            tx = Transaction(
+                fund_code=code,
+                side=TransactionSide.BUY,
+                date=date.today(),
+                shares=shares,
+                price=market_price,
+                fee=Decimal("0"),
+                strategy="[imported] baseline",
+                tags=["import"],
+                note=None,
+                created_at=datetime.now(),
+            )
+            self._db.insert_transaction(tx)
+            imported += 1
+        return imported
+
     # ─── private ───
 
     def _record(

@@ -391,3 +391,173 @@ class TestWeightedAverageCost:
         holdings = journal.compute_holdings()
         expected_avg = Decimal("2001.20") / Decimal("1000")
         assert abs(holdings[0].avg_cost - expected_avg) < Decimal("1E-10")
+
+
+class TestImportHoldings:
+    """从截图/快照导入当前持仓：每条 holdings 合成一笔 buy 交易。"""
+
+    def test_import_creates_fund_and_buy(
+        self, journal: PortfolioJournal
+    ) -> None:
+        journal.import_holdings(
+            [
+                {
+                    "code": "163406",
+                    "name": "兴全合润",
+                    "asset_class": AssetClass.MIXED,
+                    "current_value": "2500",
+                    "cumulative_pnl": "0",
+                }
+            ]
+        )
+        fund = journal.get_fund("163406")
+        assert fund is not None
+        assert fund.name == "兴全合润"
+        txs = journal.list_transactions(fund_code="163406")
+        assert len(txs) == 1
+        assert txs[0].side == TransactionSide.BUY
+
+    def test_import_computes_shares_from_price(
+        self, journal: PortfolioJournal
+    ) -> None:
+        # 163406 NAV = 2.50, current_value = 2500 → shares = 1000
+        journal.import_holdings(
+            [
+                {
+                    "code": "163406",
+                    "name": "兴全合润",
+                    "asset_class": AssetClass.MIXED,
+                    "current_value": "2500",
+                    "cumulative_pnl": "0",
+                }
+            ]
+        )
+        h = journal.compute_holdings()[0]
+        assert h.shares == Decimal("1000")
+        assert h.market_price == Decimal("2.50")
+        assert h.market_value == Decimal("2500.00")
+
+    def test_import_uses_today_date(self, journal: PortfolioJournal) -> None:
+        journal.import_holdings(
+            [
+                {
+                    "code": "163406",
+                    "name": "x",
+                    "asset_class": AssetClass.MIXED,
+                    "current_value": "2500",
+                    "cumulative_pnl": "0",
+                }
+            ]
+        )
+        txs = journal.list_transactions(fund_code="163406")
+        assert txs[0].date == date.today()
+
+    def test_import_strategy_and_tags_marked(
+        self, journal: PortfolioJournal
+    ) -> None:
+        journal.import_holdings(
+            [
+                {
+                    "code": "163406",
+                    "name": "x",
+                    "asset_class": AssetClass.MIXED,
+                    "current_value": "2500",
+                    "cumulative_pnl": "0",
+                }
+            ]
+        )
+        txs = journal.list_transactions(fund_code="163406")
+        assert "import" in txs[0].tags
+        assert "[imported]" in (txs[0].strategy or "")
+
+    def test_import_skips_zero_value(self, journal: PortfolioJournal) -> None:
+        # current_value=0 → 不该建持仓
+        journal.import_holdings(
+            [
+                {
+                    "code": "163406",
+                    "name": "x",
+                    "asset_class": AssetClass.MIXED,
+                    "current_value": "0",
+                    "cumulative_pnl": "0",
+                }
+            ]
+        )
+        assert journal.list_funds() == []
+        assert journal.list_transactions() == []
+
+    def test_import_skips_missing_price(self, journal: PortfolioJournal) -> None:
+        # 999999 不在 mock 价格里 → 跳过
+        journal.import_holdings(
+            [
+                {
+                    "code": "999999",
+                    "name": "未知基金",
+                    "asset_class": AssetClass.EQUITY,
+                    "current_value": "1000",
+                    "cumulative_pnl": "0",
+                }
+            ]
+        )
+        assert journal.list_funds() == []
+
+    def test_import_multiple_funds(self, journal: PortfolioJournal) -> None:
+        journal.import_holdings(
+            [
+                {
+                    "code": "163406",
+                    "name": "兴全合润",
+                    "asset_class": AssetClass.MIXED,
+                    "current_value": "2500",
+                    "cumulative_pnl": "0",
+                },
+                {
+                    "code": "510300",
+                    "name": "沪深300",
+                    "asset_class": AssetClass.EQUITY,
+                    "current_value": "2000",
+                    "cumulative_pnl": "0",
+                },
+            ]
+        )
+        assert len(journal.list_funds()) == 2
+        assert len(journal.list_transactions()) == 2
+
+    def test_import_returns_count(self, journal: PortfolioJournal) -> None:
+        n = journal.import_holdings(
+            [
+                {
+                    "code": "163406",
+                    "name": "x",
+                    "asset_class": AssetClass.MIXED,
+                    "current_value": "2500",
+                    "cumulative_pnl": "0",
+                },
+                {
+                    "code": "510300",
+                    "name": "x",
+                    "asset_class": AssetClass.EQUITY,
+                    "current_value": "2000",
+                    "cumulative_pnl": "0",
+                },
+            ]
+        )
+        assert n == 2
+
+    def test_import_invalid_decimals_raise(
+        self, journal: PortfolioJournal
+    ) -> None:
+        from decimal import InvalidOperation
+
+        with pytest.raises((ValueError, InvalidOperation)):
+            journal.import_holdings(
+                [
+                    {
+                        "code": "163406",
+                        "name": "x",
+                        "asset_class": AssetClass.MIXED,
+                        "current_value": "not-a-number",
+                        "cumulative_pnl": "0",
+                    }
+                ]
+            )

@@ -264,3 +264,76 @@ class TestReport:
     def test_report_empty(self, fake_journal: PortfolioJournal) -> None:
         result = runner.invoke(app, ["report"])
         assert result.exit_code == 0
+
+
+class TestImport:
+    def test_import_success(
+        self, fake_journal: PortfolioJournal, tmp_path: Path
+    ) -> None:
+        import json
+
+        f = tmp_path / "holdings.json"
+        f.write_text(
+            json.dumps(
+                [
+                    {
+                        "code": "163406",
+                        "name": "兴全合润",
+                        "asset_class": "mixed",
+                        "current_value": "2500",
+                        "cumulative_pnl": "0",
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["import", "--file", str(f)])
+        assert result.exit_code == 0, result.output
+        assert "1" in result.stdout  # 已导入 1 只
+        assert fake_journal.get_fund("163406") is not None
+
+    def test_import_missing_file(self, fake_journal: PortfolioJournal) -> None:
+        result = runner.invoke(app, ["import", "--file", "/nope/x.json"])
+        assert result.exit_code != 0
+
+    def test_import_bad_json(
+        self, fake_journal: PortfolioJournal, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "bad.json"
+        f.write_text("not json", encoding="utf-8")
+        result = runner.invoke(app, ["import", "--file", str(f)])
+        assert result.exit_code != 0
+
+    def test_import_uses_default_asset_class(
+        self, fake_journal: PortfolioJournal, tmp_path: Path
+    ) -> None:
+        import json
+
+        f = tmp_path / "h.json"
+        f.write_text(
+            json.dumps(
+                [
+                    {
+                        "code": "163406",
+                        "name": "x",
+                        "current_value": "2500",
+                        "cumulative_pnl": "0",
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        result = runner.invoke(
+            app,
+            [
+                "import",
+                "--file",
+                str(f),
+                "--asset-class-default",
+                "equity",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        fund = fake_journal.get_fund("163406")
+        assert fund is not None
+        assert fund.asset_class.value == "equity"
