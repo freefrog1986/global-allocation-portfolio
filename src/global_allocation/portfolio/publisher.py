@@ -19,6 +19,7 @@ def publish_portfolio_report(
     journal: PortfolioJournal,
     credentials: FeishuCredentials | None = None,
     chat_id: str | None = None,
+    root_id: str | None = None,
     title: str | None = None,
     dry_run: bool = False,
 ) -> str:
@@ -28,6 +29,7 @@ def publish_portfolio_report(
         journal: 实盘账本实例。
         credentials: 凭证（默认从 env/文件读）。
         chat_id: 覆盖凭证里的 chat_id。
+        root_id: 话题根消息 id（传入则发到话题 thread）。
         title: 卡片标题。
         dry_run: True → 返回 JSON 字符串，不真发。
 
@@ -55,6 +57,7 @@ def publish_portfolio_report(
                 app_secret=credentials.app_secret,
                 chat_id=actual_chat_id,
                 card_json=card_json,
+                root_id=root_id,
             )
         except Exception as e:
             last_error = e
@@ -70,39 +73,70 @@ def _send_card(
     app_secret: str,
     chat_id: str,
     card_json: str,
+    root_id: str | None = None,
 ) -> str:
-    """实际调 lark-oapi 发一张卡片，返回 message_id。"""
-    import lark_oapi as lark
-    from lark_oapi.api.im.v1 import (
-        CreateMessageRequest,
-        CreateMessageRequestBody,
-    )
+    """实际调飞书 OpenAPI 发一张卡片，返回 message_id。
 
-    client = lark.Client(app_id, app_secret, lark.LogLevel.WARNING)
+    有 root_id → 走 reply API + reply_in_thread=true（让消息进话题 thread）
+    无 root_id → 走 create API（发到群顶）
+    """
+    import json
+    import urllib.request
 
-    request = (
-        CreateMessageRequest.builder()
-        .receive_id_type("chat_id")
-        .request_body(
-            CreateMessageRequestBody.builder()
-            .receive_id(chat_id)
-            .msg_type("interactive")
-            .content(card_json)
-            .build()
+    token = _get_tenant_access_token(app_id, app_secret)
+
+    if root_id:
+        url = (
+            f"https://open.feishu.cn/open-apis/im/v1/messages/"
+            f"{root_id}/reply"
         )
-        .build()
+        payload: dict[str, Any] = {
+            "msg_type": "interactive",
+            "content": card_json,
+            "reply_in_thread": True,
+        }
+    else:
+        url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
+        payload = {
+            "receive_id": chat_id,
+            "msg_type": "interactive",
+            "content": card_json,
+        }
+
+    msg_req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "Authorization": f"Bearer {token}",
+        },
+        method="POST",
     )
+    with urllib.request.urlopen(msg_req, timeout=15) as r:
+        resp_body = json.loads(r.read())
 
-    response = client.im.v1.message.create(request)
+    if resp_body.get("code", 0) != 0:
+        raise RuntimeError(
+            f"飞书 API 返回错误: code={resp_body.get('code')}, "
+            f"msg={resp_body.get('msg')}"
+        )
 
-    if not response.success():
-        code = getattr(response, "code", "unknown")
-        msg = getattr(response, "msg", "unknown")
-        raise RuntimeError(f"飞书 API 返回错误: code={code}, msg={msg}")
+    return resp_body.get("data", {}).get("message_id", "") or ""
 
-    data: Any = response.data
-    msg_id = getattr(data, "message_id", "")
-    return msg_id or ""
+
+def _get_tenant_access_token(app_id: str, app_secret: str) -> str:
+    """拿 tenant_access_token。"""
+    import json
+    import urllib.request
+
+    req = urllib.request.Request(
+        "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+        data=json.dumps({"app_id": app_id, "app_secret": app_secret}).encode(),
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read())["tenant_access_token"]
 
 
 __all__ = ["publish_portfolio_report"]

@@ -100,9 +100,12 @@ class TestBuildPortfolioCard:
             (c for c in charts if c["chart_spec"]["type"] == "pie"), None
         )
         assert pie is not None
-        data = pie["chart_spec"]["series"][0]["data"]
+        values = pie["chart_spec"]["data"]["values"]
         # 应该有 2 个 slice（2 个基金）
-        assert len(data) >= 2
+        assert len(values) >= 2
+        # 每条必须含 type + value
+        assert "value" in values[0]
+        assert "type" in values[0]
 
     def test_history_line_chart_present(self, journal: PortfolioJournal) -> None:
         _seed(journal)
@@ -113,7 +116,11 @@ class TestBuildPortfolioCard:
         )
         assert line is not None
         # 至少 1 个历史快照 + 当前
-        assert len(line["chart_spec"]["x_axis"]["data"]) >= 1
+        values = line["chart_spec"]["data"]["values"]
+        assert len(values) >= 1
+        # 每条是 {date, nav}
+        assert "date" in values[0]
+        assert "nav" in values[0]
 
     def test_recent_transactions_table(self, journal: PortfolioJournal) -> None:
         _seed(journal)

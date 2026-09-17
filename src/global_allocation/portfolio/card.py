@@ -67,27 +67,26 @@ def _build_summary(journal: PortfolioJournal, title: str) -> str:
 
 def _build_pie(journal: PortfolioJournal) -> dict[str, object]:
     holdings = journal.compute_holdings()
-    pie_data: list[dict[str, Any]] = []
+    values: list[dict[str, Any]] = []
     for h in holdings:
         if h.market_value is None or h.market_value == 0:
             continue
-        pie_data.append(
+        values.append(
             {
-                "name": f"{h.fund.code} {h.fund.name}",
+                "type": f"{h.fund.code} {h.fund.name}",
                 "value": float(h.market_value),
             }
         )
     return {
         "type": "pie",
         "title": {"text": "当前持仓"},
-        "series": [
-            {
-                "name": "权重",
-                "type": "pie",
-                "data": pie_data,
-                "radius": ["30%", "70%"],
-            }
-        ],
+        "data": {"values": values},
+        "valueField": "value",
+        "categoryField": "type",
+        "outerRadius": 0.85,
+        "innerRadius": 0.4,
+        "legends": {"visible": True, "orient": "right"},
+        "label": {"visible": True},
     }
 
 
@@ -100,56 +99,50 @@ def _build_history_line(journal: PortfolioJournal) -> dict[str, object]:
         Decimal("0"),
     )
 
-    dates: list[str] = []
-    values: list[float] = []
+    values: list[dict[str, Any]] = []
     for s in snaps:
-        dates.append(s.week_end_date.isoformat())
-        values.append(float(s.total_value))
+        values.append(
+            {"date": s.week_end_date.isoformat(), "nav": float(s.total_value)}
+        )
     if current_total > 0:
-        dates.append(datetime.now().date().isoformat())
-        values.append(float(current_total))
+        values.append({"date": datetime.now().date().isoformat(), "nav": float(current_total)})
 
     return {
         "type": "line",
         "title": {"text": "组合净值"},
-        "x_axis": {"type": "category", "data": dates},
-        "y_axis": {"type": "value"},
-        "series": [
-            {
-                "name": "NAV (CNY)",
-                "type": "line",
-                "data": values,
-                "smooth": False,
-            }
-        ],
+        "data": {"values": values},
+        "xField": "date",
+        "yField": "nav",
+        "smooth": False,
+        "point": {"visible": True},
+        "legends": {"visible": False},
     }
 
 
 def _build_recent_transactions(journal: PortfolioJournal) -> dict[str, object]:
     """最近 10 笔交易。"""
     txs = journal.list_transactions()[:10]
-    rows: list[list[dict[str, str]]] = []
+    rows: list[dict[str, Any]] = []
     for tx in txs:
-        side_color = "[green]" if tx.side.value == "buy" else "[red]"
-        side_label = "买" if tx.side.value == "buy" else "卖"
+        is_buy = tx.side.value == "buy"
         rows.append(
-            [
-                {"date": tx.date.isoformat()},
-                {"side": f"{side_color}{side_label}[/]"},
-                {"fund": tx.fund_code},
-                {"shares": f"{float(tx.shares):,.2f}"},
-                {"price": f"{float(tx.price):.4f}"},
-                {"strategy": tx.strategy or "-"},
-            ]
+            {
+                "date": tx.date.isoformat(),
+                "side": [{"text": "买" if is_buy else "卖", "color": "green" if is_buy else "red"}],
+                "fund": tx.fund_code,
+                "shares": float(tx.shares),
+                "price": float(tx.price),
+                "strategy": tx.strategy or "-",
+            }
         )
     return {
         "columns": [
-            {"name": "date", "display_name": "日期", "width": "auto"},
-            {"name": "side", "display_name": "方向", "width": "auto"},
-            {"name": "fund", "display_name": "基金", "width": "auto"},
-            {"name": "shares", "display_name": "份额", "width": "auto"},
-            {"name": "price", "display_name": "价格", "width": "auto"},
-            {"name": "strategy", "display_name": "策略", "width": "auto"},
+            {"name": "date", "display_name": "日期", "data_type": "text", "width": "auto"},
+            {"name": "side", "display_name": "方向", "data_type": "options", "width": "auto"},
+            {"name": "fund", "display_name": "基金", "data_type": "text", "width": "auto"},
+            {"name": "shares", "display_name": "份额", "data_type": "number", "width": "auto"},
+            {"name": "price", "display_name": "价格", "data_type": "number", "width": "auto"},
+            {"name": "strategy", "display_name": "策略", "data_type": "text", "width": "auto"},
         ],
         "rows": rows,
     }

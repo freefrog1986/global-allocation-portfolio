@@ -262,6 +262,9 @@ def cmd_publish(
     weekly: bool = typer.Option(False, "--weekly", help="周报模式（先拍快照再发）"),
     dry_run: bool = typer.Option(False, "--dry-run", help="只生成卡片 JSON，不真发"),
     chat: str | None = typer.Option(None, "--chat", help="覆盖默认 chat_id"),
+    root: str | None = typer.Option(
+        None, "--root", help="话题根消息 id（发到话题 thread 而不是父群）"
+    ),
     title: str | None = typer.Option(None, "--title", help="卡片标题"),
 ) -> None:
     """发飞书卡片（实盘账本 + 周快照）。"""
@@ -285,7 +288,11 @@ def cmd_publish(
 
     try:
         result = publish_portfolio_report(
-            journal, chat_id=chat, title=title, dry_run=dry_run
+            journal,
+            chat_id=chat,
+            root_id=root,
+            title=title,
+            dry_run=dry_run,
         )
     except Exception as e:
         console.print(f"[red]✗[/red] 发送失败：{e}")

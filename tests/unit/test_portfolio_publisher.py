@@ -127,6 +127,22 @@ class TestPublishPortfolioReport:
             args, kwargs = mock_send.call_args
             assert kwargs["chat_id"] == "oc_other"
 
+    def test_root_id_passed_through(
+        self, seeded_journal: PortfolioJournal, creds: FeishuCredentials
+    ) -> None:
+        with patch(
+            "global_allocation.portfolio.publisher._send_card"
+        ) as mock_send:
+            mock_send.return_value = "om_msg"
+            publish_portfolio_report(
+                seeded_journal,
+                credentials=creds,
+                root_id="om_root_topic",
+                dry_run=False,
+            )
+            args, kwargs = mock_send.call_args
+            assert kwargs["root_id"] == "om_root_topic"
+
     def test_title_override(
         self, seeded_journal: PortfolioJournal, creds: FeishuCredentials
     ) -> None:
