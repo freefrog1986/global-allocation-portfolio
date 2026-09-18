@@ -52,29 +52,34 @@ footer:
 
 ## 数据契约
 
-**柱状图 chart_spec**（Feishu VChart `type: "bar"`）：
+**柱状图 chart_spec**（Feishu VChart simple 格式 `type: "bar"`）：
+
+> 重要：用 **simple 格式**（`data.values` + `xField` + `yField`），不是 rich 的 `x_axis`/`series` 格式。飞书 VChart 柱状图 type 字段名是 `"bar"`（不是 `"column"`，那是 VChart 内部名）。
+> 之前误用 `type: "column"` + rich 格式发了两次都被飞书 API 拒掉（HTTP 230099：chart spec is invalid），第三次查官方文档才改成 simple 格式 + `type: "bar"`，飞书接受。
+
 ```python
 {
-  "type": "bar",
+  "type": "bar",                           # 飞书对外只认 "bar"（垂直柱状图默认就是 column）
   "title": {"text": "各大类资产市值"},
   "data": {
     "values": [
-      {"class": "港股", "value": 61188.26, "weight": 0.3196},
+      {"class": "港股",      "value": 61188.26},
+      {"class": "A 股股票",  "value": 57270.73},
       ...
     ]
   },
-  "xField": "value",
-  "yField": "class",
-  "sort": True,        # VChart 按 value 倒序排
-  "label": {"visible": True, "position": "right"},
+  "xField": "class",                        # X 轴 = 类名（中文）
+  "yField": "value",                        # Y 轴 = 金额
   "legends": {"visible": False},
 }
 ```
 
 规则：
 - 只放 `count > 0` 的子类（空类不显示，跟原 table 一致）
-- 按 `value` 降序排序（柱状图天然适合看大小排序）
-- value 单位是 CNY（保留 2 位小数 → 4 位？用 float，因为是 chart）
+- 数据按 `value` 降序排（spec 实现层排序，VChart 不需要 `sort: true`）
+- value 单位是 CNY（chart 用 float，预格式化在 table 里才用 string）
+- 不加 `direction: "horizontal"` —— 默认就是垂直柱状图（柱子向上长的那种）
+- 如果想横向条形图，加 `"direction": "horizontal"` + 互换 xField/yField
 
 **持仓明细 table spec**：
 ```python
@@ -134,7 +139,7 @@ footer:
 - [ ] 不再包含 type=pie 的 chart_spec
 - [ ] 不再包含 type=line 的 chart_spec
 - [ ] 不再包含交易流水 table（columns 不含 date / side / shares / strategy）
-- [ ] bar chart `type == "bar"`，`xField == "value"`，`yField == "class"`
+- [ ] bar chart `type == "bar"`，`xField == "class"`，`yField == "value"`
 - [ ] bar chart data.values 长度 == 非空子类数（count > 0 的 SwensenClass）
 - [ ] bar chart 按 value 降序
 - [ ] holdings table 5 列：code / name / class / value / weight

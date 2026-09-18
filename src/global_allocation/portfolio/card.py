@@ -63,8 +63,10 @@ def _build_summary(journal: PortfolioJournal, title: str) -> str:
 
 
 def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
-    """各大类资产市值柱状图（horizontal bar，按 value 倒序）。
+    """各大类资产市值柱状图（vertical bar，X 轴 = 类名，Y 轴 = 金额）。
 
+    飞书 VChart 柱状图用 simple 格式：type="bar" + data.values + xField/yField。
+    （column 是 VChart 内部名，飞书卡片对外只接受 "bar"；不加 direction 默认就是垂直柱状图）
     空类（count=0）不显示。
     """
     breakdown = compute_breakdown(journal)
@@ -76,20 +78,17 @@ def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
             {
                 "class": b["display_name"],
                 "value": float(b["value"]),
-                "weight": float(b["weight"]),
             }
         )
-    # 按 value 倒序（VChart `sort: True` 也会排，但客户端排序更确定）
+    # 按 value 倒序
     bars.sort(key=lambda x: float(x["value"]), reverse=True)  # type: ignore[arg-type]
 
     return {
-        "type": "column",
+        "type": "bar",
         "title": {"text": "各大类资产市值（按 Swensen 框架）"},
         "data": {"values": bars},
         "xField": "class",
         "yField": "value",
-        "sort": True,
-        "label": {"visible": True, "position": "top"},
         "legends": {"visible": False},
     }
 

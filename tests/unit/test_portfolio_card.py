@@ -112,7 +112,7 @@ class TestBuildPortfolioCard:
 
 
 class TestBreakdownBarChart:
-    """柱状图：各大类资产市值（horizontal bar）。"""
+    """柱状图：各大类资产市值（vertical column）。"""
 
     def _get_bar(self, journal: PortfolioJournal) -> dict[str, object]:
         _seed(journal)
@@ -120,30 +120,40 @@ class TestBreakdownBarChart:
         charts = [e for e in card["elements"] if e.get("tag") == "chart"]
         assert len(charts) == 1
         spec = charts[0]["chart_spec"]
-        assert spec["type"] == "column"
+        assert spec["type"] == "bar"
         return spec  # type: ignore[return-value]
 
-    def test_is_vertical_bar(self, journal: PortfolioJournal) -> None:
-        """竖柱状图：x 轴 = class（中文类名），y 轴 = value（金额）。"""
+    def test_uses_feishu_simple_bar_format(self, journal: PortfolioJournal) -> None:
+        """飞书 VChart 柱状图 = type='bar' + data.values + xField/yField。
+
+        之前误用 'column' (VChart 内部名) + rich 格式（x_axis/series）导致飞书返回 230099。
+        spec 080 也没给 column 例子——直到查官方文档才知道 simple 格式才是正确格式。
+        """
+        spec = self._get_bar(journal)
+        assert spec["type"] == "bar"
+        assert "data" in spec
+        assert "values" in spec["data"]
+        assert "xField" in spec
+        assert "yField" in spec
+
+    def test_x_field_is_class_y_field_is_value(self, journal: PortfolioJournal) -> None:
         spec = self._get_bar(journal)
         assert spec["xField"] == "class"
         assert spec["yField"] == "value"
 
-    def test_data_is_dict_shaped(self, journal: PortfolioJournal) -> None:
+    def test_values_have_class_and_value_keys(self, journal: PortfolioJournal) -> None:
         spec = self._get_bar(journal)
-        values = spec["data"]["values"]
-        for v in values:
-            assert "class" in v
-            assert "value" in v
+        for item in spec["data"]["values"]:
+            assert "class" in item
+            assert "value" in item
 
     def test_skips_empty_classes(self, journal: PortfolioJournal) -> None:
         """只有 count > 0 的子类才出现在柱状图里。"""
         spec = self._get_bar(journal)
+        values = spec["data"]["values"]
         # 测试只塞了 2 个基金（MIXED + EQUITY），没 SUBCLASS mapping 会被忽略
-        # 所以应该是空 data.values（2 个基金都不在 SUBCLASS_BY_CODE 里）
-        # 这条测试只是确认 code 不会崩
-        for v in spec["data"]["values"]:
-            assert isinstance(v["value"], (int, float))
+        # 所以 values 是空 list（OK）
+        for v in values:
             assert v["value"] > 0
 
 
