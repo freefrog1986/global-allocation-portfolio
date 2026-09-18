@@ -1,6 +1,11 @@
 """飞书 chart card for portfolio journal。
 
-参照 specs/090-portfolio-journal.md。
+参照 specs/090-portfolio-journal.md + specs/096-portfolio-card-redesign.md。
+
+设计原则（spec 096）：
+- 只回答用户三个问题：现在持有什么 / 大类怎么分布 / 具体买了哪几只
+- 3 段元素：summary div + 大类资产柱状图 + 持仓明细表
+- 不再包含 pie / line chart / 交易流水表
 """
 
 from __future__ import annotations
@@ -8,19 +13,10 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
 
-from global_allocation.portfolio.breakdown import compute_breakdown
+from global_allocation.portfolio.breakdown import DISPLAY_NAME, compute_breakdown
 from global_allocation.portfolio.journal import PortfolioJournal
-
-_MAX_CHART_POINTS = 1000
-
-
-def _downsample(values: list[float], max_points: int = _MAX_CHART_POINTS) -> list[float]:
-    if len(values) <= max_points:
-        return values
-    step = len(values) / max_points
-    return [values[int(i * step)] for i in range(max_points)]
+from global_allocation.portfolio.models import Holding
 
 
 def _format_pct(value: Decimal | None, decimals: int = 2) -> str:
@@ -66,113 +62,83 @@ def _build_summary(journal: PortfolioJournal, title: str) -> str:
     )
 
 
-def _build_pie(journal: PortfolioJournal) -> dict[str, object]:
-    holdings = journal.compute_holdings()
-    values: list[dict[str, Any]] = []
-    for h in holdings:
-        if h.market_value is None or h.market_value == 0:
+def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
+    """各大类资产市值柱状图（horizontal bar，按 value 倒序）。
+
+    空类（count=0）不显示。
+    """
+    breakdown = compute_breakdown(journal)
+    bars: list[dict[str, object]] = []
+    for b in breakdown:
+        if b["count"] == 0:
             continue
-        values.append(
+        bars.append(
             {
-                "type": f"{h.fund.code} {h.fund.name}",
-                "value": float(h.market_value),
+                "class": b["display_name"],
+                "value": float(b["value"]),
+                "weight": float(b["weight"]),
             }
         )
-    return {
-        "type": "pie",
-        "title": {"text": "当前持仓"},
-        "data": {"values": values},
-        "valueField": "value",
-        "categoryField": "type",
-        "outerRadius": 0.85,
-        "innerRadius": 0.4,
-        "legends": {"visible": True, "orient": "right"},
-        "label": {"visible": True},
-    }
-
-
-def _build_history_line(journal: PortfolioJournal) -> dict[str, object]:
-    """历史 NAV 曲线（所有 snapshots + 当前）。"""
-    snaps = journal.list_snapshots()  # 已按 week_end_date ASC 排
-    holdings = journal.compute_holdings()
-    current_total = sum(
-        (h.market_value for h in holdings if h.market_value is not None),
-        Decimal("0"),
-    )
-
-    values: list[dict[str, Any]] = []
-    for s in snaps:
-        values.append(
-            {"date": s.week_end_date.isoformat(), "nav": float(s.total_value)}
-        )
-    if current_total > 0:
-        values.append({"date": datetime.now().date().isoformat(), "nav": float(current_total)})
+    # 按 value 倒序（VChart `sort: True` 也会排，但客户端排序更确定）
+    bars.sort(key=lambda x: float(x["value"]), reverse=True)  # type: ignore[arg-type]
 
     return {
-        "type": "line",
-        "title": {"text": "组合净值"},
-        "data": {"values": values},
-        "xField": "date",
-        "yField": "nav",
-        "smooth": False,
-        "point": {"visible": True},
+        "type": "bar",
+        "title": {"text": "各大类资产市值（按 Swensen 框架）"},
+        "data": {"values": bars},
+        "xField": "value",
+        "yField": "class",
+        "sort": {"reverse": True, "by": "value"},
+        "label": {"visible": True, "position": "right"},
         "legends": {"visible": False},
     }
 
 
-def _build_breakdown_table(journal: PortfolioJournal) -> dict[str, object]:
-    """各大类资产占比（Swensen 框架：14 子类）。空类不显示。
+def _build_holdings_table(journal: PortfolioJournal) -> dict[str, object]:
+    """持仓明细表：单只基金 + 分类 + 市值 + 占比。
 
-    Feishu 表格 row 必须是 dict（按列名取），不能用 list。
+    按 market_value 倒序；market_value is None 的跳过。
+    Feishu 表格 row 必须是 dict（按列名取）。
     """
-    breakdown = compute_breakdown(journal)
+    holdings = journal.compute_holdings()
+    total_value = sum(
+        (h.market_value for h in holdings if h.market_value is not None),
+        Decimal("0"),
+    )
+
+    # 按 market_value 倒序（先排除 None）
+    priced_pairs: list[tuple[Holding, Decimal]] = []
+    for h in holdings:
+        if h.market_value is not None:
+            priced_pairs.append((h, h.market_value))
+    priced_pairs.sort(key=lambda p: p[1], reverse=True)
+
+    from global_allocation.portfolio.breakdown import get_subclass
+
     rows: list[dict[str, object]] = []
-    for b in breakdown:
-        if b["count"] == 0:
-            continue  # 跳过 0 基金的空类
+    for h, market_value in priced_pairs:
+        sub = get_subclass(h.fund.code)
+        class_name = DISPLAY_NAME[sub] if sub is not None else ""
+        weight = (
+            (market_value / total_value) if total_value > 0 else Decimal("0")
+        )
         rows.append(
             {
-                "class": b["display_name"],
-                "count": b["count"],
-                "value": f"{float(b['value']):,.2f}",
-                "weight": f"{float(b['weight']) * 100:.2f}%",
+                "code": h.fund.code,
+                "name": h.fund.name,
+                "class": class_name,
+                "value": f"{float(market_value):,.2f}",
+                "weight": f"{float(weight) * 100:.2f}%",
             }
         )
+
     return {
         "columns": [
-            {"name": "class", "display_name": "大类资产", "data_type": "text", "width": "auto"},
-            {"name": "count", "display_name": "基金数", "data_type": "text", "width": "auto"},
+            {"name": "code", "display_name": "代码", "data_type": "text", "width": "auto"},
+            {"name": "name", "display_name": "基金", "data_type": "text", "width": "auto"},
+            {"name": "class", "display_name": "分类", "data_type": "text", "width": "auto"},
             {"name": "value", "display_name": "市值(¥)", "data_type": "text", "width": "auto"},
             {"name": "weight", "display_name": "占比", "data_type": "text", "width": "auto"},
-        ],
-        "rows": rows,
-    }
-
-
-def _build_recent_transactions(journal: PortfolioJournal) -> dict[str, object]:
-    """最近 10 笔交易。"""
-    txs = journal.list_transactions()[:10]
-    rows: list[dict[str, Any]] = []
-    for tx in txs:
-        is_buy = tx.side.value == "buy"
-        rows.append(
-            {
-                "date": tx.date.isoformat(),
-                "side": [{"text": "买" if is_buy else "卖", "color": "green" if is_buy else "red"}],
-                "fund": tx.fund_code,
-                "shares": float(tx.shares),
-                "price": float(tx.price),
-                "strategy": tx.strategy or "-",
-            }
-        )
-    return {
-        "columns": [
-            {"name": "date", "display_name": "日期", "data_type": "text", "width": "auto"},
-            {"name": "side", "display_name": "方向", "data_type": "options", "width": "auto"},
-            {"name": "fund", "display_name": "基金", "data_type": "text", "width": "auto"},
-            {"name": "shares", "display_name": "份额", "data_type": "number", "width": "auto"},
-            {"name": "price", "display_name": "价格", "data_type": "number", "width": "auto"},
-            {"name": "strategy", "display_name": "策略", "data_type": "text", "width": "auto"},
         ],
         "rows": rows,
     }
@@ -182,7 +148,13 @@ def build_portfolio_card(
     journal: PortfolioJournal,
     title: str | None = None,
 ) -> dict[str, object]:
-    """构造实盘账本的飞书交互卡片。"""
+    """构造实盘账本的飞书交互卡片。
+
+    3 段元素：
+    1. summary div（标题 + 总市值 + 盈亏 + 周涨跌）
+    2. 各大类资产柱状图
+    3. 持仓明细表（按市值倒序）
+    """
     actual_title = title or "实盘持仓"
     holdings = journal.compute_holdings()
     if not holdings:
@@ -206,23 +178,13 @@ def build_portfolio_card(
             },
             {"tag": "hr"},
             {
-                "tag": "table",
-                **_build_breakdown_table(journal),
-            },
-            {"tag": "hr"},
-            {
                 "tag": "chart",
-                "chart_spec": _build_pie(journal),
-            },
-            {"tag": "hr"},
-            {
-                "tag": "chart",
-                "chart_spec": _build_history_line(journal),
+                "chart_spec": _build_breakdown_bar(journal),
             },
             {"tag": "hr"},
             {
                 "tag": "table",
-                **_build_recent_transactions(journal),
+                **_build_holdings_table(journal),
             },
         ],
         "footer": {
