@@ -83,13 +83,13 @@ def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
     bars.sort(key=lambda x: float(x["value"]), reverse=True)  # type: ignore[arg-type]
 
     return {
-        "type": "bar",
+        "type": "column",
         "title": {"text": "各大类资产市值（按 Swensen 框架）"},
         "data": {"values": bars},
-        "xField": "value",
-        "yField": "class",
-        "sort": {"reverse": True, "by": "value"},
-        "label": {"visible": True, "position": "right"},
+        "xField": "class",
+        "yField": "value",
+        "sort": True,
+        "label": {"visible": True, "position": "top"},
         "legends": {"visible": False},
     }
 

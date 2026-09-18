@@ -120,14 +120,14 @@ class TestBreakdownBarChart:
         charts = [e for e in card["elements"] if e.get("tag") == "chart"]
         assert len(charts) == 1
         spec = charts[0]["chart_spec"]
-        assert spec["type"] == "bar"
+        assert spec["type"] == "column"
         return spec  # type: ignore[return-value]
 
-    def test_is_horizontal_bar(self, journal: PortfolioJournal) -> None:
-        """横柱状图：x 轴 = value（金额），y 轴 = class（中文类名）。"""
+    def test_is_vertical_bar(self, journal: PortfolioJournal) -> None:
+        """竖柱状图：x 轴 = class（中文类名），y 轴 = value（金额）。"""
         spec = self._get_bar(journal)
-        assert spec["xField"] == "value"
-        assert spec["yField"] == "class"
+        assert spec["xField"] == "class"
+        assert spec["yField"] == "value"
 
     def test_data_is_dict_shaped(self, journal: PortfolioJournal) -> None:
         spec = self._get_bar(journal)
