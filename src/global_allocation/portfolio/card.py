@@ -94,16 +94,12 @@ def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
         "xField": "class",
         "yField": "weight",
         "legends": {"visible": False},
-        # 第九轮反馈：用 VChart formatter 模板字符串（不是 JS 函数）给柱子顶上加 %。
-        # 飞书 VChart 卡片组件不支持 JS 函数（"图表组件暂不支持 JavaScript 语法"），
-        # 但 formatter 是字符串模板，VChart 客户端自己有 JS 环境能处理 {value} 替换。
-        # 基础 {value}% 替换在 VChart 1.2+ 就有。飞书 7.16-7.26 用 VChart 1.10.1，
-        # 7.27+ 用 1.12.3，应该都支持基础 formatter。
-        "label": {
-            "visible": True,
-            "position": "top",
-            "formatter": "{value}%",
-        },
+        # 第十一轮最终决定（liubo 2026-09-18）：不加 % 后缀。
+        # 飞书 VChart 卡片组件不支持 JS 函数（formatMethod 不能用），
+        # formatter 模板字符串的 {value} 替换在飞书内置的 VChart 版本
+        # （1.10.1 / 1.12.3）下不工作，显示成字面 "%Y6%"。
+        # axes label formatMethod 同样飞书不解析。title 已经写了"占比（%）"
+        # 明示单位，柱子顶上 VChart 默认显示 yField 数值（29.9 这种）。
     }
 
 

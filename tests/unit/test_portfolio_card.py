@@ -141,23 +141,20 @@ class TestBreakdownBarChart:
             assert "class" in item
             assert "weight" in item
 
-    def test_bar_label_has_percent_formatter_template(self, journal: PortfolioJournal) -> None:
-        """第九轮反馈：用 VChart formatter 模板字符串（不是函数）加 %。
+    def test_no_label_or_axes_field(self, journal: PortfolioJournal) -> None:
+        """第十一轮最终：飞书 VChart 卡片组件不支持 % 后缀，去掉 label / axes 字段。
 
-        第六/七轮试过 axes[*].label.formatMethod 和 bar.label.formatMethod（都是 JS 函数），
-        飞书 API 接受但渲染端不解析 → 整张图加载失败（飞书 VChart 卡片组件不支持 JS）。
+        试过三次都失败：
+        - axes[*].label.formatMethod（JS 函数）：飞书不解析，整图加载失败
+        - bar.label.formatMethod（JS 函数）：同上
+        - bar.label.formatter="{value}%"（字符串模板）：基础 {value} 替换在飞书内置
+          VChart 版本不工作，显示成字面 "%Y6%"
 
-        formatter 是字符串模板（{value}%），由 VChart 客户端 JS 环境处理，不依赖飞书
-        传函数进去。基础 {value} 替换在 VChart 1.2+ 就有，应该在飞书环境可用。
+        标题"各大类资产占比（%）"明示单位，柱子顶上 VChart 默认显示 yField 数值即可。
         """
         spec = self._get_bar(journal)
-        assert "label" in spec
-        assert spec["label"]["visible"] is True
-        assert spec["label"]["position"] == "top"
-        # formatter 是字符串模板（不是函数），含 {value} 占位符 + % 后缀
-        assert isinstance(spec["label"]["formatter"], str)
-        assert "{value}" in spec["label"]["formatter"]
-        assert spec["label"]["formatter"].endswith("%")
+        assert "label" not in spec
+        assert "axes" not in spec
 
     def test_weight_is_percent_scaled(self, journal: PortfolioJournal) -> None:
         """weight 是 0~100 的百分比数字（不是 0~1 的小数）。
