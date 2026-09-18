@@ -18,12 +18,16 @@
 - 不做 sleeve / strategy drift 对比（属于 spec 091 后续）
 - 不加图表交互（drill-down / tooltip 增强）
 
-## 设计原则（第五轮反馈修订）
+## 设计原则（第六轮反馈修订）
 
 只回答用户三个问题：
 1. **现在整体怎么样**（summary div 顶部 — 总市值 / 盈亏 / 周涨跌 / 累计涨跌）
 2. **大类资产怎么分布**（柱状图，按 Swensen 框架顺序，纵坐标 = 占比 %）
 3. **每个大类持多少**（聚合表，1 行 = 1 个 Swensen 大类）
+
+**第六轮反馈关键变化**（liubo 2026-09-18）：
+- 柱状图 Y 轴数字加 **% 后缀**（之前是 "29.9"，现在 "29.9%"）
+- 用 VChart 标准 axis formatter：`axes[*].label.formatMethod = 'val => val + "%"'`
 
 **第五轮反馈关键变化**（liubo 2026-09-18）：
 - 持仓表 **# 信息嵌进分类名前缀**（"1. A 股股票"），干掉单独的 # 列
@@ -101,6 +105,7 @@ footer:
 - 不再过滤 `count == 0` 的子类——空子类 weight=0 不画柱子但保留 X 轴标签
 - weight 原始值是 Decimal(0~1)，实现层 ×100 转成百分比数字交给 VChart
 - 第四轮反馈：Y 轴数字 round 到 1 位小数（不要再 2 位）
+- 第六轮反馈：Y 轴 label 用 VChart `axes[*].label.formatMethod = 'val => val + "%"'` 加 % 后缀
 - 不加 `direction: "horizontal"` —— 默认就是垂直柱状图
 
 **持仓聚合表 table spec**（按 Swensen 大类聚合）：
@@ -162,6 +167,7 @@ footer:
 - [ ] bar chart data.values 顺序 == SwensenClass 枚举顺序（**不**按市值倒序）
 - [ ] bar chart data.values[*].weight 是百分比数字（0~100 之和 ≈ 100），不是 0~1 的小数
 - [ ] bar chart data.values[*].weight 保留 1 位小数（不要 2 位）
+- [ ] bar chart Y 轴 label 后面带 % 后缀（VChart axes[*].label.formatMethod）
 - [ ] holdings table 3 列：class（含 "#. " 前缀）/ value / weight（不再有单独 # 列）
 - [ ] holdings table 行数 == 14（全部 SwensenClass）
 - [ ] holdings table 行顺序 == SwensenClass 枚举顺序

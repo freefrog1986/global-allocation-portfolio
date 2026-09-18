@@ -94,6 +94,16 @@ def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
         "xField": "class",
         "yField": "weight",
         "legends": {"visible": False},
+        # 第六轮反馈：Y 轴数字后面要带 % 后缀
+        # VChart 标准 axis formatter：用 formatMethod 给 left 轴的 label 加 % 后缀
+        "axes": [
+            {
+                "orient": "left",
+                "label": {
+                    "formatMethod": 'val => val + "%"',
+                },
+            }
+        ],
     }
 
 
