@@ -146,10 +146,13 @@ class TestBreakdownBarChart:
 
         VChart 显示成 0/5/10/.../30，标题"占比（%）"明示单位。
         不论种子数据哪些子类有持仓，全部 weight 都应该在 [0, 100] 区间内且总和不超过 100。
+        第四轮反馈：Y 轴数字只保留 1 位小数（不要 2 位，太长）。
         """
         spec = self._get_bar(journal)
         for item in spec["data"]["values"]:
             assert 0 <= item["weight"] <= 100
+            # 1 位小数 = round(x, 1) — float 算上 round，精度误差 < 0.05
+            assert abs(item["weight"] - round(item["weight"], 1)) < 0.05
         total = sum(item["weight"] for item in spec["data"]["values"])
         assert total <= 100.01  # 算上浮点误差，不会超过 100
 
@@ -175,7 +178,9 @@ class TestBreakdownBarChart:
 class TestHoldingsTable:
     """持仓聚合表：按 Swensen 大类聚合（不再下钻单只基金）。
 
-    4 列：index / class / value / weight。按 SwensenClass 枚举顺序展示全部 14 个子类。
+    3 列：class（含 "#. " 前缀）/ value / weight。按 SwensenClass 枚举顺序展示全部 14 个子类。
+    第五轮反馈：Feishu table column width 只接受 "auto"，无法把 # 列单独做窄。
+    折中方案：把 # 信息嵌进分类名前缀（"1. A 股股票"），干掉单独的 # 列。
     """
 
     def _get_table(self, journal: PortfolioJournal) -> dict[str, object]:
@@ -185,31 +190,36 @@ class TestHoldingsTable:
         assert len(tables) == 1
         return tables[0]
 
-    def test_columns_are_four(self, journal: PortfolioJournal) -> None:
-        """4 列：# / 分类 / 市值 / 占比（不再有 code / name / count）。"""
+    def test_columns_are_three(self, journal: PortfolioJournal) -> None:
+        """3 列：分类 / 市值 / 占比（不再有单独 # 列、code、name、count）。"""
         spec = self._get_table(journal)
         col_names = [c["name"] for c in spec["columns"]]
-        assert col_names == ["index", "class", "value", "weight"]
+        assert col_names == ["class", "value", "weight"]
 
     def test_rows_are_dict_shaped(self, journal: PortfolioJournal) -> None:
         """Feishu API 强制 row 是 dict（按列名取）。"""
         spec = self._get_table(journal)
         for row in spec["rows"]:
             assert isinstance(row, dict)
-            assert set(row.keys()) == {"index", "class", "value", "weight"}
+            assert set(row.keys()) == {"class", "value", "weight"}
 
-    def test_index_is_one_based_sequential(self, journal: PortfolioJournal) -> None:
-        """序号列 1~14（1-indexed，让用户看到 Swensen 框架总数）。"""
+    def test_class_column_includes_index_prefix(self, journal: PortfolioJournal) -> None:
+        """分类列含 # 前缀（"1. A 股股票"），让用户看到框架总数。
+
+        第五轮反馈：原意是单独 # 列，但 Feishu table width 只接受 "auto"，无法做窄。
+        折中：把 # 嵌进分类名前缀，干掉单独 # 列。
+        """
         spec = self._get_table(journal)
-        indexes = [row["index"] for row in spec["rows"]]
-        assert indexes == list(range(1, 15))
+        for idx, row in enumerate(spec["rows"], start=1):
+            assert row["class"].startswith(f"{idx}. ")
 
     def test_rows_in_swensen_order(self, journal: PortfolioJournal) -> None:
         """按 SwensenClass 枚举顺序排（不是市值倒序）。"""
         from global_allocation.portfolio.breakdown import DISPLAY_NAME, SwensenClass
 
         spec = self._get_table(journal)
-        actual_order = [row["class"] for row in spec["rows"]]
+        # 去掉 "#. " 前缀再比对
+        actual_order = [row["class"].split(". ", 1)[1] for row in spec["rows"]]
         expected_order = [DISPLAY_NAME[c] for c in SwensenClass]
         assert actual_order == expected_order
 
@@ -219,17 +229,16 @@ class TestHoldingsTable:
         assert len(spec["rows"]) == 14
 
     def test_all_columns_text_type(self, journal: PortfolioJournal) -> None:
-        """index / value / weight 全是预格式化字符串，全 text 列。"""
+        """class / value / weight 全是预格式化字符串，全 text 列。"""
         spec = self._get_table(journal)
         for col in spec["columns"]:
             assert col["data_type"] == "text"
 
-    def test_index_is_string_format(self, journal: PortfolioJournal) -> None:
-        """index 序列化时是字符串（保持 text 列格式一致）。"""
+    def test_all_columns_auto_width(self, journal: PortfolioJournal) -> None:
+        """所有列 width="auto"（Feishu table 只接受 "auto"，其它值全被拒）。"""
         spec = self._get_table(journal)
-        for row in spec["rows"]:
-            # json.dumps 后会是字符串，但这里直接读 dict 还是 int
-            assert isinstance(row["index"], int)
+        for col in spec["columns"]:
+            assert col["width"] == "auto"
 
     def test_value_formatted_with_commas(self, journal: PortfolioJournal) -> None:
         """市值带千分位逗号。空子类 = "0.00"（没逗号也行）。"""
@@ -245,11 +254,13 @@ class TestHoldingsTable:
         for row in spec["rows"]:
             assert row["weight"].endswith("%")
 
-    def test_class_field_is_chinese_display_name(self, journal: PortfolioJournal) -> None:
-        """分类列显示中文类名（不是 enum value）。"""
+    def test_class_name_body_is_chinese(self, journal: PortfolioJournal) -> None:
+        """分类名（去掉 # 前缀后）主体是中文。"""
         spec = self._get_table(journal)
         for row in spec["rows"]:
-            assert not row["class"].isascii()
+            # 形如 "1. A 股股票" — "A" 是 ASCII 但后面跟中文
+            class_part = row["class"].split(". ", 1)[1]
+            assert not class_part.isascii()
 
 
 class TestRemovedSections:

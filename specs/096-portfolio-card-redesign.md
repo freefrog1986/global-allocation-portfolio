@@ -18,17 +18,25 @@
 - 不做 sleeve / strategy drift 对比（属于 spec 091 后续）
 - 不加图表交互（drill-down / tooltip 增强）
 
-## 设计原则（第三轮反馈修订）
+## 设计原则（第五轮反馈修订）
 
 只回答用户三个问题：
 1. **现在整体怎么样**（summary div 顶部 — 总市值 / 盈亏 / 周涨跌 / 累计涨跌）
 2. **大类资产怎么分布**（柱状图，按 Swensen 框架顺序，纵坐标 = 占比 %）
 3. **每个大类持多少**（聚合表，1 行 = 1 个 Swensen 大类）
 
+**第五轮反馈关键变化**（liubo 2026-09-18）：
+- 持仓表 **# 信息嵌进分类名前缀**（"1. A 股股票"），干掉单独的 # 列
+- 原因：Feishu table column width 实测只接受 `"auto"`，其它值（`short`/`medium`/`long`/数字）都被 API 拒（HTTP 230099 "table column width is invalid"）—— 无法把 # 列做窄，干脆把 # 信息合到 class 里
+
+**第四轮反馈关键变化**（liubo 2026-09-18）：
+- 柱状图纵坐标数字保留 **1 位小数**（不要再 2 位，太长）
+- 表 **# 列宽度改窄** —— 后来发现 Feishu table 不支持自定义宽度（第五轮折中）
+
 **第三轮反馈关键变化**（liubo 2026-09-18）：
 - 柱状图 **纵坐标改成占比**（不再是市值）—— weight 0~1 转成 0~100 百分比数字
 - 柱状图标题改成"各大类资产占比（%，按 Swensen 框架顺序）"明示单位
-- 持仓表 **加序号列**（第 1 列，1-indexed，1~14）—— 让用户一眼看到 Swensen 框架总数
+- 持仓表 **加序号列**（第 1 列，1-indexed，1~14）—— 让用户一眼看到 Swensen 框架总数（后来合并到 class 前缀）
 
 **第二轮反馈关键变化**（liubo 2026-09-18）：
 - 柱状图 **不再按市值倒序**，改按 **Swensen 框架顺序**（A 股 → 港股 → 美股 → 欧 → 亚 → 新兴 → 全球 → REITs → 利率债 → 信用债 → 美债 → 商品 → 现金）
@@ -92,32 +100,33 @@ footer:
 - 按 `SwensenClass` 枚举顺序展示全部 14 个子类（**不是**市值倒序）
 - 不再过滤 `count == 0` 的子类——空子类 weight=0 不画柱子但保留 X 轴标签
 - weight 原始值是 Decimal(0~1)，实现层 ×100 转成百分比数字交给 VChart
+- 第四轮反馈：Y 轴数字 round 到 1 位小数（不要再 2 位）
 - 不加 `direction: "horizontal"` —— 默认就是垂直柱状图
 
 **持仓聚合表 table spec**（按 Swensen 大类聚合）：
 ```python
 {
   "columns": [
-    {"name": "index",  "display_name": "#",      "data_type": "text", "width": "auto"},
     {"name": "class",  "display_name": "分类",   "data_type": "text", "width": "auto"},
     {"name": "value",  "display_name": "市值(¥)", "data_type": "text", "width": "auto"},
     {"name": "weight", "display_name": "占比",   "data_type": "text", "width": "auto"},
   ],
   "rows": [
-    {"index": 1,  "class": "A 股股票",       "value": "57,270.73", "weight": "29.92%"},
-    {"index": 2,  "class": "港股",           "value": "61,188.26", "weight": "31.96%"},
+    {"class": "1. A 股股票",       "value": "57,270.73", "weight": "29.92%"},
+    {"class": "2. 港股",           "value": "61,188.26", "weight": "31.96%"},
     ...
-    {"index": 4,  "class": "欧洲发达市场股票", "value": "0.00",     "weight": "0.00%"},
+    {"class": "4. 欧洲发达市场股票", "value": "0.00",     "weight": "0.00%"},
     ...
-    {"index": 14, "class": "现金",           "value": "10,000.53", "weight": "5.22%"},
+    {"class": "14. 现金",           "value": "10,000.53", "weight": "5.22%"},
   ]
 }
 ```
 
 规则：
 - row 必须是 dict（Feishu API 强制，spec 095 已经踩过这个坑）
-- 所有列 data_type=text（index / value / weight 全是预格式化字符串）
-- 第 1 列 `index` 是 1-indexed 序号（1~14），让用户一眼看到 Swensen 框架大类总数
+- 所有列 data_type=text（class / value / weight 全是预格式化字符串）
+- 第五轮反馈：# 信息嵌进 class 前缀（"1. A 股股票"），干掉单独 # 列
+- 所有列 width="auto"（Feishu table 实测只接受 "auto"，其它值 API 全拒）
 - **不再按市值倒序排**，按 SwensenClass 枚举顺序排（跟柱状图一致）
 - 展示全部 14 个子类（含 count=0 的——value="0.00" / weight="0.00%"）
 - **不再下钻到单只基金**——不显示 code / name / count 列
@@ -152,11 +161,13 @@ footer:
 - [ ] bar chart data.values 长度 == 14（全部 SwensenClass，**不**按 count > 0 过滤）
 - [ ] bar chart data.values 顺序 == SwensenClass 枚举顺序（**不**按市值倒序）
 - [ ] bar chart data.values[*].weight 是百分比数字（0~100 之和 ≈ 100），不是 0~1 的小数
-- [ ] holdings table 4 列：index / class / value / weight（不再有 code / name / count）
+- [ ] bar chart data.values[*].weight 保留 1 位小数（不要 2 位）
+- [ ] holdings table 3 列：class（含 "#. " 前缀）/ value / weight（不再有单独 # 列）
 - [ ] holdings table 行数 == 14（全部 SwensenClass）
 - [ ] holdings table 行顺序 == SwensenClass 枚举顺序
 - [ ] holdings table 所有 row 都是 dict
-- [ ] holdings table 第 1 列 index 是 1-indexed 序号（值 = 1, 2, ..., 14）
+- [ ] holdings table 所有列 width="auto"（Feishu table 只接受这个值）
+- [ ] holdings table 第 1 列 class 含 1-indexed 序号前缀（"1. ", "2. ", ..., "14. "）
 - [ ] ruff check + mypy strict 全绿
 - [ ] 现有 31 只基金测试 + 新断言，全过
 - [ ] 测试覆盖率 ≥ 80%

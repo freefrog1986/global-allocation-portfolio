@@ -81,7 +81,8 @@ def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
     bars: list[dict[str, object]] = [
         {
             "class": b["display_name"],
-            "weight": float(b["weight"]) * 100,  # 0~1 → 0~100
+            # round 到 1 位小数（第四轮反馈：Y 轴数字 .1f 就够了，2 位太长了）
+            "weight": round(float(b["weight"]) * 100, 1),  # 0~1 → 0~100, 1 位
         }
         for b in breakdown
     ]
@@ -97,11 +98,16 @@ def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
 
 
 def _build_holdings_table(journal: PortfolioJournal) -> dict[str, object]:
-    """按 Swensen 大类聚合的持仓表：序号 + 分类 + 市值 + 占比。
+    """按 Swensen 大类聚合的持仓表：分类（含 # 前缀）+ 市值 + 占比。
 
     spec 096：
     - 第二轮反馈：用户不要"细致到具体基金"，表只回答"我每个大类持了多少"
-    - 第三轮反馈：表加序号列（第 1 列，1-14），让用户一眼看到 Swensen 框架总数
+    - 第三轮反馈：表加序号信息
+    - 第四轮反馈：# 列太宽了
+    - 第五轮反馈（实测后的折中）：Feishu table 列 width 只接受 "auto"，其它值（short/
+      medium/long/数字）API 都拒。所以把 # 信息嵌进分类名前缀（"1. A 股股票"），
+      干掉单独 # 列——既保留序号信息，又没有多余宽列
+
     按 SwensenClass 枚举顺序展示全部 14 个子类（含 count=0 的——空子类显示 0 元 / 0.00%，
     这样能直观看到 Swensen 框架里哪些子类没覆盖到）。
 
@@ -111,8 +117,7 @@ def _build_holdings_table(journal: PortfolioJournal) -> dict[str, object]:
 
     rows: list[dict[str, object]] = [
         {
-            "index": idx,
-            "class": b["display_name"],
+            "class": f"{idx}. {b['display_name']}",  # 序号嵌进分类名前缀
             "value": f"{float(b['value']):,.2f}",
             "weight": f"{float(b['weight']) * 100:.2f}%",
         }
@@ -121,7 +126,7 @@ def _build_holdings_table(journal: PortfolioJournal) -> dict[str, object]:
 
     return {
         "columns": [
-            {"name": "index", "display_name": "#", "data_type": "text", "width": "auto"},
+            # 全部 width="auto"（实测 Feishu table 只接受 "auto"；short/medium/long/数字都拒）
             {"name": "class", "display_name": "分类", "data_type": "text", "width": "auto"},
             {"name": "value", "display_name": "市值(¥)", "data_type": "text", "width": "auto"},
             {"name": "weight", "display_name": "占比", "data_type": "text", "width": "auto"},
