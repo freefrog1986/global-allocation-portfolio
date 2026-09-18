@@ -17,7 +17,7 @@ import json
 from datetime import datetime
 from decimal import Decimal
 
-from global_allocation.portfolio.breakdown import compute_breakdown
+from global_allocation.portfolio.breakdown import DISPLAY_NAME, SwensenClass, compute_breakdown
 from global_allocation.portfolio.journal import PortfolioJournal
 from global_allocation.portfolio.strategy import (
     DEFAULT_STRATEGY,
@@ -25,6 +25,7 @@ from global_allocation.portfolio.strategy import (
     AllocationStrategy,
     SuperCategory,
     compute_actual_target,
+    compute_subclass_actual_target,
     compute_super_category_breakdown,
 )
 
@@ -80,11 +81,11 @@ def _build_strategy_section(
 ) -> list[dict[str, object]]:
     """Section 2: 具体策略 — 4 投资类内部权重 + 现金区间 + 当前实际 + 偏离。
 
-    spec 097 第十六轮（liubo 2026-09-18）：
+    spec 097 第十六轮 + 第十七轮（liubo 2026-09-18）：
     - 策略数字存 strategy.DEFAULT_STRATEGY（独立模块，后续可改）
     - Layer 2a（投资类内部权重）：4 个超类按收益率排序的相对权重（合计 100% 投资部分）
     - Layer 2b（现金区间）：子弹区间 [15%, 50%]，不设固定目标
-    - Layer 1 摘要写在 div 文字里（14 子类上限不展示详细 table，避免卡片过长）
+    - Layer 1 摘要写在 div 文字里（11 子类上限不展示详细 table，避免卡片过长）
 
     表格 5 行 × 4 列：
     - 投资类 4 行：target = internal_weight × (1 − 当前现金占比) — 动态计算
@@ -117,8 +118,12 @@ def _build_strategy_section(
         )
     lines.append("")
     lines.append(
-        "**子类上限**：14 个 SwensenClass 子类各设上限，"
+        "**子类上限**：11 个 SwensenClass 子类各设上限，"
         "防止单一资产风险过度集中"
+    )
+    lines.append("")
+    lines.append(
+        "**子类内部权重**（国内为主、国外为辅；详见下方「大类资产明细」）"
     )
     summary_text = "\n".join(lines)
 
@@ -174,6 +179,90 @@ def _build_strategy_section(
     ]
 
 
+def _build_subclass_section(
+    journal: PortfolioJournal,
+    strategy: AllocationStrategy = DEFAULT_STRATEGY,
+) -> list[dict[str, object]]:
+    """Section 3: 大类资产明细 — 10 个子类的目标 / 当前 / 偏离。
+
+    spec 097 第十七轮（liubo 2026-09-18）：Layer 3 子类内部权重落地展示。
+
+    表格 10 行 × 4 列（不含现金 — 现金已在 Section 2）：
+    - 股票 5 行（A股 / 美股 / 港股 / 国外发达 / 新兴市场）
+    - REITs 2 行（国内 / 美国）
+    - 债券 2 行（国内利率债 / 美债）
+    - 商品 1 行（只有一个子类）
+
+    target = subclass_internal_weight × super_investment_weight × (1 − 当前现金%)
+    例（默认策略，现金 30%）：
+    - A 股目标 = 40% × 70% × 70% = 19.6%
+    - 美股目标 = 20% × 70% × 70% = 9.8%
+    - 港股目标 = 15% × 70% × 70% = 7.35%
+
+    delta 列：
+    - 偏离 = 当前 − 目标（pp 后缀，跟 Section 2 风格一致）
+    - 投资子类都走百分比，所以 delta 全是 pp
+
+    为什么单独 Section（不是 Section 2 的延伸）：
+    - Section 2 看的是 4 大类整体（股票 49% / REITs 10.5% / 债券 7% / 商品 3.5%）
+    - Section 3 看的是每个具体子类的目标（A股 19.6% / 美股 9.8% / ...）
+    - 用户需要分别知道"大类偏离"和"具体子项偏离"，粒度不同
+    """
+    breakdown = compute_breakdown(journal)
+    current_by_super = compute_super_category_breakdown(breakdown)
+    current_cash = current_by_super[SuperCategory.CASH]
+
+    # 按 SwensenClass 枚举顺序遍历（11 个子类，跳过 CASH）
+    rows: list[dict[str, object]] = []
+    for sub in SwensenClass:
+        if sub == SwensenClass.CASH:
+            continue  # 现金不在 Section 3（已在 Section 2 展示子弹区间）
+
+        # 当前占比：从 breakdown 查 weight
+        current_weight = next(
+            (row["weight"] for row in breakdown if row["subclass"] == sub),
+            Decimal("0"),
+        )
+        current_pct = float(current_weight) * 100
+        current_str = f"{current_pct:.1f}%"
+
+        # 目标占比：子类内部权重 × 超类内部权重 × (1 − 现金%)
+        actual_target = compute_subclass_actual_target(strategy, sub, current_cash)
+        assert actual_target is not None  # 10 个非现金子类都有权重
+        target_pct = float(actual_target) * 100
+        target_str = f"{target_pct:.1f}%"
+
+        # 偏离
+        delta_pct = current_pct - target_pct
+        sign = "+" if delta_pct >= 0 else ""
+        delta_str = f"{sign}{delta_pct:.1f}pp"
+
+        rows.append(
+            {
+                "subclass": DISPLAY_NAME[sub],
+                "target": target_str,
+                "current": current_str,
+                "delta": delta_str,
+            }
+        )
+
+    table: dict[str, object] = {
+        "columns": [
+            {"name": "subclass", "display_name": "大类资产", "data_type": "text", "width": "auto"},
+            {"name": "target", "display_name": "目标", "data_type": "text", "width": "auto"},
+            {"name": "current", "display_name": "当前", "data_type": "text", "width": "auto"},
+            {"name": "delta", "display_name": "偏离", "data_type": "text", "width": "auto"},
+        ],
+        "rows": rows,
+    }
+
+    return [
+        {"tag": "note", "elements": [{"tag": "plain_text", "content": "大类资产明细"}]},
+        {"tag": "hr"},
+        {"tag": "table", **table},
+    ]
+
+
 def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
     """各大类资产占比柱状图（vertical bar，X 轴 = 类名，Y 轴 = 占比 %）。
 
@@ -181,8 +270,9 @@ def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
     weight 原始值是 0~1 的 Decimal，乘以 100 转成百分比数字交给 VChart（Y 轴
     会显示成 0/5/10/.../30，标题"各大类资产占比（%）"明示单位）。
 
-    按 SwensenClass 枚举自然顺序展示全部 14 个子类（含 count=0 的——这样能直观看到
-    哪些子类没覆盖到，是配置漏洞）。空子类 weight=0 在柱状图上不画柱子、保留 X 轴标签。
+    按 SwensenClass 枚举自然顺序展示全部 11 个子类（spec 097 第十七轮精简到 11），
+    含 count=0 的——这样能直观看到哪些子类没覆盖到，是配置漏洞）。
+    空子类 weight=0 在柱状图上不画柱子、保留 X 轴标签。
 
     飞书 VChart 柱状图 = simple 格式：type="bar" + data.values + xField/yField
     （column 是 VChart 内部名，飞书对外只认 "bar"；不加 direction 默认就是垂直柱状图）
@@ -224,8 +314,8 @@ def _build_holdings_table(journal: PortfolioJournal) -> dict[str, object]:
       medium/long/数字）API 都拒。所以把 # 信息嵌进分类名前缀（"1. A 股股票"），
       干掉单独 # 列——既保留序号信息，又没有多余宽列
 
-    按 SwensenClass 枚举顺序展示全部 14 个子类（含 count=0 的——空子类显示 0 元 / 0.00%，
-    这样能直观看到 Swensen 框架里哪些子类没覆盖到）。
+    按 SwensenClass 枚举顺序展示全部 11 个子类（含 count=0 的——空子类显示 0 元 / 0.00%，
+    这样能直观看到 Swensen 框架里哪些子类没覆盖到；spec 097 第十七轮精简到 11）。
 
     Feishu 表格 row 必须是 dict（按列名取）；所有列 data_type=text（value/weight 是预格式化的字符串）。
     """
@@ -257,25 +347,31 @@ def build_portfolio_card(
 ) -> dict[str, object]:
     """构造实盘账本的飞书交互卡片。
 
-    卡片结构（spec 096 + spec 097 第十六轮）：
+    卡片结构（spec 096 + spec 097 第十七轮 — 3 个 section）：
     - header.title: "实盘周报"
     - Section 1（实盘持仓）：
       - note header "实盘持仓"
       - summary div（生成时间 / 总市值 / 总成本 / 浮动盈亏 / 周涨跌 / 累计涨跌）
       - hr 分隔
-      - 大类资产柱状图（vertical bar，14 个子类）
+      - 大类资产柱状图（vertical bar，11 个子类）
       - hr 分隔
-      - 持仓聚合表（14 行 × 3 列：分类 / 市值 / 占比）
-    - Section 2（具体策略 — 第十六轮：内部权重模型 + 现金 [15%, 50%]）：
+      - 持仓聚合表（11 行 × 3 列：分类 / 市值 / 占比）
+    - Section 2（具体策略 — 第十六轮 + 第十七轮：内部权重模型 + 现金 [15%, 50%]）：
       - hr 分隔（跨 section）
       - note header "具体策略"
-      - 策略文字 div（现金区间 + 4 投资类内部权重 + Layer 1 摘要）
+      - 策略文字 div（现金区间 + 4 投资类内部权重 + Layer 1 摘要 + 子类内部权重索引）
       - hr 分隔
       - 策略对比表（5 行 × 4 列：超类 / 目标 / 当前 / 偏离）
         - 投资类 4 行：target = 内部权重 × (1 − 当前现金占比)（动态）
         - 现金 1 行：target = "[15%, 50%]"，delta = "区间内/低于下限/高于上限"
+    - Section 3（大类资产明细 — 第十七轮新增：Layer 3 子类内部权重落地）：
+      - hr 分隔（跨 section）
+      - note header "大类资产明细"
+      - hr 分隔
+      - 子类对比表（10 行 × 4 列：大类资产 / 目标 / 当前 / 偏离；不含现金）
+        - target = subclass_weight × super_weight × (1 − 当前现金占比)（动态）
 
-    未来扩展（spec 096 第十三轮预留）：Section 3+ 按 SwensenClass 划分（每个大类资产一个 section）。
+    未来扩展（spec 096 第十三轮预留）：Section 4+ 按 SwensenClass 划分（每个大类资产一个 section）。
     """
     actual_title = title or "实盘周报"
     holdings = journal.compute_holdings()
@@ -318,9 +414,12 @@ def build_portfolio_card(
                 "tag": "table",
                 **_build_holdings_table(journal),
             },
-            # Section 2: 具体策略（spec 097 第十四轮）
+            # Section 2: 具体策略（spec 097 第十六轮 + 第十七轮）
             {"tag": "hr"},
             *_build_strategy_section(journal),
+            # Section 3: 大类资产明细（spec 097 第十七轮新增 — Layer 3）
+            {"tag": "hr"},
+            *_build_subclass_section(journal),
         ],
         "footer": {
             "tag": "note",

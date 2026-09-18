@@ -1,6 +1,6 @@
 """测试 src/global_allocation/portfolio/breakdown.py。
 
-按 Swensen 框架把持仓归到 14 个子类。
+按 Swensen 框架把持仓归到 11 个子类（spec 097 第十七轮：删全球主题 + 合并欧美亚达）。
 """
 
 from __future__ import annotations
@@ -30,8 +30,30 @@ class FakePriceSource:
 
 
 class TestSwensenClass:
-    def test_has_14_classes(self) -> None:
-        assert len(SwensenClass) == 14
+    def test_has_11_classes(self) -> None:
+        """第十七轮：从 14 子类精简到 11 子类（合并 + 删信用债）。
+
+        14 - 4（全球主题/欧洲发达/亚洲发达/国内信用债） + 1（国外发达）= 11。
+        """
+        assert len(SwensenClass) == 11
+
+    def test_removed_classes_no_longer_exist(self) -> None:
+        """第十七轮：被砍掉的子类不再存在。
+        - GLOBAL_THEMED_EQUITY（并入 US_EQUITY）
+        - EU_EQUITY + ASIA_DM_EQUITY（合并成 FOREIGN_DM_EQUITY）
+        - CN_CREDIT_BOND（斯文森说没阿尔法，砍掉；基金并入 CN_GOV_BOND）
+        """
+        names = {m.name for m in SwensenClass}
+        assert "GLOBAL_THEMED_EQUITY" not in names
+        assert "EU_EQUITY" not in names
+        assert "ASIA_DM_EQUITY" not in names
+        assert "CN_CREDIT_BOND" not in names
+
+    def test_added_class_exists(self) -> None:
+        """第十七轮新增：FOREIGN_DM_EQUITY（合并欧美亚达）。"""
+        names = {m.name for m in SwensenClass}
+        assert "FOREIGN_DM_EQUITY" in names
+        assert SwensenClass.FOREIGN_DM_EQUITY.value == "foreign_dm_equity"
 
     def test_display_name_for_every_class(self) -> None:
         for sub in SwensenClass:
@@ -46,18 +68,31 @@ class TestSubclassByCode:
             assert isinstance(sub, SwensenClass), f"{code} → {sub}"
 
     def test_known_funds_mapped_correctly(self) -> None:
-        # 抽样几个关键分类
+        # 抽样几个关键分类（第十七轮：4 只原信用债基金 → CN_GOV_BOND）
         assert get_subclass("013310") == SwensenClass.CN_EQUITY  # A 股
         assert get_subclass("004098") == SwensenClass.HK_EQUITY  # 港股
         assert get_subclass("519981") == SwensenClass.US_EQUITY  # 美股
-        assert get_subclass("457001") == SwensenClass.ASIA_DM_EQUITY  # 亚洲发达
+        assert get_subclass("457001") == SwensenClass.FOREIGN_DM_EQUITY  # 国外发达（原亚洲发达）
         assert get_subclass("378006") == SwensenClass.EM_EQUITY  # 新兴市场
         assert get_subclass("160140") == SwensenClass.US_REIT  # 美国 REITs
         assert get_subclass("028277") == SwensenClass.CN_REIT  # 国内 REITs
         assert get_subclass("100050") == SwensenClass.US_BOND  # 美债
-        assert get_subclass("008505") == SwensenClass.CN_CREDIT_BOND  # 国内信用债
+        # 原国内信用债基金 → CN_GOV_BOND（第十七轮：斯文森说信用债没阿尔法，并入利率债）
+        assert get_subclass("008505") == SwensenClass.CN_GOV_BOND
+        assert get_subclass("004827") == SwensenClass.CN_GOV_BOND
+        assert get_subclass("003547") == SwensenClass.CN_GOV_BOND
+        assert get_subclass("000931") == SwensenClass.CN_GOV_BOND
         assert get_subclass("000216") == SwensenClass.COMMODITY  # 商品
         assert get_subclass("004137") == SwensenClass.CASH  # 现金
+
+    def test_global_themed_funds_reclassified_to_us(self) -> None:
+        """第十七轮：原全球主题 3 只基金并入 US_EQUITY。
+
+        理由：全球主题基金大头是美股，没必要单独一类。
+        """
+        assert get_subclass("017730") == SwensenClass.US_EQUITY
+        assert get_subclass("016664") == SwensenClass.US_EQUITY
+        assert get_subclass("006373") == SwensenClass.US_EQUITY
 
     def test_unknown_code_returns_none(self) -> None:
         assert get_subclass("999999") is None
@@ -126,7 +161,7 @@ class TestComputeBreakdown:
             [("013310", "A 股", AssetClass.EQUITY, Decimal("100"), Decimal("2"))],
         )
         rows = compute_breakdown(journal)
-        assert len(rows) == 14
+        assert len(rows) == 11
         # 没持仓的类是 count=0, value=0, weight=0
         cn_gov = next(r for r in rows if r["subclass"] == SwensenClass.CN_GOV_BOND)
         assert cn_gov["count"] == 0
@@ -155,7 +190,7 @@ class TestComputeBreakdown:
         db = PortfolioDB(path=tmp_path / "p.db")
         journal = PortfolioJournal(db=db, price_source=FakePriceSource({}))
         rows = compute_breakdown(journal)
-        assert len(rows) == 14
+        assert len(rows) == 11
         for r in rows:
             assert r["count"] == 0
             assert r["value"] == Decimal("0")

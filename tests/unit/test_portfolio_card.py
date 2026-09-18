@@ -74,12 +74,13 @@ def _seed(journal: PortfolioJournal) -> None:
 
 class TestBuildPortfolioCard:
     def test_basic_structure(self, journal: PortfolioJournal) -> None:
-        """卡片 = header + 2 个 section（实盘持仓 + 具体策略）。
+        """卡片 = header + 3 个 section（实盘持仓 + 具体策略 + 大类资产明细）。
 
-        spec 097 第十四轮反馈：周报分多 section。
+        spec 097 第十四轮 + 第十七轮反馈：周报分多 section。
         - Section 1（实盘持仓）：1 note + 1 div + 1 chart + 1 table
         - Section 2（具体策略）：1 note + 1 div + 1 table
-        合计：2 chart + 2 table + 2 div + 2 note + 5 hr = 14 个元素 + footer
+        - Section 3（大类资产明细）：1 note + 1 table（无 div — 数据全在 table 里）
+        合计：1 chart + 3 table + 2 div + 3 note + 6 hr = 15 个元素 + footer
         """
         _seed(journal)
         card = build_portfolio_card(journal, title="我的实盘")
@@ -88,14 +89,15 @@ class TestBuildPortfolioCard:
         assert "elements" in card
         # Section 1: 1 chart + 1 table + 1 div + 1 note
         # Section 2: 1 table + 1 div + 1 note
+        # Section 3: 1 table + 1 note（无 div）
         charts = [e for e in card["elements"] if e.get("tag") == "chart"]
         tables = [e for e in card["elements"] if e.get("tag") == "table"]
         divs = [e for e in card["elements"] if e.get("tag") == "div"]
         notes = [e for e in card["elements"] if e.get("tag") == "note"]
         assert len(charts) == 1
-        assert len(tables) == 2
+        assert len(tables) == 3
         assert len(divs) == 2
-        assert len(notes) == 2
+        assert len(notes) == 3
 
     def test_summary_includes_total_and_return(self, journal: PortfolioJournal) -> None:
         _seed(journal)
@@ -139,7 +141,7 @@ class TestBuildPortfolioCard:
 
 
 class TestBreakdownBarChart:
-    """柱状图：各大类资产市值（vertical bar，按 SwensenClass 枚举顺序，全部 14 类）。"""
+    """柱状图：各大类资产市值（vertical bar，按 SwensenClass 枚举顺序，全部 11 类；spec 097 第十七轮精简）。"""
 
     def _get_bar(self, journal: PortfolioJournal) -> dict[str, object]:
         _seed(journal)
@@ -199,14 +201,17 @@ class TestBreakdownBarChart:
         assert total <= 100.01  # 算上浮点误差，不会超过 100
 
     def test_includes_all_swensen_classes_in_order(self, journal: PortfolioJournal) -> None:
-        """柱状图按 SwensenClass 枚举顺序展示全部 14 个子类（不按市值倒序排）。"""
+        """柱状图按 SwensenClass 枚举顺序展示全部 11 个子类（不按市值倒序排）。
+
+        spec 097 第十七轮：从 14 子类精简到 11（合并+删信用债）。
+        """
         from global_allocation.portfolio.breakdown import DISPLAY_NAME, SwensenClass
 
         spec = self._get_bar(journal)
         actual_order = [item["class"] for item in spec["data"]["values"]]
         expected_order = [DISPLAY_NAME[c] for c in SwensenClass]
         assert actual_order == expected_order
-        assert len(actual_order) == 14  # 14 个子类，没漏
+        assert len(actual_order) == 11  # 11 个子类，没漏
 
     def test_empty_classes_have_zero_weight(self, journal: PortfolioJournal) -> None:
         """空子类（count=0）也展示，weight=0。这样能看出框架里哪些没覆盖到。"""
@@ -220,9 +225,9 @@ class TestBreakdownBarChart:
 class TestHoldingsTable:
     """持仓聚合表：按 Swensen 大类聚合（不再下钻单只基金）。
 
-    3 列：class（含 "#. " 前缀）/ value / weight。按 SwensenClass 枚举顺序展示全部 14 个子类。
-    第五轮反馈：Feishu table column width 只接受 "auto"，无法把 # 列单独做窄。
-    折中方案：把 # 信息嵌进分类名前缀（"1. A 股股票"），干掉单独的 # 列。
+    3 列：class（含 "#. " 前缀）/ value / weight。按 SwensenClass 枚举顺序展示全部 11 个子类
+    （spec 097 第十七轮精简到 11）。第五轮反馈：Feishu table column width 只接受 "auto"，
+    无法把 # 列单独做窄。折中方案：把 # 信息嵌进分类名前缀（"1. A 股股票"），干掉单独的 # 列。
     """
 
     def _get_table(self, journal: PortfolioJournal) -> dict[str, object]:
@@ -274,9 +279,12 @@ class TestHoldingsTable:
         assert actual_order == expected_order
 
     def test_all_rows_for_all_swensen_classes(self, journal: PortfolioJournal) -> None:
-        """表展示全部 14 个子类（含 count=0 的），不是只展示有持仓的。"""
+        """表展示全部 11 个子类（含 count=0 的），不是只展示有持仓的。
+
+        spec 097 第十七轮：从 14 子类精简到 11。
+        """
         spec = self._get_table(journal)
-        assert len(spec["rows"]) == 14
+        assert len(spec["rows"]) == 11
 
     def test_all_columns_text_type(self, journal: PortfolioJournal) -> None:
         """class / value / weight 全是预格式化字符串，全 text 列。"""
@@ -419,10 +427,13 @@ class TestStrategySection:
         assert "按收益率排序" in text
 
     def test_strategy_text_mentions_subclass_caps(self, journal: PortfolioJournal) -> None:
-        """策略文字提到子类上限（Layer 1 摘要）。"""
+        """策略文字提到子类上限（Layer 1 摘要）。
+
+        spec 097 第十七轮：11 个子类（从 14 精简）。
+        """
         text = self._get_strategy_text(journal)
         assert "子类上限" in text
-        assert "14" in text  # 14 个子类
+        assert "11" in text  # 11 个子类
 
     def test_strategy_table_has_5_rows(self, journal: PortfolioJournal) -> None:
         """策略表 5 行（4 投资类 + 1 现金）。"""
@@ -559,10 +570,11 @@ class TestStrategySection:
 
 
 class TestOrdering:
-    """元素顺序（spec 097 第十四轮 — 2 个 section）。
+    """元素顺序（spec 097 第十七轮 — 3 个 section）。
 
     Section 1（实盘持仓）：note + div + chart + table
     Section 2（具体策略）：note + div + table
+    Section 3（大类资产明细）：note + table（无 div，数据全在 table 里）
     """
 
     def test_order(self, journal: PortfolioJournal) -> None:
@@ -581,6 +593,8 @@ class TestOrdering:
             "note",  # Section 2 header "具体策略"
             "div",   # Section 2 策略文字
             "table", # Section 2 策略对比表
+            "note",  # Section 3 header "大类资产明细"
+            "table", # Section 3 子类对比表（无 div）
         ]
 
     def test_first_element_is_section_header_note(self, journal: PortfolioJournal) -> None:
@@ -619,3 +633,165 @@ class TestOrdering:
         assert section_2_idx is not None
         # 它前面必须是 hr（跨 section 分隔）
         assert elements[section_2_idx - 1].get("tag") == "hr"
+
+    def test_section_3_note_header_after_hr(self, journal: PortfolioJournal) -> None:
+        """Section 3 开头：hr 分隔 + note "大类资产明细"。
+
+        spec 097 第十七轮新增 — 跟 Section 2 用 hr 隔开。
+        """
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        elements = card["elements"]
+        # 找到 "大类资产明细" note 的索引
+        section_3_idx = None
+        for idx, e in enumerate(elements):
+            if e.get("tag") == "note" and any(
+                elem.get("content") == "大类资产明细"
+                for elem in e.get("elements", [])
+            ):
+                section_3_idx = idx
+                break
+        assert section_3_idx is not None
+        # 它前面必须是 hr（跨 section 分隔）
+        assert elements[section_3_idx - 1].get("tag") == "hr"
+
+
+class TestSubclassSection:
+    """spec 097 第十七轮新增 — Section 3 大类资产明细（Layer 3 子类内部权重落地）。
+
+    表格 10 行 × 4 列（不含现金 — 现金已在 Section 2 展示子弹区间）：
+    - 股票 5 行（A股 / 美股 / 港股 / 国外发达 / 新兴市场）
+    - REITs 2 行（国内 / 美国）
+    - 债券 2 行（国内利率债 / 美债）
+    - 商品 1 行
+
+    target = subclass_internal_weight × super_investment_weight × (1 − 当前现金%)
+    """
+
+    def _get_subclass_table(self, journal: PortfolioJournal) -> dict[str, object]:
+        """Section 3 子类对比表 — 4 列（subclass / target / current / delta）。"""
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        tables = [e for e in card["elements"] if e.get("tag") == "table"]
+        for t in tables:
+            col_names = [c["name"] for c in t["columns"]]
+            if col_names == ["subclass", "target", "current", "delta"]:
+                return t
+        raise AssertionError("Section 3 子类对比表未找到（4 列 subclass/target/current/delta）")
+
+    def test_subclass_table_has_10_rows(self, journal: PortfolioJournal) -> None:
+        """子类表 10 行（11 子类 - 1 现金 = 10）。"""
+        spec = self._get_subclass_table(journal)
+        assert len(spec["rows"]) == 10
+
+    def test_subclass_table_excludes_cash(self, journal: PortfolioJournal) -> None:
+        """子类表不含现金（现金已在 Section 2 展示子弹区间）。"""
+        spec = self._get_subclass_table(journal)
+        subclass_names = [row["subclass"] for row in spec["rows"]]
+        assert "现金" not in subclass_names
+
+    def test_subclass_table_columns_are_four(self, journal: PortfolioJournal) -> None:
+        """子类表 4 列：大类资产 / 目标 / 当前 / 偏离。"""
+        spec = self._get_subclass_table(journal)
+        col_names = [c["name"] for c in spec["columns"]]
+        assert col_names == ["subclass", "target", "current", "delta"]
+
+    def test_subclass_table_all_columns_text_and_auto(self, journal: PortfolioJournal) -> None:
+        """子类表所有列 text + width=auto（跟其它表一致）。"""
+        spec = self._get_subclass_table(journal)
+        for col in spec["columns"]:
+            assert col["data_type"] == "text"
+            assert col["width"] == "auto"
+
+    def test_subclass_table_rows_are_dict(self, journal: PortfolioJournal) -> None:
+        """Feishu API 强制 row 是 dict。"""
+        spec = self._get_subclass_table(journal)
+        for row in spec["rows"]:
+            assert isinstance(row, dict)
+            assert set(row.keys()) == {"subclass", "target", "current", "delta"}
+
+    def test_subclass_table_rows_in_swensen_order(self, journal: PortfolioJournal) -> None:
+        """子类表按 SwensenClass 枚举顺序排（不含现金）。"""
+        from global_allocation.portfolio.breakdown import DISPLAY_NAME, SwensenClass
+
+        spec = self._get_subclass_table(journal)
+        actual_order = [row["subclass"] for row in spec["rows"]]
+        expected_order = [
+            DISPLAY_NAME[c] for c in SwensenClass if c != SwensenClass.CASH
+        ]
+        assert actual_order == expected_order
+
+    def test_subclass_table_target_uses_dynamic_formula(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """子类表的 target 列严格遵循公式 target = subclass × super × (1 − 当前现金%)。
+
+        spec 097 第十七轮新增 — 验证子类动态公式。
+        """
+        from global_allocation.portfolio.breakdown import DISPLAY_NAME, SwensenClass
+        from global_allocation.portfolio.strategy import (
+            DEFAULT_STRATEGY,
+            compute_subclass_actual_target,
+        )
+
+        spec = self._get_subclass_table(journal)
+        # 现金在 Section 2 的策略表里，从那里取当前现金占比
+        strategy_table = None
+        for t in [e for e in build_portfolio_card(journal)["elements"] if e.get("tag") == "table"]:
+            col_names = [c["name"] for c in t["columns"]]
+            if col_names == ["category", "target", "current", "delta"]:
+                strategy_table = t
+                break
+        assert strategy_table is not None
+        current_cash_str = strategy_table["rows"][4]["current"]  # 第 5 行是现金
+        current_cash_pct = float(current_cash_str.rstrip("%"))
+        current_cash = Decimal(str(current_cash_pct / 100))
+
+        # 反向查表：display_name → SwensenClass
+        name_to_sub = {v: k for k, v in DISPLAY_NAME.items()}
+
+        # 遍历 10 个子类行，按 display_name 找 subclass → 算 expected target
+        for row in spec["rows"]:
+            display_name = row["subclass"]
+            sub = name_to_sub[display_name]
+            assert sub != SwensenClass.CASH  # 现金不在 Section 3
+            expected_target = compute_subclass_actual_target(
+                DEFAULT_STRATEGY, sub, current_cash
+            )
+            assert expected_target is not None
+            expected_str = f"{float(expected_target) * 100:.1f}%"
+            assert row["target"] == expected_str
+
+    def test_subclass_table_current_uses_percent(self, journal: PortfolioJournal) -> None:
+        """子类表当前列全部以 % 结尾（1 位小数）。"""
+        spec = self._get_subclass_table(journal)
+        for row in spec["rows"]:
+            assert row["current"].endswith("%")
+
+    def test_subclass_table_target_uses_percent(self, journal: PortfolioJournal) -> None:
+        """子类表目标列全部以 % 结尾（1 位小数，跟当前列精度一致）。"""
+        spec = self._get_subclass_table(journal)
+        for row in spec["rows"]:
+            assert row["target"].endswith("%")
+            assert "%" in row["target"]
+
+    def test_subclass_table_delta_uses_pp_unit(self, journal: PortfolioJournal) -> None:
+        """子类表偏离列用 pp 后缀（跟 Section 2 风格一致）。
+
+        子类全是投资类（没有现金），所以全部 pp，不会出现状态文本。
+        """
+        spec = self._get_subclass_table(journal)
+        for row in spec["rows"]:
+            assert row["delta"].endswith("pp")
+            assert not row["delta"].endswith("%")
+
+    def test_subclass_table_delta_sign_matches_current_vs_target(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """子类表偏离符号 = 当前 - 目标（正 = 超配，负 = 低配）。"""
+        spec = self._get_subclass_table(journal)
+        for row in spec["rows"]:
+            target_pct = float(row["target"].rstrip("%"))
+            current_pct = float(row["current"].rstrip("%"))
+            expected_sign = "+" if current_pct >= target_pct else "-"
+            assert row["delta"].startswith(expected_sign)

@@ -1,32 +1,34 @@
-"""大类资产配置策略（spec 097 — 第十六轮：内部权重 + 现金区间 [15%, 50%]）。
+"""大类资产配置策略（spec 097 — 第十七轮：四层结构 + 子类内部权重）。
 
-策略三层结构：
-- **Layer 1（细粒度上限）**：14 个 SwensenClass 子类各设上限 —— 防止单一资产过度集中
+策略四层结构：
+- **Layer 1（细粒度上限）**：11 个 SwensenClass 子类各设上限 —— 防止单一资产过度集中
 - **Layer 2a（投资类内部权重）**：4 个投资超类（股票/REITs/债券/商品）按收益率排序的相对权重 —— 反映风险偏好
 - **Layer 2b（现金区间）**：现金是"子弹/弹药"，允许在 [15%, 50%] 区间波动 —— 经济危机时抄底
+- **Layer 3（子类内部权重 — 第十七轮新增）**：每个投资类超类内，按子类再切固定比例 —— 反映"国内为主、国外为辅"的具体配置
 
-关键设计变更（第十六轮 vs 第十五轮）：
-- 之前：投资类是"绝对目标"（股票 70% / REITs 8% / 债券 15% / 商品 4%，合计 97%）
-- 现在：投资类是"内部权重"（股票 70% / REITs 15% / 债券 10% / 商品 5%，合计 100% 投资部分）
-- 实际目标 = 内部权重 × (1 − 现金占比)
-- 这样现金仓位变化时，投资类自动等比例缩放，不需要重新算
+**关键公式（动态缩放）**：
+- 超类实际目标 = 超类内部权重 × (1 − 当前现金占比)
+- 子类实际目标 = 子类内部权重 × 超类内部权重 × (1 − 当前现金占比)
 
-为什么现金走区间不是目标（liubo 2026-09-18 第十五轮反馈）：
-- 股票/REITs/债券/商品属于"投资类"，追求收益
-- 现金属于"子弹/弹药"，用于市场大跌时抄底 + 应对突发流动性需求
-- 区间策略：常态下子弹保留 [15%, 50%]，市场大跌时抄底后子弹变少也没事（允许到 15%）
+**第十七轮新增 Layer 3 的原因（liubo 2026-09-18 反馈）**：
+- 之前只到超类（4 投资类内部权重），但用户实际想知道"每个大类的具体比例"
+- "国内为主、国外为辅"——这不只是 4 投资类的分类，要在子类层落实
+- 例：股票里 A 股 40% / 美股 20% / 港股 15% / 国外发达 15% / 新兴市场 10%
+  → 不再是模糊的"股票 70%"，而是知道具体每个子类的目标
 
-为什么按"收益率"排序内部权重（liubo 2026-09-18 第十六轮反馈）：
-- 股票长期收益最高，"占大头"
-- REITs 介于股债之间（收益 + 抗通胀）
-- 债券中等收益
-- 商品不算投资资产，"长期没那么值钱"
-- 排序：股票 > REITs > 债券 > 商品
+**第十七轮命名统一**：
+- "大类资产" = 11 个 SwensenClass 子类（最小颗粒，飞书表格行）
+- "超类" = 5 个聚合类（股票/REITs/债券/商品/现金，策略对比表行）
 
 数字依据：
 - Layer 1 上限：基于 David Swensen《Unconventional Success》+ Yale endowment 模型
 - Layer 2a 内部权重：liubo 第十六轮明确 "股票占大头" → 70/15/10/5
-- Layer 2b 区间：liubo 第十五轮 [20%, 50%] → 第十六轮放宽到 [15%, 50%]（"特别好的投资机会可以到 15%")
+- Layer 2b 区间：liubo 第十五轮 [20%, 50%] → 第十六轮放宽到 [15%, 50%]
+- Layer 3 子类内部权重：liubo 第十七轮 "国内为主、国外为辅"
+  → 股票：A股 40% / 美股 20% / 港股 15% / 国外发达 15% / 新兴市场 10%
+  → REITs：国内 70% / 美国 30%
+  → 债券：国内利率债 70% / 美债 30%（斯文森说信用债拿不到阿尔法，砍掉国内信用债）
+  → 商品：100%（只有一个子类）
 
 后续演进：
 - 策略数字存本模块的 `DEFAULT_STRATEGY` 常量（frozen dataclass，后续可改）
@@ -76,28 +78,45 @@ INVESTMENT_CATEGORIES: tuple[SuperCategory, ...] = (
 )
 
 
-# SwensenClass → SuperCategory 映射（14 子类分到 5 超类）
+# SwensenClass → SuperCategory 映射（11 子类分到 5 超类，spec 097 第十七轮精简）
 SUBCLASS_TO_SUPER: dict[SwensenClass, SuperCategory] = {
-    # 股票（7 子类）
+    # 股票（5 子类）
     SwensenClass.CN_EQUITY: SuperCategory.EQUITY,
     SwensenClass.HK_EQUITY: SuperCategory.EQUITY,
     SwensenClass.US_EQUITY: SuperCategory.EQUITY,
-    SwensenClass.EU_EQUITY: SuperCategory.EQUITY,
-    SwensenClass.ASIA_DM_EQUITY: SuperCategory.EQUITY,
+    SwensenClass.FOREIGN_DM_EQUITY: SuperCategory.EQUITY,
     SwensenClass.EM_EQUITY: SuperCategory.EQUITY,
-    SwensenClass.GLOBAL_THEMED_EQUITY: SuperCategory.EQUITY,
     # REITs（2 子类）
     SwensenClass.CN_REIT: SuperCategory.REIT,
     SwensenClass.US_REIT: SuperCategory.REIT,
-    # 债券（3 子类）
+    # 债券（2 子类）— 第十七轮：CN_CREDIT_BOND 砍掉（斯文森说信用债没阿尔法）
     SwensenClass.CN_GOV_BOND: SuperCategory.BOND,
-    SwensenClass.CN_CREDIT_BOND: SuperCategory.BOND,
     SwensenClass.US_BOND: SuperCategory.BOND,
     # 商品（1 子类）
     SwensenClass.COMMODITY: SuperCategory.COMMODITY,
     # 现金（1 子类）
     SwensenClass.CASH: SuperCategory.CASH,
 }
+
+
+@dataclass(frozen=True, slots=True)
+class SubclassInternalWeight:
+    """子类在所属超类内的内部权重（spec 097 第十七轮新增 — Layer 3）。
+
+    - weight: 0~1 的小数（在该超类内），同一超类内所有子类 weight 之和 = 1.0
+    - 实际目标 = weight × 超类内部权重 × (1 − 现金占比)
+    - 例：HK_EQUITY 在股票超类内 15%，股票超类内部权重 70%，现金 30%
+      → HK_EQUITY 实际目标 = 15% × 70% × 70% = 7.35%
+
+    为什么新增 Layer 3（liubo 反馈）：
+    - 只到超类（"股票 70%"）太粗，用户想知道具体每个子类的目标
+    - "国内为主、国外为辅"是要在子类层落实的策略意图
+    - 子类比例是固定的（不像超类随现金缩放）—— 反映长期资产配置意图
+    """
+
+    subclass: SwensenClass
+    super_category: SuperCategory
+    weight: Decimal
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,18 +190,22 @@ class CashRange:
 
 @dataclass(frozen=True, slots=True)
 class AllocationStrategy:
-    """完整大类资产配置策略（三层结构，第十六轮）。
+    """完整大类资产配置策略（四层结构，第十七轮）。
 
-    - subclass_limits: 14 个子类的上限（防风险集中）
+    - subclass_limits: 11 个子类的上限（防风险集中）
     - investment_weights: 4 个投资类超类的内部权重（不含现金，合计 = 1.0）
+    - subclass_weights: 子类在所属超类内的内部权重（同一超类内合计 = 1.0；spec 097 第十七轮新增）
     - cash_range: 现金仓位区间（子弹策略）
 
     注意：投资类内部权重之和 = 1.0（投资部分），实际目标由
     compute_actual_target() 按当前现金占比动态计算。
+    子类内部权重之和 = 1.0（每个超类内），实际目标由
+    compute_subclass_actual_target() 动态计算（子类 × 超类 × (1 − 现金)）。
     """
 
     subclass_limits: tuple[SubclassLimit, ...]
     investment_weights: tuple[InvestmentWeight, ...]
+    subclass_weights: tuple[SubclassInternalWeight, ...]
     cash_range: CashRange
 
     def subclass_upper(self, subclass: SwensenClass) -> Decimal | None:
@@ -199,6 +222,25 @@ class AllocationStrategy:
                 return w.weight
         return None
 
+    def subclass_weight(
+        self, subclass: SwensenClass
+    ) -> tuple[SuperCategory, Decimal] | None:
+        """查某子类的内部权重（返回 (所属超类, 权重)）。
+
+        现金类不在 subclass_weights 里（现金走 cash_range，不走权重）。
+        """
+        for w in self.subclass_weights:
+            if w.subclass == subclass:
+                return (w.super_category, w.weight)
+        return None
+
+    def total_subclass_weight(self, super_category: SuperCategory) -> Decimal:
+        """某超类内所有子类内部权重之和（应 = 1.0；现金超类 = 0）。"""
+        return sum(
+            (w.weight for w in self.subclass_weights if w.super_category == super_category),
+            Decimal("0"),
+        )
+
     @property
     def total_investment_weight(self) -> Decimal:
         """4 个投资类内部权重之和（应 = 1.0）。"""
@@ -207,18 +249,19 @@ class AllocationStrategy:
 
 # 默认策略：Swensen/Yale endowment + liubo 70% 股激进版 + 现金区间 [15%, 50%]
 #
-# Layer 1 上限依据（基于 Swensen《Unconventional Success》/ Yale 模型 + 中国市场分散调整）：
-# - 股票子类（A/HK/US/EU/ASIA_DM/EM/GLOBAL_THEMED）：单市场上限 15-40%，避免单一地区风险过度集中
+# Layer 1 上限依据（基于 Swensen《Unconventional Success》/ Yale 模型 + 中国市场分散调整，第十七轮）：
+# - 股票子类（CN/HK/US/FOREIGN_DM/EM 共 5）：单市场上限 15-40%，避免单一地区风险过度集中
 #   - CN_EQUITY 40% — 主场可适度集中（home bias）
 #   - HK_EQUITY 25% — 大中华海外配置
-#   - US_EQUITY 25% — Swensen 国际发达市场拆分
-#   - 其他股票子类 10-15%
-# - 债券子类（CN_GOV/CN_CREDIT/US_BOND）：上限 15-25%，债券本身波动小可以适度集中
-#   - CN_GOV_BOND 25% — 利率债波动小
-#   - CN_CREDIT_BOND 20% — 信用债有信用风险
+#   - US_EQUITY 25% — 原美股 + 原全球主题基金（第十七轮合并，全球主题大头是美股）
+#     （注：现在含原全球主题，实际持仓上限 35% 更合理，后续可调）
+#   - FOREIGN_DM_EQUITY 15% — 欧洲 + 日/台/韩等国外发达市场合并
+#   - EM_EQUITY 15% — 新兴市场
+# - REITs（CN_REIT/US_REIT）：上限 15%，辅助类配置
+# - 债券子类（CN_GOV/US_BOND 共 2，第十七轮删 CN_CREDIT）：
+#   - CN_GOV_BOND 25% — 利率债波动小（现含原信用债基金，统计上合并）
 #   - US_BOND 15%
-# - REITs/商品：上限 10-15%，辅助类配置
-# - CASH 子类上限 50%（跟随现金区间上限，作为硬约束）
+# - 商品/现金：上限 10% / 50%
 #
 # Layer 2a 内部权重依据（liubo 第十六轮反馈 "股票占大头，按收益率排序"）：
 # - 股票 70%：长期收益最高，"占大头"（liubo 明确）
@@ -230,19 +273,31 @@ class AllocationStrategy:
 # Layer 2b 现金区间依据（liubo 第十六轮反馈 [15%, 50%]）：
 # - 子弹下限 15%（第十六轮从 20% 放宽到 15%）："如果有特别好的投资机会，15% 也行"
 # - 子弹上限 50%：囤太多资金会有机会成本（投资收益跑赢现金）
+#
+# Layer 3 子类内部权重依据（liubo 第十七轮反馈 "国内为主、国外为辅"）：
+# - 股票超类（5 子类，合计 100%）：
+#   - A 股 40%：国内为主
+#   - 美股 20%：QDII 基金费用高 + 汇率风险，控制在 20%
+#   - 港股 15%：大中华海外配置
+#   - 国外发达市场 15%：欧/日/台/韩合并
+#   - 新兴市场 10%：分散
+# - REITs 超类（2 子类，合计 100%）：
+#   - 国内 70%：国内为主
+#   - 美国 30%
+# - 债券超类（2 子类，合计 100%）：
+#   - 国内利率债 70%：斯文森说信用债没阿尔法，不投国内信用债
+#   - 美债 30%
+# - 商品超类（1 子类）：100%（只有一个子类）
 DEFAULT_STRATEGY = AllocationStrategy(
     subclass_limits=(
         SubclassLimit(SwensenClass.CN_EQUITY, Decimal("0.40")),
         SubclassLimit(SwensenClass.HK_EQUITY, Decimal("0.25")),
         SubclassLimit(SwensenClass.US_EQUITY, Decimal("0.25")),
-        SubclassLimit(SwensenClass.EU_EQUITY, Decimal("0.15")),
-        SubclassLimit(SwensenClass.ASIA_DM_EQUITY, Decimal("0.15")),
+        SubclassLimit(SwensenClass.FOREIGN_DM_EQUITY, Decimal("0.15")),
         SubclassLimit(SwensenClass.EM_EQUITY, Decimal("0.15")),
-        SubclassLimit(SwensenClass.GLOBAL_THEMED_EQUITY, Decimal("0.10")),
         SubclassLimit(SwensenClass.CN_REIT, Decimal("0.15")),
         SubclassLimit(SwensenClass.US_REIT, Decimal("0.15")),
         SubclassLimit(SwensenClass.CN_GOV_BOND, Decimal("0.25")),
-        SubclassLimit(SwensenClass.CN_CREDIT_BOND, Decimal("0.20")),
         SubclassLimit(SwensenClass.US_BOND, Decimal("0.15")),
         SubclassLimit(SwensenClass.COMMODITY, Decimal("0.10")),
         SubclassLimit(SwensenClass.CASH, Decimal("0.50")),
@@ -252,6 +307,22 @@ DEFAULT_STRATEGY = AllocationStrategy(
         InvestmentWeight(SuperCategory.REIT, Decimal("0.15")),
         InvestmentWeight(SuperCategory.BOND, Decimal("0.10")),
         InvestmentWeight(SuperCategory.COMMODITY, Decimal("0.05")),
+    ),
+    subclass_weights=(
+        # 股票超类（5 子类，合计 100%）
+        SubclassInternalWeight(SwensenClass.CN_EQUITY, SuperCategory.EQUITY, Decimal("0.40")),
+        SubclassInternalWeight(SwensenClass.US_EQUITY, SuperCategory.EQUITY, Decimal("0.20")),
+        SubclassInternalWeight(SwensenClass.HK_EQUITY, SuperCategory.EQUITY, Decimal("0.15")),
+        SubclassInternalWeight(SwensenClass.FOREIGN_DM_EQUITY, SuperCategory.EQUITY, Decimal("0.15")),
+        SubclassInternalWeight(SwensenClass.EM_EQUITY, SuperCategory.EQUITY, Decimal("0.10")),
+        # REITs 超类（2 子类，合计 100%）
+        SubclassInternalWeight(SwensenClass.CN_REIT, SuperCategory.REIT, Decimal("0.70")),
+        SubclassInternalWeight(SwensenClass.US_REIT, SuperCategory.REIT, Decimal("0.30")),
+        # 债券超类（2 子类，合计 100%）
+        SubclassInternalWeight(SwensenClass.CN_GOV_BOND, SuperCategory.BOND, Decimal("0.70")),
+        SubclassInternalWeight(SwensenClass.US_BOND, SuperCategory.BOND, Decimal("0.30")),
+        # 商品超类（1 子类，100%）
+        SubclassInternalWeight(SwensenClass.COMMODITY, SuperCategory.COMMODITY, Decimal("1.00")),
     ),
     cash_range=CashRange(
         min_weight=Decimal("0.15"),  # 子弹下限（第十六轮：放宽到 15%）
@@ -292,6 +363,46 @@ def compute_actual_target(
     return weight * investment_total
 
 
+def compute_subclass_actual_target(
+    strategy: AllocationStrategy,
+    subclass: SwensenClass,
+    current_cash_weight: Decimal,
+) -> Decimal | None:
+    """给定当前现金占比，计算某子类的实际目标。
+
+    公式：actual_target = subclass_internal_weight × super_investment_weight × (1 − current_cash_weight)
+
+    Args:
+        strategy: 完整策略（含子类内部权重）
+        subclass: 11 个 SwensenClass 子类之一
+        current_cash_weight: 当前现金占比（0~1）
+
+    Returns:
+        实际目标占比（0~1）；现金类返回 None（现金走 cash_range，不走权重）
+
+    例（默认策略，现金 30%）：
+    - 投资部分 = 70%
+    - 股票超类目标 = 70% × 70% = 49%
+    - A 股目标 = 49% × 40% = 19.6%
+    - 美股目标 = 49% × 20% = 9.8%
+    - 港股目标 = 49% × 15% = 7.35%
+    - 国外发达目标 = 49% × 15% = 7.35%
+    - 新兴市场目标 = 49% × 10% = 4.9%
+    股票超类下 5 子类加总 = 49%（验证：子类权重和 = 100% × 股票超类目标）
+    """
+    if subclass == SwensenClass.CASH:
+        return None
+    info = strategy.subclass_weight(subclass)
+    if info is None:
+        return None
+    super_cat, subclass_internal_weight = info
+    super_investment_weight = strategy.investment_weight(super_cat)
+    if super_investment_weight is None:
+        return None
+    investment_total = Decimal("1") - current_cash_weight
+    return subclass_internal_weight * super_investment_weight * investment_total
+
+
 def compute_super_category_breakdown(
     breakdown: list[BreakdownRow],
 ) -> dict[SuperCategory, Decimal]:
@@ -316,10 +427,12 @@ __all__ = [
     "INVESTMENT_CATEGORIES",
     "SUBCLASS_TO_SUPER",
     "SubclassLimit",
+    "SubclassInternalWeight",
     "InvestmentWeight",
     "CashRange",
     "AllocationStrategy",
     "DEFAULT_STRATEGY",
     "compute_actual_target",
+    "compute_subclass_actual_target",
     "compute_super_category_breakdown",
 ]
