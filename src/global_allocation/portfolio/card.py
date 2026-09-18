@@ -1,7 +1,7 @@
 """飞书 chart card for portfolio journal。
 
 参照 specs/090-portfolio-journal.md + specs/096-portfolio-card-redesign.md
-+ specs/097-strategy-spike.md。
++ specs/097-strategy-spike.md + specs/098-valuation-section.md。
 
 设计原则（spec 097 第十九轮 — 单 section 整合）：
 - 只回答用户三个问题：现在整体怎么样 / 大类资产怎么分布 / 每个大类具体占多少
@@ -11,16 +11,23 @@
 - 11 个子类全部展示（含 count=0 的——这样能看出框架里哪些没覆盖到）
 - 不再包含 pie / line chart / 单只基金明细 / 交易流水表
 - 不再包含独立的"大类资产策略"和"大类资产明细" section（合并到持仓表）
+
+第二十轮：恢复 Section 2（大类资产策略），保留 Section 3 删除状态。
+第二十一轮（spec 098）：新增 Section 3 — 大类资产估值（A 股 4 个指标）。
 """
 
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from global_allocation.portfolio.breakdown import SwensenClass, compute_breakdown
 from global_allocation.portfolio.journal import PortfolioJournal
+from global_allocation.portfolio.models import (
+    ValuationIndicator,
+    ValuationIndicatorCode,
+)
 from global_allocation.portfolio.strategy import (
     DEFAULT_STRATEGY,
     SUPER_CATEGORY_DISPLAY_NAME,
@@ -30,6 +37,7 @@ from global_allocation.portfolio.strategy import (
     compute_subclass_actual_target,
     compute_super_category_breakdown,
 )
+from global_allocation.portfolio.valuation_indicators import compute_verdict
 
 
 def _format_pct(value: Decimal | None, decimals: int = 2) -> str:
@@ -306,13 +314,87 @@ def _build_holdings_table(
     }
 
 
+def _build_valuation_section(journal: PortfolioJournal) -> list[dict[str, object]]:
+    """Section 3: 大类资产估值（spec 098 — 第一期仅 A 股）。
+
+    卡片结构：note header + hr + 4 行 × 4 列表格。
+    4 行：股债利差 / PE 分位 / 巴菲特指标 / 股息率（按 ValuationIndicatorCode enum 顺序）。
+    4 列：指标 / 当前 / 评估 / 阈值。
+
+    数据缺失处理：DB 缺哪个指标就显示"数据缺失"（spec 098 第 170 行）。
+    DB 完全空（今天没拉过估值）→ Section 3 整段不渲染（避免空表格）。
+    """
+    today = date.today()
+    indicators = journal.db.list_valuation_indicators_for_date(today)
+    if not indicators:
+        # DB 里今天没有任何指标 → 不渲染 Section 3（spec 098 卡片方案）
+        # publish 时 CLI 已自动调 update，所以正常情况不会到这里。
+        return []
+
+    by_code: dict[ValuationIndicatorCode, ValuationIndicator] = {
+        i.indicator_code: i for i in indicators
+    }
+
+    # 4 个指标的中文名 + 阈值文案（spec 098 第 99~110 行）
+    labels: dict[ValuationIndicatorCode, tuple[str, str]] = {
+        ValuationIndicatorCode.EQUITY_RISK_PREMIUM: ("股债利差", ">5% 低 / <2% 高"),
+        ValuationIndicatorCode.PE_PERCENTILE: ("PE 分位", "<30% 低 / >70% 高"),
+        ValuationIndicatorCode.BUFFETT_INDICATOR: ("巴菲特指标", "<50% 低 / >80% 高"),
+        ValuationIndicatorCode.DIVIDEND_YIELD: ("股息率", ">3% 低 / <1% 高"),
+    }
+
+    def _format_value(code: ValuationIndicatorCode, value: Decimal) -> str:
+        """指标当前值的格式化字符串（spec 098 第 106~110 行）。"""
+        pct = float(value) * 100
+        if code == ValuationIndicatorCode.EQUITY_RISK_PREMIUM:
+            # 股债利差：保留符号（正 = 股票相对债券有溢价）+2 位小数
+            return f"{pct:+.2f}%"
+        # 其他 3 个指标：2 位小数（百分比）
+        return f"{pct:.2f}%"
+
+    rows: list[dict[str, object]] = []
+    for code in ValuationIndicatorCode:
+        name, threshold = labels[code]
+        if code in by_code:
+            ind = by_code[code]
+            current_str = _format_value(code, ind.value)
+            verdict_str = compute_verdict(code, ind.value)
+        else:
+            current_str = "数据缺失"
+            verdict_str = "n/a"
+        rows.append(
+            {
+                "indicator": name,
+                "value": current_str,
+                "verdict": verdict_str,
+                "threshold": threshold,
+            }
+        )
+
+    table: dict[str, object] = {
+        "columns": [
+            {"name": "indicator", "display_name": "指标", "data_type": "text", "width": "auto"},
+            {"name": "value", "display_name": "当前", "data_type": "text", "width": "auto"},
+            {"name": "verdict", "display_name": "评估", "data_type": "text", "width": "auto"},
+            {"name": "threshold", "display_name": "阈值", "data_type": "text", "width": "auto"},
+        ],
+        "rows": rows,
+    }
+
+    return [
+        {"tag": "note", "elements": [{"tag": "plain_text", "content": "大类资产估值"}]},
+        {"tag": "hr"},
+        {"tag": "table", **table},
+    ]
+
+
 def build_portfolio_card(
     journal: PortfolioJournal,
     title: str | None = None,
 ) -> dict[str, object]:
     """构造实盘账本的飞书交互卡片。
 
-    卡片结构（spec 097 第二十轮 — 2 个 section：持仓 + 超类策略）：
+    卡片结构（spec 098 第二十一轮 — 3 个 section：持仓 + 超类策略 + 估值）：
     - header.title: "实盘周报"
     - Section 1（实盘持仓）：
       - note header "实盘持仓"
@@ -321,29 +403,64 @@ def build_portfolio_card(
       - 大类资产柱状图（vertical bar，11 个子类，柱子顶部带数值标签 — 第十九轮加）
       - hr 分隔
       - 持仓聚合表（11 行 × 5 列：分类 / 市值 / 占比 / 目标 / 偏离 — 第十九轮扩列）
-    - Section 2（大类资产策略 — 第二十轮恢复）：
+    - Section 2（大类资产策略 — spec 097 第二十轮恢复）：
       - hr 分隔（跨 section）
       - note header "大类资产策略"
       - hr 分隔
       - 策略对比表（5 行 × 4 列：超类 / 目标 / 当前 / 偏离）
         - 4 投资类：target = 内部权重 × (1 − 当前现金占比)（动态）
         - 现金：target = "[15%, 50%]"，delta = "区间内/低于下限/高于上限"
+    - Section 3（大类资产估值 — spec 098 第二十一轮新增）：
+      - hr 分隔（跨 section）
+      - note header "大类资产估值"
+      - hr 分隔
+      - 估值表（4 行 × 4 列：指标 / 当前 / 评估 / 阈值）
+        - 4 个 A 股指标：股债利差 / PE 分位 / 巴菲特指标 / 股息率
+        - 数据缺失显示"数据缺失"（akshare 接口失败时）
+        - DB 完全空时整段不渲染（publish 时 CLI 已自动 update）
 
     第十九轮（liubo 2026-09-19）：合并 Section 2 + 3 到 Section 1 持仓表（加 target/delta）
     第二十轮（liubo 2026-09-19）：恢复 Section 2，保留 Section 3 删除状态
-    - liubo 反馈："我还是要看一下超类的，因为我担心没控制好这个超类的比例了"
-    - 用户担心超类（股票/REITs/债券/商品）的整体比例 — Section 2 给的是超类粒度
-      的当前/目标/偏离，跟持仓表（11 行子类粒度）是不同聚合层级
-    - 持仓表的 11 行 mental sum ≈ Section 2 的 5 行（按超类聚合），但 Section 2
-      是独立的视图，方便用户一眼看出"股票 49% / REITs 10.5% / 债券 7% / 商品 3.5%"
-    - Section 3 不恢复：子类粒度的 target/delta 已经在持仓表的每行里有
+    第二十一轮（spec 098）：新增 Section 3（A 股估值）— 跟持仓/Section 2 完全不同维度
+    - Section 1/2 是用户持仓的"账面"信息（"我有什么 / 偏离目标多少"）
+    - Section 3 是"市场给当前大类的报价"（"现在加仓合不合适"）
+    - 用户场景：看完持仓 → 想知道"现在该不该加仓" → 看 Section 3 评估
 
-    元素总数：2 note + 1 div + 3 hr + 1 chart + 2 table = 9 + footer。
+    元素总数（无估值）：2 note + 1 div + 3 hr + 1 chart + 2 table = 9 + footer。
+    元素总数（有估值）：3 note + 1 div + 4 hr + 1 chart + 3 table = 12 + footer。
     """
     actual_title = title or "实盘周报"
     holdings = journal.compute_holdings()
     if not holdings:
         raise ValueError("没有持仓，无法生成卡片")
+
+    elements: list[dict[str, object]] = [
+        # Section 1: 实盘持仓
+        {
+            "tag": "note",
+            "elements": [{"tag": "plain_text", "content": "实盘持仓"}],
+        },
+        {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": _build_summary(journal, actual_title),
+            },
+        },
+        {"tag": "hr"},
+        {"tag": "chart", "chart_spec": _build_breakdown_bar(journal)},
+        {"tag": "hr"},
+        {"tag": "table", **_build_holdings_table(journal)},
+        # Section 2: 大类资产策略（spec 097 第二十轮恢复）
+        {"tag": "hr"},
+        *_build_strategy_section(journal),
+    ]
+
+    # Section 3: 大类资产估值（spec 098 第二十一轮新增）
+    valuation_section = _build_valuation_section(journal)
+    if valuation_section:
+        elements.append({"tag": "hr"})
+        elements.extend(valuation_section)
 
     card: dict[str, object] = {
         "header": {
@@ -353,38 +470,7 @@ def build_portfolio_card(
                 "content": actual_title,
             },
         },
-        "elements": [
-            # Section 1: 实盘持仓
-            {
-                "tag": "note",
-                "elements": [
-                    {
-                        "tag": "plain_text",
-                        "content": "实盘持仓",
-                    }
-                ],
-            },
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": _build_summary(journal, actual_title),
-                },
-            },
-            {"tag": "hr"},
-            {
-                "tag": "chart",
-                "chart_spec": _build_breakdown_bar(journal),
-            },
-            {"tag": "hr"},
-            {
-                "tag": "table",
-                **_build_holdings_table(journal),
-            },
-            # Section 2: 大类资产策略（第二十轮恢复 — 用户担心超类比例失控）
-            {"tag": "hr"},
-            *_build_strategy_section(journal),
-        ],
+        "elements": elements,
         "footer": {
             "tag": "note",
             "elements": [

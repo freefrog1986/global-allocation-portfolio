@@ -1,8 +1,8 @@
 """实盘持仓账本模型。
 
-参照 specs/090-portfolio-journal.md。
+参照 specs/090-portfolio-journal.md + specs/098-valuation-section.md。
 
-Fund / Transaction / Holding / WeeklySnapshot。
+Fund / Transaction / Holding / WeeklySnapshot / ValuationIndicator。
 """
 
 from __future__ import annotations
@@ -149,10 +149,43 @@ class WeeklySnapshot(_FrozenModel):
     created_at: datetime | None = None
 
 
+class ValuationIndicatorCode(str, Enum):
+    """估值指标代码（spec 098 — 第一期仅 A 股 4 个）。
+
+    str-mixin 让 JSON 序列化直接用 .value（不用 EnumJsonEncoder）。
+    """
+
+    EQUITY_RISK_PREMIUM = "equity_risk_premium"  # 股债利差 = 1/PE - 10Y 国债收益率
+    PE_PERCENTILE = "pe_percentile"  # PE 在过去 10 年序列里的百分位
+    BUFFETT_INDICATOR = "buffett_indicator"  # A 股总市值 / 中国 GDP
+    DIVIDEND_YIELD = "dividend_yield"  # 中证全A 分红总额 / 总市值
+
+
+class ValuationIndicator(_FrozenModel):
+    """单日单个估值指标快照（spec 098）。
+
+    同一天同一指标的多次拉取靠 DB 的 UNIQUE (record_date, indicator_code) 兜底。
+    Decimal 存 text（精度无损，跟 transactions / snapshots 一致）。
+    """
+
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        validate_assignment=True,
+    )
+
+    record_date: date
+    indicator_code: ValuationIndicatorCode
+    value: Decimal
+    source: str  # "akshare:stock_zh_index_value_dbj_b" 等
+
+
 __all__ = [
     "Fund",
     "Transaction",
     "TransactionSide",
     "Holding",
     "WeeklySnapshot",
+    "ValuationIndicator",
+    "ValuationIndicatorCode",
 ]

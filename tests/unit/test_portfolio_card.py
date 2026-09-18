@@ -16,7 +16,11 @@ from global_allocation.models import AssetClass
 from global_allocation.portfolio.card import build_portfolio_card
 from global_allocation.portfolio.db import PortfolioDB
 from global_allocation.portfolio.journal import PortfolioJournal
-from global_allocation.portfolio.models import WeeklySnapshot
+from global_allocation.portfolio.models import (
+    ValuationIndicator,
+    ValuationIndicatorCode,
+    WeeklySnapshot,
+)
 
 
 class FakePriceSource:
@@ -68,6 +72,44 @@ def _seed(journal: PortfolioJournal) -> None:
             cumulative_return=Decimal("0"),
             holdings_json=json.dumps([]),
             created_at=datetime(2026, 9, 4, 17),
+        )
+    )
+
+
+def _seed_valuation_today(journal: PortfolioJournal) -> None:
+    """塞入今天的 4 个 A 股估值指标（spec 098 卡片 Section 3 用）。"""
+    today = date.today()
+    # 用 mock 数据：股债利差=+5.2%（偏低估），PE 分位=28%（偏低估），巴菲特=65%（正常），股息率=2.5%（正常）
+    journal._db.upsert_valuation_indicator(
+        ValuationIndicator(
+            record_date=today,
+            indicator_code=ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
+            value=Decimal("0.052"),
+            source="test",
+        )
+    )
+    journal._db.upsert_valuation_indicator(
+        ValuationIndicator(
+            record_date=today,
+            indicator_code=ValuationIndicatorCode.PE_PERCENTILE,
+            value=Decimal("0.28"),
+            source="test",
+        )
+    )
+    journal._db.upsert_valuation_indicator(
+        ValuationIndicator(
+            record_date=today,
+            indicator_code=ValuationIndicatorCode.BUFFETT_INDICATOR,
+            value=Decimal("0.65"),
+            source="test",
+        )
+    )
+    journal._db.upsert_valuation_indicator(
+        ValuationIndicator(
+            record_date=today,
+            indicator_code=ValuationIndicatorCode.DIVIDEND_YIELD,
+            value=Decimal("0.025"),
+            source="test",
         )
     )
 
@@ -714,6 +756,175 @@ class TestStrategySection:
             current_pct = float(row["current"].rstrip("%"))
             expected_sign = "+" if current_pct >= target_pct else "-"
             assert row["delta"].startswith(expected_sign)
+
+
+class TestValuationSection:
+    """Section 3: 大类资产估值（spec 098 第二十一轮新增）。
+
+    卡片 Section 3 = note header "大类资产估值" + hr + 4 行 × 4 列表格。
+    4 行：股债利差 / PE 分位 / 巴菲特指标 / 股息率。
+    4 列：指标 / 当前 / 评估 / 阈值。
+
+    边界：
+    - DB 完全空（今天没拉过估值）→ Section 3 整段不渲染
+    - 部分指标缺失 → 缺失行显示"数据缺失"/"n/a"，其他行正常
+    - 股债利差用 signed format（+/-），其他 3 个用 unsigned format
+    """
+
+    def _get_valuation_table(self, journal: PortfolioJournal) -> dict[str, object]:
+        """4 列估值表（indicator / value / verdict / threshold）。"""
+        _seed(journal)
+        _seed_valuation_today(journal)
+        card = build_portfolio_card(journal)
+        tables = [e for e in card["elements"] if e.get("tag") == "table"]
+        for t in tables:
+            col_names = [c["name"] for c in t["columns"]]
+            if col_names == ["indicator", "value", "verdict", "threshold"]:
+                return t
+        raise AssertionError("Section 3 估值表未找到（4 列 indicator/value/verdict/threshold）")
+
+    def test_section_3_header_present(self, journal: PortfolioJournal) -> None:
+        """Section 3 标题"大类资产估值"必须存在（spec 098）。"""
+        _seed(journal)
+        _seed_valuation_today(journal)
+        card = build_portfolio_card(journal)
+        found = False
+        for e in card["elements"]:
+            if e.get("tag") == "note":
+                for elem in e.get("elements", []):
+                    if elem.get("content") == "大类资产估值":
+                        found = True
+        assert found, "Section 3 标题「大类资产估值」必须存在"
+
+    def test_section_3_absent_when_no_data(self, journal: PortfolioJournal) -> None:
+        """DB 完全空 → Section 3 整段不渲染（spec 098 第 170 行）。
+
+        publish 时 CLI 已自动 update，正常情况不会到这里；但如果 publish 失败或
+        手动 build 时没拉数据，Section 3 不渲染比显示空表格好。
+        """
+        _seed(journal)
+        # 不调用 _seed_valuation_today → DB 没今天的指标
+        card = build_portfolio_card(journal)
+        for e in card["elements"]:
+            if e.get("tag") == "note":
+                for elem in e.get("elements", []):
+                    assert elem.get("content") != "大类资产估值"
+
+    def test_table_has_4_rows(self, journal: PortfolioJournal) -> None:
+        """4 行 = 4 个估值指标。"""
+        spec = self._get_valuation_table(journal)
+        assert len(spec["rows"]) == 4
+
+    def test_table_columns_are_four(self, journal: PortfolioJournal) -> None:
+        """4 列：指标 / 当前 / 评估 / 阈值。"""
+        spec = self._get_valuation_table(journal)
+        col_names = [c["name"] for c in spec["columns"]]
+        assert col_names == ["indicator", "value", "verdict", "threshold"]
+
+    def test_rows_in_default_order(self, journal: PortfolioJournal) -> None:
+        """按 ValuationIndicatorCode 枚举顺序：股债利差 → PE 分位 → 巴菲特 → 股息率。"""
+        spec = self._get_valuation_table(journal)
+        actual_order = [row["indicator"] for row in spec["rows"]]
+        expected_order = ["股债利差", "PE 分位", "巴菲特指标", "股息率"]
+        assert actual_order == expected_order
+
+    def test_rows_are_dict_with_all_columns(self, journal: PortfolioJournal) -> None:
+        """Feishu API 强制 row 是 dict（按列名取）。"""
+        spec = self._get_valuation_table(journal)
+        for row in spec["rows"]:
+            assert isinstance(row, dict)
+            assert set(row.keys()) == {"indicator", "value", "verdict", "threshold"}
+
+    def test_value_format_uses_percent(self, journal: PortfolioJournal) -> None:
+        """value 列以 % 结尾（PE 分位 / 巴菲特 / 股息率都是 unsigned 2 位小数）。"""
+        spec = self._get_valuation_table(journal)
+        # 后 3 行（PE 分位 / 巴菲特 / 股息率）= unsigned
+        for row in spec["rows"][1:]:
+            assert row["value"].endswith("%")
+            # 不应带 +/- 前缀（只有股债利差带符号）
+            assert not row["value"].startswith("+")
+            assert not row["value"].startswith("-")
+
+    def test_equity_risk_premium_uses_signed_format(self, journal: PortfolioJournal) -> None:
+        """股债利差（row[0]）用 signed format（+/-），2 位小数。
+
+        spec 098 第 108 行：正号也要写（"+5.20%"），负号照常（"-1.30%"）。
+        """
+        spec = self._get_valuation_table(journal)
+        erp_row = spec["rows"][0]
+        # 行内显示"股债利差"
+        assert erp_row["indicator"] == "股债利差"
+        # mock 数据 5.2% → "+5.20%"
+        assert erp_row["value"] == "+5.20%"
+
+    def test_verdict_text(self, journal: PortfolioJournal) -> None:
+        """verdict 列是"偏低估 / 正常 / 偏高估 / n/a"之一。
+
+        mock 数据：ERP=5.2% → 偏低估（>5%），PE=28% → 偏低估（<30%），
+        巴菲特=65% → 正常（50-80%），股息率=2.5% → 正常（1-3%）。
+        """
+        spec = self._get_valuation_table(journal)
+        verdicts = [row["verdict"] for row in spec["rows"]]
+        assert verdicts == ["偏低估", "偏低估", "正常", "正常"]
+
+    def test_threshold_column_text(self, journal: PortfolioJournal) -> None:
+        """threshold 列是描述性文字（如 ">5% 低 / <2% 高"），不是数字。
+
+        spec 098 第 99~110 行：每行阈值文案让用户一眼看到边界。
+        """
+        spec = self._get_valuation_table(journal)
+        thresholds = [row["threshold"] for row in spec["rows"]]
+        assert thresholds == [
+            ">5% 低 / <2% 高",     # 股债利差
+            "<30% 低 / >70% 高",    # PE 分位
+            "<50% 低 / >80% 高",    # 巴菲特指标
+            ">3% 低 / <1% 高",      # 股息率
+        ]
+
+    def test_partial_data_shows_missing(self, journal: PortfolioJournal) -> None:
+        """只入库 1 条指标 → 其他 3 行显示"数据缺失"/"n/a"，存在的行正常显示。"""
+        _seed(journal)
+        today = date.today()
+        journal._db.upsert_valuation_indicator(
+            ValuationIndicator(
+                record_date=today,
+                indicator_code=ValuationIndicatorCode.PE_PERCENTILE,
+                value=Decimal("0.85"),  # 偏高估（>70%）
+                source="test",
+            )
+        )
+        card = build_portfolio_card(journal)
+        # 找到估值表
+        tables = [e for e in card["elements"] if e.get("tag") == "table"]
+        valuation_table = next(
+            t for t in tables
+            if [c["name"] for c in t["columns"]] == ["indicator", "value", "verdict", "threshold"]
+        )
+        rows = valuation_table["rows"]
+        # PE 分位在 index=1
+        assert rows[1]["value"] == "85.00%"
+        assert rows[1]["verdict"] == "偏高估"
+        # 其他 3 行 → "数据缺失" / "n/a"
+        for idx in (0, 2, 3):
+            assert rows[idx]["value"] == "数据缺失"
+            assert rows[idx]["verdict"] == "n/a"
+
+    def test_section_3_increases_hr_count(self, journal: PortfolioJournal) -> None:
+        """Section 3 渲染时 hr 数从 4 增到 6（多了 2 个 hr：跨 section 分隔 + 表前 hr）。
+
+        验证 Section 3 跟前 2 个 section 一样有完整的 hr 包裹结构。
+        """
+        _seed(journal)
+        # 无估值：4 hr
+        card_no_val = build_portfolio_card(journal)
+        hrs_no_val = sum(1 for e in card_no_val["elements"] if e.get("tag") == "hr")
+        assert hrs_no_val == 4
+
+        # 有估值：6 hr
+        _seed_valuation_today(journal)
+        card_with_val = build_portfolio_card(journal)
+        hrs_with_val = sum(1 for e in card_with_val["elements"] if e.get("tag") == "hr")
+        assert hrs_with_val == 6
 
 
 class TestOrdering:

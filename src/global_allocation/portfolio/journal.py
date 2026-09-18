@@ -35,6 +35,14 @@ class PortfolioJournal:
         self._db = db
         self._price_source = price_source
 
+    @property
+    def db(self) -> PortfolioDB:
+        """暴露底层 DB（spec 098：card.py 读估值指标需要直接走 db）。
+
+        业务方法（add_fund / record_buy 等）走 self._db 不用这个 property。
+        """
+        return self._db
+
     # ─── fund management ───
 
     def add_fund(

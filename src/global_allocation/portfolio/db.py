@@ -1,8 +1,8 @@
 """实盘持仓账本 SQLite 存储。
 
-参照 specs/090-portfolio-journal.md。
+参照 specs/090-portfolio-journal.md + specs/098-valuation-section.md。
 
-表：funds / transactions / weekly_snapshots。
+表：funds / transactions / weekly_snapshots / valuation_indicators。
 Decimal 全存 text（精度无损）。
 """
 
@@ -15,7 +15,13 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from global_allocation.portfolio.models import Fund, Transaction, WeeklySnapshot
+from global_allocation.portfolio.models import (
+    Fund,
+    Transaction,
+    ValuationIndicator,
+    ValuationIndicatorCode,
+    WeeklySnapshot,
+)
 
 
 class PortfolioDB:
@@ -78,6 +84,19 @@ class PortfolioDB:
                 holdings_json       TEXT NOT NULL,
                 created_at          TEXT NOT NULL
             );
+
+            -- spec 098：估值指标快照（每日一次，自动 upsert）
+            CREATE TABLE IF NOT EXISTS valuation_indicators (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_date     TEXT NOT NULL,             -- YYYY-MM-DD
+                indicator_code  TEXT NOT NULL,             -- 4 个 enum 值
+                value           TEXT NOT NULL,             -- Decimal as text
+                source          TEXT NOT NULL,             -- "akshare:..." 来源标识
+                UNIQUE (record_date, indicator_code)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_val_date
+                ON valuation_indicators(record_date);
             """
         )
         self._conn.commit()
@@ -260,6 +279,88 @@ class PortfolioDB:
         cur.execute("SELECT * FROM weekly_snapshots ORDER BY week_end_date ASC")
         return [_row_to_snap(r) for r in cur.fetchall()]
 
+    # ─── valuation_indicators（spec 098）───
+
+    def upsert_valuation_indicator(self, ind: ValuationIndicator) -> int:
+        """插入或更新单条估值指标（按 record_date + indicator_code 去重）。
+
+        同一天同一指标拉多次时只保留最新一次（ON CONFLICT 覆盖 value/source）。
+        返回 rowid。
+        """
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO valuation_indicators (
+                record_date, indicator_code, value, source
+            ) VALUES (?, ?, ?, ?)
+            ON CONFLICT(record_date, indicator_code) DO UPDATE SET
+                value=excluded.value,
+                source=excluded.source
+            """,
+            (
+                ind.record_date.isoformat(),
+                ind.indicator_code.value,
+                str(ind.value),
+                ind.source,
+            ),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)  # type: ignore[arg-type]
+
+    def get_valuation_indicator(
+        self,
+        record_date: date,
+        code: ValuationIndicatorCode,
+    ) -> ValuationIndicator | None:
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            SELECT * FROM valuation_indicators
+            WHERE record_date = ? AND indicator_code = ?
+            """,
+            (record_date.isoformat(), code.value),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return _row_to_valuation_indicator(row)
+
+    def list_valuation_indicators_for_date(
+        self,
+        record_date: date,
+    ) -> list[ValuationIndicator]:
+        """取某一天的全部估值指标（最多 4 条）。
+
+        publish 时用：检查今天 4 个指标是否齐全，不全就调 valuation update。
+        """
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            SELECT * FROM valuation_indicators
+            WHERE record_date = ?
+            ORDER BY indicator_code
+            """,
+            (record_date.isoformat(),),
+        )
+        return [_row_to_valuation_indicator(r) for r in cur.fetchall()]
+
+    def list_latest_valuation_indicators(self) -> list[ValuationIndicator]:
+        """取数据库里最新的（不同日期里 record_date 最大）那一批指标。
+
+        gap valuation show 用：展示"现在最新一天的数据"。
+        """
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            SELECT * FROM valuation_indicators
+            WHERE record_date = (
+                SELECT MAX(record_date) FROM valuation_indicators
+            )
+            ORDER BY indicator_code
+            """
+        )
+        return [_row_to_valuation_indicator(r) for r in cur.fetchall()]
+
 
 # ─── helpers ───
 
@@ -305,6 +406,15 @@ def _row_to_snap(row: sqlite3.Row) -> WeeklySnapshot:
         cumulative_return=Decimal(row["cumulative_return"]),
         holdings_json=row["holdings_json"],
         created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def _row_to_valuation_indicator(row: sqlite3.Row) -> ValuationIndicator:
+    return ValuationIndicator(
+        record_date=date.fromisoformat(row["record_date"]),
+        indicator_code=ValuationIndicatorCode(row["indicator_code"]),
+        value=Decimal(row["value"]),
+        source=row["source"],
     )
 
 

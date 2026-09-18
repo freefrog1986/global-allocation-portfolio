@@ -14,6 +14,8 @@ from global_allocation.portfolio.models import (
     Fund,
     Transaction,
     TransactionSide,
+    ValuationIndicator,
+    ValuationIndicatorCode,
     WeeklySnapshot,
 )
 
@@ -31,6 +33,8 @@ class TestSchema:
         assert "funds" in tables
         assert "transactions" in tables
         assert "weekly_snapshots" in tables
+        # spec 098：估值指标表
+        assert "valuation_indicators" in tables
 
     def test_idempotent_init(self, tmp_path) -> None:
         path = tmp_path / "test.db"
@@ -258,3 +262,152 @@ class TestSnapshots:
         assert db.get_latest_snapshot() is None
         assert db.get_latest_snapshot_before(date(2026, 9, 11)) is None
         assert db.get_first_snapshot_with_value() is None
+
+
+class TestValuationIndicators:
+    """spec 098：估值指标快照表。
+
+    关键设计点：
+    - UNIQUE (record_date, indicator_code) 保证同一天同一指标只有一条
+    - upsert 模式：value/source 可更新（拉新数据时覆盖旧值）
+    - Decimal 全程精度无损（text 存储）
+    """
+
+    def _ind(
+        self,
+        record_date: date = date(2026, 9, 19),
+        code: ValuationIndicatorCode = ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
+        value: Decimal = Decimal("0.052"),
+        source: str = "akshare:stock_zh_index_value_dbj_b",
+    ) -> ValuationIndicator:
+        return ValuationIndicator(
+            record_date=record_date,
+            indicator_code=code,
+            value=value,
+            source=source,
+        )
+
+    def test_upsert_and_get(self, db: PortfolioDB) -> None:
+        ind_id = db.upsert_valuation_indicator(self._ind())
+        assert ind_id > 0
+        loaded = db.get_valuation_indicator(
+            date(2026, 9, 19),
+            ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
+        )
+        assert loaded is not None
+        assert loaded.value == Decimal("0.052")
+        assert loaded.source == "akshare:stock_zh_index_value_dbj_b"
+        assert loaded.indicator_code == ValuationIndicatorCode.EQUITY_RISK_PREMIUM
+
+    def test_upsert_overwrites_same_day_same_code(
+        self, db: PortfolioDB
+    ) -> None:
+        """同一天同一指标的二次 upsert 应该覆盖 value/source（UNIQUE 约束）。"""
+        db.upsert_valuation_indicator(
+            self._ind(value=Decimal("0.05"), source="old-source")
+        )
+        db.upsert_valuation_indicator(
+            self._ind(value=Decimal("0.052"), source="new-source")
+        )
+        loaded = db.get_valuation_indicator(
+            date(2026, 9, 19),
+            ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
+        )
+        assert loaded is not None
+        assert loaded.value == Decimal("0.052")
+        assert loaded.source == "new-source"
+        # 只剩一条记录
+        cur = db._conn.cursor()
+        cur.execute(
+            "SELECT count(*) FROM valuation_indicators "
+            "WHERE record_date = ? AND indicator_code = ?",
+            (date(2026, 9, 19).isoformat(), "equity_risk_premium"),
+        )
+        assert cur.fetchone()[0] == 1
+
+    def test_different_codes_coexist(self, db: PortfolioDB) -> None:
+        """同一天 4 个不同指标 → 4 条独立记录（不互相覆盖）。"""
+        for code in ValuationIndicatorCode:
+            db.upsert_valuation_indicator(
+                self._ind(code=code, value=Decimal("0.05"))
+            )
+        day_indicators = db.list_valuation_indicators_for_date(date(2026, 9, 19))
+        assert len(day_indicators) == 4
+        assert {i.indicator_code for i in day_indicators} == set(ValuationIndicatorCode)
+
+    def test_different_days_coexist(self, db: PortfolioDB) -> None:
+        """不同日期的同一指标 → 2 条独立记录（历史保留）。"""
+        db.upsert_valuation_indicator(self._ind(record_date=date(2026, 9, 18)))
+        db.upsert_valuation_indicator(self._ind(record_date=date(2026, 9, 19)))
+        d18 = db.get_valuation_indicator(
+            date(2026, 9, 18),
+            ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
+        )
+        d19 = db.get_valuation_indicator(
+            date(2026, 9, 19),
+            ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
+        )
+        assert d18 is not None and d19 is not None
+        assert d18.record_date == date(2026, 9, 18)
+        assert d19.record_date == date(2026, 9, 19)
+
+    def test_get_missing_returns_none(self, db: PortfolioDB) -> None:
+        assert db.get_valuation_indicator(
+            date(2026, 9, 19),
+            ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
+        ) is None
+
+    def test_list_for_empty_date(self, db: PortfolioDB) -> None:
+        """DB 里没有任何数据，list 返回空 list（不报错）。"""
+        assert db.list_valuation_indicators_for_date(date(2026, 9, 19)) == []
+
+    def test_list_latest_returns_most_recent_day(self, db: PortfolioDB) -> None:
+        """最新一天的数据：3 条指标（部分指标缺失）。"""
+        db.upsert_valuation_indicator(
+            self._ind(
+                record_date=date(2026, 9, 18),
+                code=ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
+            )
+        )
+        db.upsert_valuation_indicator(
+            self._ind(
+                record_date=date(2026, 9, 19),
+                code=ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
+                value=Decimal("0.06"),
+            )
+        )
+        db.upsert_valuation_indicator(
+            self._ind(
+                record_date=date(2026, 9, 19),
+                code=ValuationIndicatorCode.PE_PERCENTILE,
+                value=Decimal("0.28"),
+            )
+        )
+        latest = db.list_latest_valuation_indicators()
+        # 最新一天是 2026-09-19，应该有 2 条（ERP + PE_PERCENTILE）
+        assert len(latest) == 2
+        assert {i.indicator_code for i in latest} == {
+            ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
+            ValuationIndicatorCode.PE_PERCENTILE,
+        }
+        # ERP 的最新值是 0.06（不是更早的 0.052）
+        erp = next(
+            i for i in latest
+            if i.indicator_code == ValuationIndicatorCode.EQUITY_RISK_PREMIUM
+        )
+        assert erp.value == Decimal("0.06")
+
+    def test_list_latest_empty_db(self, db: PortfolioDB) -> None:
+        """DB 完全空的时候，list_latest 返回 []。"""
+        assert db.list_latest_valuation_indicators() == []
+
+    def test_decimal_precision_preserved(self, db: PortfolioDB) -> None:
+        """Decimal 精度无损 — 高精度的小数应该完整保留（不转 float）。"""
+        precise = Decimal("0.05273849382716")
+        db.upsert_valuation_indicator(self._ind(value=precise))
+        loaded = db.get_valuation_indicator(
+            date(2026, 9, 19),
+            ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
+        )
+        assert loaded is not None
+        assert loaded.value == precise  # 不会变成 0.05273849382716001 之类的浮点近似

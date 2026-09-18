@@ -18,6 +18,8 @@ from global_allocation.portfolio.models import (
     Holding,
     Transaction,
     TransactionSide,
+    ValuationIndicator,
+    ValuationIndicatorCode,
     WeeklySnapshot,
 )
 
@@ -206,3 +208,96 @@ class TestTransactionSide:
     def test_values(self) -> None:
         assert TransactionSide.BUY.value == "buy"
         assert TransactionSide.SELL.value == "sell"
+
+
+class TestValuationIndicatorCode:
+    """spec 098：估值指标代码枚举。
+
+    关键设计：str-mixin（继承 str），JSON 序列化直接用 .value。
+    4 个指标对应 A 股估值的 4 个维度（股债利差 / PE 分位 / 巴菲特 / 股息率）。
+    """
+
+    def test_has_four_codes(self) -> None:
+        assert len(ValuationIndicatorCode) == 4
+
+    def test_specific_values(self) -> None:
+        """spec 098 写死的 4 个 code — DB UNIQUE 索引依赖这些字符串。"""
+        assert ValuationIndicatorCode.EQUITY_RISK_PREMIUM.value == "equity_risk_premium"
+        assert ValuationIndicatorCode.PE_PERCENTILE.value == "pe_percentile"
+        assert ValuationIndicatorCode.BUFFETT_INDICATOR.value == "buffett_indicator"
+        assert ValuationIndicatorCode.DIVIDEND_YIELD.value == "dividend_yield"
+
+    def test_is_str_mixin(self) -> None:
+        """继承 str，所以可以直接当字符串用（序列化 / 比较）。"""
+        code = ValuationIndicatorCode.PE_PERCENTILE
+        assert isinstance(code, str)
+        assert code == "pe_percentile"
+        assert code.value == "pe_percentile"
+
+    def test_lookup_by_value(self) -> None:
+        """DB 读出来的字符串能反向查回 enum（_row_to_valuation_indicator 用）。"""
+        assert ValuationIndicatorCode("equity_risk_premium") == ValuationIndicatorCode.EQUITY_RISK_PREMIUM
+
+
+class TestValuationIndicator:
+    """spec 098：单日单个估值指标快照。"""
+
+    def test_basic(self) -> None:
+        ind = ValuationIndicator(
+            record_date=date(2026, 9, 19),
+            indicator_code=ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
+            value=Decimal("0.052"),
+            source="akshare:stock_zh_index_value_dbj_b",
+        )
+        assert ind.record_date == date(2026, 9, 19)
+        assert ind.indicator_code == ValuationIndicatorCode.EQUITY_RISK_PREMIUM
+        assert ind.value == Decimal("0.052")
+        assert ind.source == "akshare:stock_zh_index_value_dbj_b"
+
+    def test_decimal_precision(self) -> None:
+        """Decimal 高精度（PE 分位可能是 0.287351...）不应被 float 截断。"""
+        ind = ValuationIndicator(
+            record_date=date(2026, 9, 19),
+            indicator_code=ValuationIndicatorCode.PE_PERCENTILE,
+            value=Decimal("0.2873519234"),
+            source="akshare:test",
+        )
+        assert ind.value == Decimal("0.2873519234")
+
+    def test_immutable(self) -> None:
+        from dataclasses import FrozenInstanceError
+
+        ind = ValuationIndicator(
+            record_date=date(2026, 9, 19),
+            indicator_code=ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
+            value=Decimal("0.05"),
+            source="x",
+        )
+        with pytest.raises((FrozenInstanceError, ValidationError)):
+            ind.value = Decimal("0.06")  # type: ignore[misc]
+
+    def test_required_fields(self) -> None:
+        """缺 record_date / code / value / source 都应 ValidationError。"""
+        with pytest.raises(ValidationError):
+            ValuationIndicator(  # type: ignore[call-arg]
+                indicator_code=ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
+                value=Decimal("0.05"),
+                source="x",
+            )
+        with pytest.raises(ValidationError):
+            ValuationIndicator(  # type: ignore[call-arg]
+                record_date=date(2026, 9, 19),
+                value=Decimal("0.05"),
+                source="x",
+            )
+
+    def test_extra_fields_rejected(self) -> None:
+        """extra='forbid'（跟其他模型一致） — 不接受未知字段。"""
+        with pytest.raises(ValidationError):
+            ValuationIndicator(
+                record_date=date(2026, 9, 19),
+                indicator_code=ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
+                value=Decimal("0.05"),
+                source="x",
+                unknown_field="bad",  # type: ignore[call-arg]
+            )

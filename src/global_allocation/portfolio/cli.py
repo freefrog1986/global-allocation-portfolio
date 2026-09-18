@@ -18,17 +18,24 @@ from rich.table import Table
 from global_allocation.models import AssetClass
 from global_allocation.portfolio.db import PortfolioDB
 from global_allocation.portfolio.journal import PortfolioJournal
-from global_allocation.portfolio.models import TransactionSide
+from global_allocation.portfolio.models import (
+    TransactionSide,
+    ValuationIndicator,
+    ValuationIndicatorCode,
+)
 from global_allocation.portfolio.valuation import (
     AkshareFundPriceSource,
     PriceSource,
 )
+from global_allocation.portfolio.valuation_source import AkshareValuationSource
 
 app = typer.Typer(help="实盘持仓账本：管理基金 / 交易 / 周快照 / 周报。")
 fund_app = typer.Typer(help="管理基金。", invoke_without_command=True)
 tx_app = typer.Typer(help="查看交易流水。")
+valuation_app = typer.Typer(help="管理大类资产估值（A 股 4 个指标）。")
 app.add_typer(fund_app, name="fund")
 app.add_typer(tx_app, name="tx")
+app.add_typer(valuation_app, name="valuation")
 
 console = Console()
 
@@ -284,6 +291,20 @@ def cmd_publish(
         except ValueError as e:
             console.print(f"[yellow]![/yellow] 跳过快照：{e}")
 
+    # spec 098 方案 A：自动拉估值（如缺数据）
+    today = _date.today()
+    if not _has_complete_valuation_for_date(today):
+        try:
+            n = _update_valuation_for_date(today)
+            if n == 4:
+                console.print("[green]✓[/green] 已拉新估值（4/4 指标）")
+            elif n > 0:
+                console.print(f"[yellow]![/yellow] 已拉新估值（{n}/4 指标，部分 akshare 接口失败）")
+            else:
+                console.print("[yellow]![/yellow] 估值拉取全失败，卡片 Section 3 将显示空")
+        except Exception as e:
+            console.print(f"[yellow]![/yellow] 估值拉取异常：{e}")
+
     from global_allocation.portfolio.publisher import publish_portfolio_report
 
     try:
@@ -401,6 +422,181 @@ def _record_cmd(side: TransactionSide) -> Any:
 
 app.command("buy")(_record_cmd(TransactionSide.BUY))
 app.command("sell")(_record_cmd(TransactionSide.SELL))
+
+
+# ─── valuation subcommand（spec 098）───
+
+
+def _update_valuation_for_date(target_date: date) -> int:
+    """拉 target_date 当天的 4 个估值指标并入库（spec 098 方案 A：自动拉）。
+
+    返回成功入库的指标数（0~4）。失败指标不抛异常，跳过。
+    spec 098 第 175 行：akshare 接口失败 → 跳过该指标，卡片显示"数据缺失"。
+    """
+    from global_allocation.portfolio.valuation_indicators import (
+        compute_buffett_indicator,
+        compute_equity_risk_premium,
+        compute_pe_percentile,
+    )
+
+    db = _default_db()
+    src = AkshareValuationSource()
+    saved = 0
+
+    # 1. 股债利差（需要 PE-TTM + 10Y 国债）
+    pe = src.get_pe_ttm(target_date)
+    y = src.get_10y_treasury_yield(target_date)
+    if pe is not None and y is not None:
+        try:
+            erp = compute_equity_risk_premium(pe, y)
+            db.upsert_valuation_indicator(
+                ValuationIndicator(
+                    record_date=target_date,
+                    indicator_code=ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
+                    value=erp,
+                    source="akshare:stock_zh_index_value_csindex+bond_china_yield",
+                )
+            )
+            saved += 1
+        except ValueError as e:
+            console.print(f"[yellow]![/yellow] 股债利差计算失败：{e}")
+
+    # 2. PE 分位（需要当前 PE + 历史序列）
+    history = src.get_pe_history(years=10)
+    if pe is not None and history:
+        try:
+            pct = compute_pe_percentile(pe, history)
+            db.upsert_valuation_indicator(
+                ValuationIndicator(
+                    record_date=target_date,
+                    indicator_code=ValuationIndicatorCode.PE_PERCENTILE,
+                    value=pct,
+                    source="akshare:stock_a_ttm_lyr",
+                )
+            )
+            saved += 1
+        except ValueError as e:
+            console.print(f"[yellow]![/yellow] PE 分位计算失败：{e}")
+
+    # 3. 巴菲特指标（需要 A 股总市值 + GDP）
+    cap = src.get_a_share_total_market_cap(target_date)
+    gdp = src.get_china_gdp(target_date)
+    if cap is not None and gdp is not None:
+        try:
+            bf = compute_buffett_indicator(cap, gdp)
+            db.upsert_valuation_indicator(
+                ValuationIndicator(
+                    record_date=target_date,
+                    indicator_code=ValuationIndicatorCode.BUFFETT_INDICATOR,
+                    value=bf,
+                    source="akshare:stock_zh_a_spot_em+macro_china_gdp",
+                )
+            )
+            saved += 1
+        except ValueError as e:
+            console.print(f"[yellow]![/yellow] 巴菲特指标计算失败：{e}")
+
+    # 4. 股息率（直接拿，不需要 compute）
+    dy = src.get_dividend_yield(target_date)
+    if dy is not None:
+        db.upsert_valuation_indicator(
+            ValuationIndicator(
+                record_date=target_date,
+                indicator_code=ValuationIndicatorCode.DIVIDEND_YIELD,
+                value=dy,
+                source="akshare:stock_zh_index_value_csindex",
+            )
+        )
+        saved += 1
+
+    return saved
+
+
+def _has_complete_valuation_for_date(target_date: date) -> bool:
+    """检查 target_date 当天的 4 个指标是否都齐全（spec 098 第 167 行）。"""
+    db = _default_db()
+    return len(db.list_valuation_indicators_for_date(target_date)) >= 4
+
+
+@valuation_app.command("update")
+def cmd_valuation_update(
+    on: str | None = typer.Option(
+        None, "--date", help="日期 YYYY-MM-DD（默认今天）"
+    ),
+) -> None:
+    """拉最新的 4 个估值指标并入库（手动刷新）。"""
+    from datetime import date as _date
+
+    target_date = _parse_date(on) if on else _date.today()
+    n = _update_valuation_for_date(target_date)
+    if n == 4:
+        console.print(f"[green]✓[/green] {target_date} 全部 4 个指标已入库")
+    elif n > 0:
+        console.print(
+            f"[yellow]![/yellow] {target_date} 只入库 {n}/4 个指标（部分 akshare 接口失败）"
+        )
+    else:
+        console.print(f"[red]✗[/red] {target_date} 全部指标拉取失败（akshare 可能不可用）")
+        raise typer.Exit(code=1)
+
+
+@valuation_app.command("show")
+def cmd_valuation_show() -> None:
+    """显示数据库里最新一天的估值指标 + 评估。"""
+    from global_allocation.portfolio.valuation_indicators import compute_verdict
+
+    db = _default_db()
+    inds = db.list_latest_valuation_indicators()
+    if not inds:
+        console.print("[yellow]暂无估值数据（先跑 gap valuation update）[/yellow]")
+        return
+
+    record_date = inds[0].record_date
+    console.print(f"[bold]估值日期：{record_date}[/bold]\n")
+
+    table = Table(show_header=True, header_style="bold blue")
+    table.add_column("指标", style="cyan")
+    table.add_column("当前", justify="right")
+    table.add_column("评估", justify="center")
+    table.add_column("阈值", justify="left")
+
+    # 按指标代码顺序展示（spec 098 卡片顺序）
+    by_code = {i.indicator_code: i for i in inds}
+    labels = {
+        ValuationIndicatorCode.EQUITY_RISK_PREMIUM: ("股债利差", "1/PE - 10Y国债", ">5% 低 / <2% 高"),
+        ValuationIndicatorCode.PE_PERCENTILE: ("PE 分位", "10年百分位", "<30% 低 / >70% 高"),
+        ValuationIndicatorCode.BUFFETT_INDICATOR: ("巴菲特指标", "市值/GDP", "<50% 低 / >80% 高"),
+        ValuationIndicatorCode.DIVIDEND_YIELD: ("股息率", "分红/市值", ">3% 低 / <1% 高"),
+    }
+    for code in ValuationIndicatorCode:
+        if code not in by_code:
+            # 数据缺失行
+            name, _, threshold = labels[code]
+            table.add_row(name, "数据缺失", "n/a", threshold)
+            continue
+        ind = by_code[code]
+        name, _, threshold = labels[code]
+        if code == ValuationIndicatorCode.EQUITY_RISK_PREMIUM:
+            current = f"{float(ind.value) * 100:+.2f}%"
+        elif code == ValuationIndicatorCode.PE_PERCENTILE:
+            current = f"{float(ind.value) * 100:.1f}%"
+        elif code == ValuationIndicatorCode.BUFFETT_INDICATOR:
+            current = f"{float(ind.value) * 100:.1f}%"
+        else:  # DIVIDEND_YIELD
+            current = f"{float(ind.value) * 100:.2f}%"
+        verdict = compute_verdict(code, ind.value)
+        verdict_color = {
+            "偏低估": "green",
+            "正常": "yellow",
+            "偏高估": "red",
+        }.get(verdict, "white")
+        table.add_row(
+            name,
+            current,
+            f"[{verdict_color}]{verdict}[/{verdict_color}]",
+            threshold,
+        )
+    console.print(table)
 
 
 # ─── tx subcommand ───
