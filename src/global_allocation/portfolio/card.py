@@ -147,12 +147,19 @@ def build_portfolio_card(
 ) -> dict[str, object]:
     """构造实盘账本的飞书交互卡片。
 
-    3 段元素：
-    1. summary div（标题 + 总市值 + 盈亏 + 周涨跌）
-    2. 各大类资产柱状图
-    3. 持仓明细表（按市值倒序）
+    3 段元素（spec 096 第十二轮）：
+    1. section header（note 元素）—"实盘持仓" — 跟未来其他 section 区分
+    2. summary div（标题 + 总市值 + 盈亏 + 周涨跌）
+    3. 各大类资产柱状图
+    4. 持仓明细表（按市值倒序）
+
+    第十二轮反馈（liubo 2026-09-18）：周报要分多个部分，第一部分是"实盘持仓"，
+    未来要加第二部分（如"大类资产配置策略"）。两个设计点：
+    1. header.title 默认改"实盘周报"（总标题，适配未来多 section）
+    2. body 开头加 note 元素做 section header（飞书原生浅灰背景块，视觉明显，
+       跟 footer 用的 note 是同一元素，视觉一致）
     """
-    actual_title = title or "实盘持仓"
+    actual_title = title or "实盘周报"
     holdings = journal.compute_holdings()
     if not holdings:
         raise ValueError("没有持仓，无法生成卡片")
@@ -166,6 +173,16 @@ def build_portfolio_card(
             },
         },
         "elements": [
+            # Section 1: 实盘持仓 — note 做 section header（浅灰背景块）
+            {
+                "tag": "note",
+                "elements": [
+                    {
+                        "tag": "plain_text",
+                        "content": "实盘持仓",
+                    }
+                ],
+            },
             {
                 "tag": "div",
                 "text": {

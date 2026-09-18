@@ -108,7 +108,8 @@ class TestBuildPortfolioCard:
     def test_default_title(self, journal: PortfolioJournal) -> None:
         _seed(journal)
         card = build_portfolio_card(journal)
-        assert card["header"]["title"]["content"] == "实盘持仓"
+        # 第十二轮反馈：header.title 默认改"实盘周报"（总标题，未来加多 section 不冲突）
+        assert card["header"]["title"]["content"] == "实盘周报"
 
 
 class TestBreakdownBarChart:
@@ -319,10 +320,29 @@ class TestRemovedSections:
 
 
 class TestOrdering:
-    """元素顺序：summary → bar chart → holdings table。"""
+    """元素顺序：section header (note) → summary div → bar chart → holdings table。
+
+    第十二轮反馈：周报要分多个部分，section 1 加 note header 在 body 开头。
+    """
 
     def test_order(self, journal: PortfolioJournal) -> None:
         _seed(journal)
         card = build_portfolio_card(journal)
-        tags = [e.get("tag") for e in card["elements"] if e.get("tag") in {"div", "chart", "table"}]
-        assert tags == ["div", "chart", "table"]
+        tags = [e.get("tag") for e in card["elements"] if e.get("tag") in {"note", "div", "chart", "table"}]
+        assert tags == ["note", "div", "chart", "table"]
+
+    def test_first_element_is_section_header_note(self, journal: PortfolioJournal) -> None:
+        """第一个元素是 note 标签（section header），内容是"实盘持仓"。
+
+        用 note 元素而不是 div+markdown，是因为 note 是飞书原生浅灰背景块，
+        视觉上跟下面正文明显区分；同一元素我已经在 footer 用过。
+        """
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        first = card["elements"][0]
+        assert first["tag"] == "note"
+        # note 内部是 plain_text 列表
+        assert any(
+            elem.get("tag") == "plain_text" and elem.get("content") == "实盘持仓"
+            for elem in first["elements"]
+        )
