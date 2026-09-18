@@ -19,6 +19,12 @@ from decimal import Decimal
 
 from global_allocation.portfolio.breakdown import compute_breakdown
 from global_allocation.portfolio.journal import PortfolioJournal
+from global_allocation.portfolio.strategy import (
+    DEFAULT_STRATEGY,
+    SUPER_CATEGORY_DISPLAY_NAME,
+    AllocationStrategy,
+    compute_super_category_breakdown,
+)
 
 
 def _format_pct(value: Decimal | None, decimals: int = 2) -> str:
@@ -64,6 +70,76 @@ def _build_summary(journal: PortfolioJournal, title: str) -> str:
         f"**上周涨跌**：{week_str}  \n"
         f"**累计涨跌**：{cumulative_str}"
     )
+
+
+def _build_strategy_section(
+    journal: PortfolioJournal,
+    strategy: AllocationStrategy = DEFAULT_STRATEGY,
+) -> list[dict[str, object]]:
+    """Section 2: 具体策略 — 5 个超类目标 + 当前实际 + 偏离。
+
+    spec 097 第十四轮（liubo 2026-09-18）：
+    - 策略数字存 strategy.DEFAULT_STRATEGY（独立模块，后续可改）
+    - Layer 2 表格：超类 / 目标 / 当前 / 偏离（5 行）
+    - Layer 1 摘要写在 div 文字里（14 子类上限不展示详细 table，避免卡片过长）
+
+    偏离 = 当前占比 - 目标占比（百分点）。正数 = 超配，负数 = 低配。
+    """
+    breakdown = compute_breakdown(journal)
+    current_by_super = compute_super_category_breakdown(breakdown)
+
+    # div 文字：5 个超类目标 + Layer 1 摘要
+    lines = ["**大类配置目标**"]
+    for t in strategy.super_category_targets:
+        target_pct = float(t.target) * 100
+        lines.append(
+            f"**{SUPER_CATEGORY_DISPLAY_NAME[t.category]}**：{target_pct:.0f}%"
+        )
+    lines.append("")
+    lines.append(
+        "**子类上限**：14 个 SwensenClass 子类各设上限，"
+        "防止单一资产风险过度集中"
+    )
+    summary_text = "\n".join(lines)
+
+    # table: Layer 2 详情（5 行 × 4 列）
+    rows: list[dict[str, object]] = []
+    for t in strategy.super_category_targets:
+        cat = t.category
+        target_pct = float(t.target) * 100
+        current_pct = float(current_by_super[cat]) * 100
+        delta_pct = current_pct - target_pct
+        sign = "+" if delta_pct >= 0 else ""
+        # 偏离数字精度 1 位小数（跟柱状图 weight 一致）
+        delta_str = f"{sign}{delta_pct:.1f}pp"  # pp = percentage points
+        rows.append(
+            {
+                "category": SUPER_CATEGORY_DISPLAY_NAME[cat],
+                "target": f"{target_pct:.0f}%",
+                "current": f"{current_pct:.1f}%",
+                "delta": delta_str,
+            }
+        )
+
+    table: dict[str, object] = {
+        "columns": [
+            {"name": "category", "display_name": "超类", "data_type": "text", "width": "auto"},
+            {"name": "target", "display_name": "目标", "data_type": "text", "width": "auto"},
+            {"name": "current", "display_name": "当前", "data_type": "text", "width": "auto"},
+            {"name": "delta", "display_name": "偏离", "data_type": "text", "width": "auto"},
+        ],
+        "rows": rows,
+    }
+
+    return [
+        {"tag": "note", "elements": [{"tag": "plain_text", "content": "具体策略"}]},
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": summary_text},
+        },
+        {"tag": "hr"},
+        {"tag": "table", **table},
+    ]
 
 
 def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
@@ -149,19 +225,23 @@ def build_portfolio_card(
 ) -> dict[str, object]:
     """构造实盘账本的飞书交互卡片。
 
-    3 段元素（spec 096 第十三轮）：
-    1. section header（note 元素）—"实盘持仓" — 跟未来其他 section 区分
-    2. summary div（生成时间 / 总市值 / 总成本 / 浮动盈亏 / 周涨跌 / 累计涨跌）
-    3. 各大类资产柱状图
-    4. 持仓明细表（按市值倒序）
+    卡片结构（spec 096 + spec 097 第十四轮）：
+    - header.title: "实盘周报"
+    - Section 1（实盘持仓）：
+      - note header "实盘持仓"
+      - summary div（生成时间 / 总市值 / 总成本 / 浮动盈亏 / 周涨跌 / 累计涨跌）
+      - hr 分隔
+      - 大类资产柱状图（vertical bar，14 个子类）
+      - hr 分隔
+      - 持仓聚合表（14 行 × 3 列：分类 / 市值 / 占比）
+    - Section 2（具体策略）：
+      - hr 分隔（跨 section）
+      - note header "具体策略"
+      - 策略文字 div（5 超类目标 + Layer 1 摘要）
+      - hr 分隔
+      - 策略对比表（5 行 × 4 列：超类 / 目标 / 当前 / 偏离）
 
-    第十三轮反馈（liubo 2026-09-18）：
-    1. 卡片名确认叫"实盘周报"
-    2. summary 第一行去掉 "**{title}**"（跟 header 重复）
-    3. 现在只写第一部分（实盘持仓）
-    4. 未来周报每个 section 按 SwensenClass 大类资产类别划分
-       （A 股股票 → 港股 → 美股 → ... → 现金，14 个大类，每个 section 一个 note header）
-       —— 留口子给未来追加，元素列表是列表字面量可以直接 append
+    未来扩展（spec 096 第十三轮预留）：Section 3+ 按 SwensenClass 划分（每个大类资产一个 section）。
     """
     actual_title = title or "实盘周报"
     holdings = journal.compute_holdings()
@@ -204,6 +284,9 @@ def build_portfolio_card(
                 "tag": "table",
                 **_build_holdings_table(journal),
             },
+            # Section 2: 具体策略（spec 097 第十四轮）
+            {"tag": "hr"},
+            *_build_strategy_section(journal),
         ],
         "footer": {
             "tag": "note",
