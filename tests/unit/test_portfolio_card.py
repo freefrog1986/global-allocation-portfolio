@@ -74,13 +74,13 @@ def _seed(journal: PortfolioJournal) -> None:
 
 class TestBuildPortfolioCard:
     def test_basic_structure(self, journal: PortfolioJournal) -> None:
-        """卡片 = header + 3 个 section（实盘持仓 + 具体策略 + 大类资产明细）。
+        """卡片 = header + 3 个 section（实盘持仓 + 大类资产策略 + 大类资产明细）。
 
         spec 097 第十四轮 + 第十七轮反馈：周报分多 section。
         - Section 1（实盘持仓）：1 note + 1 div + 1 chart + 1 table
-        - Section 2（具体策略）：1 note + 1 div + 1 table
-        - Section 3（大类资产明细）：1 note + 1 table（无 div — 数据全在 table 里）
-        合计：1 chart + 3 table + 2 div + 3 note + 6 hr = 15 个元素 + footer
+        - Section 2（大类资产策略）：1 note + 1 table（无 div — 第十七轮去掉文字摘要）
+        - Section 3（大类资产明细）：1 note + 1 table（无 div）
+        合计：1 chart + 3 table + 1 div + 3 note + 6 hr = 14 个元素 + footer
         """
         _seed(journal)
         card = build_portfolio_card(journal, title="我的实盘")
@@ -88,7 +88,7 @@ class TestBuildPortfolioCard:
         assert card["header"]["template"] == "blue"
         assert "elements" in card
         # Section 1: 1 chart + 1 table + 1 div + 1 note
-        # Section 2: 1 table + 1 div + 1 note
+        # Section 2: 1 table + 1 note（无 div，第十七轮去掉文字）
         # Section 3: 1 table + 1 note（无 div）
         charts = [e for e in card["elements"] if e.get("tag") == "chart"]
         tables = [e for e in card["elements"] if e.get("tag") == "table"]
@@ -96,7 +96,7 @@ class TestBuildPortfolioCard:
         notes = [e for e in card["elements"] if e.get("tag") == "note"]
         assert len(charts) == 1
         assert len(tables) == 3
-        assert len(divs) == 2
+        assert len(divs) == 1
         assert len(notes) == 3
 
     def test_summary_includes_total_and_return(self, journal: PortfolioJournal) -> None:
@@ -362,12 +362,12 @@ class TestRemovedSections:
 
 
 class TestStrategySection:
-    """spec 097 第十六轮：Section 2 具体策略（内部权重模型 + 现金 [15%, 50%]）。
+    """spec 097 第十七轮：Section 2 大类资产策略（去文字摘要，只留 1 张表）。
 
-    - Layer 2a 文字：4 投资类内部权重（股票 70% / REITs 15% / 债券 10% / 商品 5%，
-      按收益率排序，合计 = 投资部分 100%）
-    - Layer 2b 文字：现金子弹区间 [15%, 50%]（区间策略）
-    - Layer 1 文字：14 子类上限摘要
+    第十七轮反馈（liubo 2026-09-19）：
+    - 去掉文字摘要 div — 表里已经覆盖了所有必要信息（现金区间 + 4 投资类内部权重）
+    - 标题从"具体策略"改成"大类资产策略"（更准确）
+
     - 表格：5 行 × 4 列
       - 投资类 4 行：target = 内部权重 × (1 − 当前现金占比)（动态）
       - 现金 1 行：target = "[15%, 50%]"，delta = "区间内/低于下限/高于上限"
@@ -384,56 +384,44 @@ class TestStrategySection:
                 return t
         raise AssertionError("Section 2 策略表未找到（4 列 category/target/current/delta）")
 
-    def _get_strategy_text(self, journal: PortfolioJournal) -> str:
-        """Section 2 策略 div 文字（现金区间 + 4 投资类内部权重 + 子类上限摘要）。"""
+    def test_no_strategy_text_div(self, journal: PortfolioJournal) -> None:
+        """第十七轮：去掉 Section 2 文字摘要 div（liubo 反馈 — 表里已覆盖所有信息）。
+
+        只剩 1 个 div（Section 1 summary），不应该有 Section 2 的策略文字 div。
+        """
         _seed(journal)
         card = build_portfolio_card(journal)
-        # Section 2 div 是第二个 div（第一个是 Section 1 summary）
         divs = [e for e in card["elements"] if e.get("tag") == "div"]
-        assert len(divs) >= 2
-        return divs[1]["text"]["content"]  # type: ignore[arg-type, return-value]
+        # 只有 Section 1 summary 一个 div
+        assert len(divs) == 1
 
-    def test_strategy_text_lists_4_investment_weights(self, journal: PortfolioJournal) -> None:
-        """策略文字列出 4 个投资类内部权重（按收益率排序，第十六轮）。
+    def test_strategy_section_header_renamed(self, journal: PortfolioJournal) -> None:
+        """第十七轮：Section 2 标题从"具体策略"改成"大类资产策略"。
 
-        内部权重（不是绝对目标）：股票 70% / REITs 15% / 债券 10% / 商品 5%。
-        跟第十五轮的"绝对目标"不同：内部权重和 = 100% 投资部分，实际目标 = 权重 × (1 - cash)。
+        liubo 反馈：策略本身就是关于大类资产的，叫"具体策略"语义不准。
         """
-        text = self._get_strategy_text(journal)
-        assert "**股票**：70%" in text
-        assert "**REITs**：15%" in text
-        assert "**债券**：10%" in text
-        assert "**商品**：5%" in text
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        notes = [e for e in card["elements"] if e.get("tag") == "note"]
+        # 找到 Section 2 的 note（不是"实盘持仓"，不是"大类资产明细"）
+        section_2_note = None
+        for n in notes:
+            for elem in n.get("elements", []):
+                if elem.get("content") == "大类资产策略":
+                    section_2_note = n
+                    break
+            if section_2_note is not None:
+                break
+        assert section_2_note is not None, "Section 2 标题必须是「大类资产策略」"
 
-    def test_strategy_text_does_not_list_cash_as_percent(self, journal: PortfolioJournal) -> None:
-        """第十六轮不变：现金不再以"**现金**：X%" 形式列出（走区间策略）。"""
-        text = self._get_strategy_text(journal)
-        # 不应该有 "**现金**：3%"（旧格式）
-        assert "**现金**：3%" not in text
-
-    def test_strategy_text_lists_cash_range(self, journal: PortfolioJournal) -> None:
-        """策略文字列出现金子弹区间（第十六轮：下限放宽到 15%）。"""
-        text = self._get_strategy_text(journal)
-        # 默认区间 [15%, 50%]（第十六轮从 [20%, 50%] 放宽）
-        assert "**现金子弹**：[15%, 50%]" in text
-        # 区间策略说明
-        assert "区间策略" in text
-
-    def test_strategy_text_mentions_internal_weights_label(self, journal: PortfolioJournal) -> None:
-        """策略文字明确说"内部权重"（让用户区分于绝对目标）。"""
-        text = self._get_strategy_text(journal)
-        assert "内部权重" in text
-        # 强调按收益率排序（用户明确反馈）
-        assert "按收益率排序" in text
-
-    def test_strategy_text_mentions_subclass_caps(self, journal: PortfolioJournal) -> None:
-        """策略文字提到子类上限（Layer 1 摘要）。
-
-        spec 097 第十七轮：11 个子类（从 14 精简）。
-        """
-        text = self._get_strategy_text(journal)
-        assert "子类上限" in text
-        assert "11" in text  # 11 个子类
+    def test_no_legacy_specific_strategy_header(self, journal: PortfolioJournal) -> None:
+        """旧标题"具体策略"必须不存在（liubo 反馈改名）。"""
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        for e in card["elements"]:
+            if e.get("tag") == "note":
+                for elem in e.get("elements", []):
+                    assert elem.get("content") != "具体策略"
 
     def test_strategy_table_has_5_rows(self, journal: PortfolioJournal) -> None:
         """策略表 5 行（4 投资类 + 1 现金）。"""
@@ -573,7 +561,7 @@ class TestOrdering:
     """元素顺序（spec 097 第十七轮 — 3 个 section）。
 
     Section 1（实盘持仓）：note + div + chart + table
-    Section 2（具体策略）：note + div + table
+    Section 2（大类资产策略）：note + table（去文字摘要 — 第十七轮）
     Section 3（大类资产明细）：note + table（无 div，数据全在 table 里）
     """
 
@@ -590,9 +578,8 @@ class TestOrdering:
             "div",   # Section 1 summary
             "chart", # Section 1 柱状图
             "table", # Section 1 持仓表
-            "note",  # Section 2 header "具体策略"
-            "div",   # Section 2 策略文字
-            "table", # Section 2 策略对比表
+            "note",  # Section 2 header "大类资产策略"
+            "table", # Section 2 策略对比表（第十七轮去掉文字 div）
             "note",  # Section 3 header "大类资产明细"
             "table", # Section 3 子类对比表（无 div）
         ]
@@ -614,18 +601,19 @@ class TestOrdering:
         )
 
     def test_section_2_note_header_after_hr(self, journal: PortfolioJournal) -> None:
-        """Section 2 开头：hr 分隔 + note "具体策略"。
+        """Section 2 开头：hr 分隔 + note "大类资产策略"。
 
         跟 Section 1 用 hr 隔开，视觉上明确区分。
+        第十七轮：标题从"具体策略"改成"大类资产策略"。
         """
         _seed(journal)
         card = build_portfolio_card(journal)
         elements = card["elements"]
-        # 找到 "具体策略" note 的索引
+        # 找到 "大类资产策略" note 的索引
         section_2_idx = None
         for idx, e in enumerate(elements):
             if e.get("tag") == "note" and any(
-                elem.get("content") == "具体策略"
+                elem.get("content") == "大类资产策略"
                 for elem in e.get("elements", [])
             ):
                 section_2_idx = idx

@@ -79,13 +79,15 @@ def _build_strategy_section(
     journal: PortfolioJournal,
     strategy: AllocationStrategy = DEFAULT_STRATEGY,
 ) -> list[dict[str, object]]:
-    """Section 2: 具体策略 — 4 投资类内部权重 + 现金区间 + 当前实际 + 偏离。
+    """Section 2: 大类资产策略 — 4 投资类内部权重 + 现金区间 + 当前实际 + 偏离。
 
-    spec 097 第十六轮 + 第十七轮（liubo 2026-09-18）：
-    - 策略数字存 strategy.DEFAULT_STRATEGY（独立模块，后续可改）
-    - Layer 2a（投资类内部权重）：4 个超类按收益率排序的相对权重（合计 100% 投资部分）
-    - Layer 2b（现金区间）：子弹区间 [15%, 50%]，不设固定目标
-    - Layer 1 摘要写在 div 文字里（11 子类上限不展示详细 table，避免卡片过长）
+    spec 097 第十七轮（liubo 2026-09-19）：去掉了文字摘要 div，只留一张表。
+
+    liubo 反馈：
+    - "具体策略" 标题不准确 — 应该叫 "大类资产策略"（策略本身就是关于大类资产的）
+    - 文字摘要冗余 — 表里已经覆盖了所有必要信息
+    - 现金区间已经在表里（最后一行），4 投资类内部权重也在（前 4 行 target 列）
+    - 子类上限不进表（是"硬约束"语义，混在 target 里会让用户混淆"目标"和"上限"）
 
     表格 5 行 × 4 列：
     - 投资类 4 行：target = internal_weight × (1 − 当前现金占比) — 动态计算
@@ -101,31 +103,6 @@ def _build_strategy_section(
     current_by_super = compute_super_category_breakdown(breakdown)
     cash_range = strategy.cash_range
     current_cash = current_by_super[SuperCategory.CASH]
-
-    # div 文字：现金区间 + 投资类内部权重 + Layer 1 摘要
-    lines = ["**大类配置策略**"]
-    lines.append("")
-    lines.append(
-        f"**现金子弹**：{cash_range.display_range}"
-        "（区间策略 — 留弹性，等抄底机会）"
-    )
-    lines.append("")
-    lines.append("**投资类内部权重**（按收益率排序）")
-    for w in strategy.investment_weights:
-        weight_pct = float(w.weight) * 100
-        lines.append(
-            f"**{SUPER_CATEGORY_DISPLAY_NAME[w.category]}**：{weight_pct:.0f}%"
-        )
-    lines.append("")
-    lines.append(
-        "**子类上限**：11 个 SwensenClass 子类各设上限，"
-        "防止单一资产风险过度集中"
-    )
-    lines.append("")
-    lines.append(
-        "**子类内部权重**（国内为主、国外为辅；详见下方「大类资产明细」）"
-    )
-    summary_text = "\n".join(lines)
 
     # table: 5 行（4 投资类 + 1 现金）× 4 列
     rows: list[dict[str, object]] = []
@@ -169,11 +146,7 @@ def _build_strategy_section(
     }
 
     return [
-        {"tag": "note", "elements": [{"tag": "plain_text", "content": "具体策略"}]},
-        {
-            "tag": "div",
-            "text": {"tag": "lark_md", "content": summary_text},
-        },
+        {"tag": "note", "elements": [{"tag": "plain_text", "content": "大类资产策略"}]},
         {"tag": "hr"},
         {"tag": "table", **table},
     ]
@@ -356,14 +329,16 @@ def build_portfolio_card(
       - 大类资产柱状图（vertical bar，11 个子类）
       - hr 分隔
       - 持仓聚合表（11 行 × 3 列：分类 / 市值 / 占比）
-    - Section 2（具体策略 — 第十六轮 + 第十七轮：内部权重模型 + 现金 [15%, 50%]）：
+    - Section 2（大类资产策略 — 第十七轮：去文字摘要，只留 1 张表）：
       - hr 分隔（跨 section）
-      - note header "具体策略"
-      - 策略文字 div（现金区间 + 4 投资类内部权重 + Layer 1 摘要 + 子类内部权重索引）
+      - note header "大类资产策略"
       - hr 分隔
       - 策略对比表（5 行 × 4 列：超类 / 目标 / 当前 / 偏离）
         - 投资类 4 行：target = 内部权重 × (1 − 当前现金占比)（动态）
         - 现金 1 行：target = "[15%, 50%]"，delta = "区间内/低于下限/高于上限"
+      - 第十七轮改动：之前这里有 div 文字摘要（现金区间 + 4 投资类内部权重 +
+        Layer 1 摘要 + 子类内部权重索引），liubo 反馈文字摘要冗余（表里已经覆盖了
+        所有信息），删掉
     - Section 3（大类资产明细 — 第十七轮新增：Layer 3 子类内部权重落地）：
       - hr 分隔（跨 section）
       - note header "大类资产明细"
