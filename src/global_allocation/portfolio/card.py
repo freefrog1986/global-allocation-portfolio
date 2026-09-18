@@ -94,11 +94,16 @@ def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
         "xField": "class",
         "yField": "weight",
         "legends": {"visible": False},
-        # 第八轮反馈：label/axes 的 formatMethod 字段都是 JS 函数表达式，
-        # 飞书 VChart 卡片组件不支持 JS（"图表组件暂不支持 JavaScript 语法"），
-        # 传进去直接被忽略/抛错 → 整张图加载失败。
-        # 标题已经写了"占比（%）"明示单位，柱子顶上 VChart 默认显示 yField 数值。
-        # 后续要加 % 后缀得用 VChart formatter 模板字符串（不是函数）或者强制 Y 轴 ticks。
+        # 第九轮反馈：用 VChart formatter 模板字符串（不是 JS 函数）给柱子顶上加 %。
+        # 飞书 VChart 卡片组件不支持 JS 函数（"图表组件暂不支持 JavaScript 语法"），
+        # 但 formatter 是字符串模板，VChart 客户端自己有 JS 环境能处理 {value} 替换。
+        # 基础 {value}% 替换在 VChart 1.2+ 就有。飞书 7.16-7.26 用 VChart 1.10.1，
+        # 7.27+ 用 1.12.3，应该都支持基础 formatter。
+        "label": {
+            "visible": True,
+            "position": "top",
+            "formatter": "{value}%",
+        },
     }
 
 
