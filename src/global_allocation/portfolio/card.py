@@ -10,6 +10,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
+from global_allocation.portfolio.breakdown import compute_breakdown
 from global_allocation.portfolio.journal import PortfolioJournal
 
 _MAX_CHART_POINTS = 1000
@@ -119,6 +120,32 @@ def _build_history_line(journal: PortfolioJournal) -> dict[str, object]:
     }
 
 
+def _build_breakdown_table(journal: PortfolioJournal) -> dict[str, object]:
+    """各大类资产占比（Swensen 框架：14 子类）。空类不显示。"""
+    breakdown = compute_breakdown(journal)
+    rows: list[list[str]] = []
+    for b in breakdown:
+        if b["count"] == 0:
+            continue  # 跳过 0 基金的空类
+        rows.append(
+            [
+                b["display_name"],
+                str(b["count"]),
+                f"{float(b['value']):,.2f}",
+                f"{float(b['weight']) * 100:.2f}%",
+            ]
+        )
+    return {
+        "columns": [
+            {"name": "class", "display_name": "大类资产", "data_type": "text", "width": "auto"},
+            {"name": "count", "display_name": "基金数", "data_type": "number", "width": "auto"},
+            {"name": "value", "display_name": "市值(¥)", "data_type": "number", "width": "auto"},
+            {"name": "weight", "display_name": "占比", "data_type": "text", "width": "auto"},
+        ],
+        "rows": rows,
+    }
+
+
 def _build_recent_transactions(journal: PortfolioJournal) -> dict[str, object]:
     """最近 10 笔交易。"""
     txs = journal.list_transactions()[:10]
@@ -173,6 +200,11 @@ def build_portfolio_card(
                     "tag": "lark_md",
                     "content": _build_summary(journal, actual_title),
                 },
+            },
+            {"tag": "hr"},
+            {
+                "tag": "table",
+                **_build_breakdown_table(journal),
             },
             {"tag": "hr"},
             {

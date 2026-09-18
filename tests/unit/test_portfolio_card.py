@@ -128,6 +128,51 @@ class TestBuildPortfolioCard:
         tables = [e for e in card["elements"] if e.get("tag") == "table"]
         assert len(tables) >= 1
 
+    def test_breakdown_table_present(self, journal: PortfolioJournal) -> None:
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        tables = [e for e in card["elements"] if e.get("tag") == "table"]
+        # breakdown table + recent_transactions table
+        assert len(tables) >= 2
+        breakdown = tables[0]
+        assert "columns" in breakdown
+        assert "rows" in breakdown
+        col_names = [c["name"] for c in breakdown["columns"]]
+        assert col_names == ["class", "count", "value", "weight"]
+
+    def test_breakdown_table_position_after_summary(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """持仓现状表必须是 summary div 之后的第一个 table。"""
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        elements = card["elements"]
+        # 第一个元素是 summary div
+        assert elements[0]["tag"] == "div"
+        # 下一个非 hr 元素应该是 breakdown table
+        idx = 1
+        while elements[idx]["tag"] == "hr":
+            idx += 1
+        assert elements[idx]["tag"] == "table"
+        # 它的列必须是 持仓现状 表
+        col_names = [c["name"] for c in elements[idx]["columns"]]
+        assert col_names[0] == "class"
+
+    def test_breakdown_table_skips_empty_classes(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """空类不显示。"""
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        tables = [e for e in card["elements"] if e.get("tag") == "table"]
+        breakdown = tables[0]
+        rows = breakdown["rows"]
+        # 测试只塞了 2 个基金（MIXED + EQUITY），没 SUBCLASS mapping 的会被静默忽略
+        # 所以空类不出现 = 表格里都是 count > 0 的
+        for row in rows:
+            count = int(row[1])
+            assert count > 0
+
     def test_no_holdings_raises(self, journal: PortfolioJournal) -> None:
         # 没有基金和交易
         with pytest.raises(ValueError, match="持仓"):
