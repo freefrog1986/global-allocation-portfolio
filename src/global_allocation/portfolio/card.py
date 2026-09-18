@@ -2,10 +2,13 @@
 
 参照 specs/090-portfolio-journal.md + specs/096-portfolio-card-redesign.md。
 
-设计原则（spec 096）：
-- 只回答用户三个问题：现在持有什么 / 大类怎么分布 / 具体买了哪几只
-- 3 段元素：summary div + 大类资产柱状图 + 持仓明细表
-- 不再包含 pie / line chart / 交易流水表
+设计原则（spec 096 第二轮）：
+- 只回答用户三个问题：现在整体怎么样 / 大类资产怎么分布 / 每个大类具体占多少
+- 3 段元素：summary div + 大类资产柱状图 + 按大类聚合的持仓表
+- 柱状图 + 表都按 Swensen 框架顺序排（不是市值倒序）
+- 表不再下钻到单只基金，只到"大类 / 市值 / 占比"
+- 14 个子类全部展示（含 count=0 的——这样能看出框架里哪些没覆盖到）
+- 不再包含 pie / line chart / 单只基金明细 / 交易流水表
 """
 
 from __future__ import annotations
@@ -14,9 +17,8 @@ import json
 from datetime import datetime
 from decimal import Decimal
 
-from global_allocation.portfolio.breakdown import DISPLAY_NAME, compute_breakdown
+from global_allocation.portfolio.breakdown import compute_breakdown
 from global_allocation.portfolio.journal import PortfolioJournal
-from global_allocation.portfolio.models import Holding
 
 
 def _format_pct(value: Decimal | None, decimals: int = 2) -> str:
@@ -65,27 +67,24 @@ def _build_summary(journal: PortfolioJournal, title: str) -> str:
 def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
     """各大类资产市值柱状图（vertical bar，X 轴 = 类名，Y 轴 = 金额）。
 
-    飞书 VChart 柱状图用 simple 格式：type="bar" + data.values + xField/yField。
-    （column 是 VChart 内部名，飞书卡片对外只接受 "bar"；不加 direction 默认就是垂直柱状图）
-    空类（count=0）不显示。
+    按 SwensenClass 枚举自然顺序展示全部 14 个子类（含 count=0 的——这样能直观看到
+    哪些子类没覆盖到，是配置漏洞）。空子类 value=0 在柱状图上不画柱子、保留 X 轴标签。
+
+    飞书 VChart 柱状图 = simple 格式：type="bar" + data.values + xField/yField
+    （column 是 VChart 内部名，飞书对外只认 "bar"；不加 direction 默认就是垂直柱状图）
     """
-    breakdown = compute_breakdown(journal)
-    bars: list[dict[str, object]] = []
-    for b in breakdown:
-        if b["count"] == 0:
-            continue
-        bars.append(
-            {
-                "class": b["display_name"],
-                "value": float(b["value"]),
-            }
-        )
-    # 按 value 倒序
-    bars.sort(key=lambda x: float(x["value"]), reverse=True)  # type: ignore[arg-type]
+    breakdown = compute_breakdown(journal)  # 已经是 SwensenClass 枚举顺序
+    bars: list[dict[str, object]] = [
+        {
+            "class": b["display_name"],
+            "value": float(b["value"]),
+        }
+        for b in breakdown
+    ]
 
     return {
         "type": "bar",
-        "title": {"text": "各大类资产市值（按 Swensen 框架）"},
+        "title": {"text": "各大类资产市值（按 Swensen 框架顺序）"},
         "data": {"values": bars},
         "xField": "class",
         "yField": "value",
@@ -94,47 +93,27 @@ def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
 
 
 def _build_holdings_table(journal: PortfolioJournal) -> dict[str, object]:
-    """持仓明细表：单只基金 + 分类 + 市值 + 占比。
+    """按 Swensen 大类聚合的持仓表：分类 + 市值 + 占比。
 
-    按 market_value 倒序；market_value is None 的跳过。
-    Feishu 表格 row 必须是 dict（按列名取）。
+    spec 096 第二轮反馈：用户不要"细致到具体基金"，表只回答"我每个大类持了多少"。
+    按 SwensenClass 枚举顺序展示全部 14 个子类（含 count=0 的——空子类显示 0 元 / 0.00%，
+    这样能直观看到 Swensen 框架里哪些子类没覆盖到）。
+
+    Feishu 表格 row 必须是 dict（按列名取）；所有列 data_type=text（value/weight 是预格式化的字符串）。
     """
-    holdings = journal.compute_holdings()
-    total_value = sum(
-        (h.market_value for h in holdings if h.market_value is not None),
-        Decimal("0"),
-    )
+    breakdown = compute_breakdown(journal)  # 已经是 SwensenClass 枚举顺序
 
-    # 按 market_value 倒序（先排除 None）
-    priced_pairs: list[tuple[Holding, Decimal]] = []
-    for h in holdings:
-        if h.market_value is not None:
-            priced_pairs.append((h, h.market_value))
-    priced_pairs.sort(key=lambda p: p[1], reverse=True)
-
-    from global_allocation.portfolio.breakdown import get_subclass
-
-    rows: list[dict[str, object]] = []
-    for h, market_value in priced_pairs:
-        sub = get_subclass(h.fund.code)
-        class_name = DISPLAY_NAME[sub] if sub is not None else ""
-        weight = (
-            (market_value / total_value) if total_value > 0 else Decimal("0")
-        )
-        rows.append(
-            {
-                "code": h.fund.code,
-                "name": h.fund.name,
-                "class": class_name,
-                "value": f"{float(market_value):,.2f}",
-                "weight": f"{float(weight) * 100:.2f}%",
-            }
-        )
+    rows: list[dict[str, object]] = [
+        {
+            "class": b["display_name"],
+            "value": f"{float(b['value']):,.2f}",
+            "weight": f"{float(b['weight']) * 100:.2f}%",
+        }
+        for b in breakdown
+    ]
 
     return {
         "columns": [
-            {"name": "code", "display_name": "代码", "data_type": "text", "width": "auto"},
-            {"name": "name", "display_name": "基金", "data_type": "text", "width": "auto"},
             {"name": "class", "display_name": "分类", "data_type": "text", "width": "auto"},
             {"name": "value", "display_name": "市值(¥)", "data_type": "text", "width": "auto"},
             {"name": "weight", "display_name": "占比", "data_type": "text", "width": "auto"},

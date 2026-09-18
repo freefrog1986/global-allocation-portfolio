@@ -112,7 +112,7 @@ class TestBuildPortfolioCard:
 
 
 class TestBreakdownBarChart:
-    """柱状图：各大类资产市值（vertical column）。"""
+    """柱状图：各大类资产市值（vertical bar，按 SwensenClass 枚举顺序，全部 14 类）。"""
 
     def _get_bar(self, journal: PortfolioJournal) -> dict[str, object]:
         _seed(journal)
@@ -127,17 +127,11 @@ class TestBreakdownBarChart:
         """飞书 VChart 柱状图 = type='bar' + data.values + xField/yField。
 
         之前误用 'column' (VChart 内部名) + rich 格式（x_axis/series）导致飞书返回 230099。
-        spec 080 也没给 column 例子——直到查官方文档才知道 simple 格式才是正确格式。
         """
         spec = self._get_bar(journal)
         assert spec["type"] == "bar"
         assert "data" in spec
         assert "values" in spec["data"]
-        assert "xField" in spec
-        assert "yField" in spec
-
-    def test_x_field_is_class_y_field_is_value(self, journal: PortfolioJournal) -> None:
-        spec = self._get_bar(journal)
         assert spec["xField"] == "class"
         assert spec["yField"] == "value"
 
@@ -147,18 +141,30 @@ class TestBreakdownBarChart:
             assert "class" in item
             assert "value" in item
 
-    def test_skips_empty_classes(self, journal: PortfolioJournal) -> None:
-        """只有 count > 0 的子类才出现在柱状图里。"""
+    def test_includes_all_swensen_classes_in_order(self, journal: PortfolioJournal) -> None:
+        """柱状图按 SwensenClass 枚举顺序展示全部 14 个子类（不按市值倒序排）。"""
+        from global_allocation.portfolio.breakdown import DISPLAY_NAME, SwensenClass
+
         spec = self._get_bar(journal)
-        values = spec["data"]["values"]
-        # 测试只塞了 2 个基金（MIXED + EQUITY），没 SUBCLASS mapping 会被忽略
-        # 所以 values 是空 list（OK）
-        for v in values:
-            assert v["value"] > 0
+        actual_order = [item["class"] for item in spec["data"]["values"]]
+        expected_order = [DISPLAY_NAME[c] for c in SwensenClass]
+        assert actual_order == expected_order
+        assert len(actual_order) == 14  # 14 个子类，没漏
+
+    def test_empty_classes_have_zero_value(self, journal: PortfolioJournal) -> None:
+        """空子类（count=0）也展示，value=0。这样能看出框架里哪些没覆盖到。"""
+        spec = self._get_bar(journal)
+        zero_count = sum(1 for item in spec["data"]["values"] if item["value"] == 0)
+        # 测试只塞了 2 个基金，SUBCLASS mapping 也没覆盖，所以应该全是 0
+        # （实际生产时 = count=0 的子类数，演示数据 = 14）
+        assert zero_count >= 1  # 至少有一些是 0（SUBCLASS 缺失的）
 
 
 class TestHoldingsTable:
-    """持仓明细表：单只基金 + 分类 + 市值 + 占比。"""
+    """持仓聚合表：按 Swensen 大类聚合（不再下钻单只基金）。
+
+    3 列：class / value / weight。按 SwensenClass 枚举顺序展示全部 14 个子类。
+    """
 
     def _get_table(self, journal: PortfolioJournal) -> dict[str, object]:
         _seed(journal)
@@ -167,17 +173,32 @@ class TestHoldingsTable:
         assert len(tables) == 1
         return tables[0]
 
-    def test_columns_are_five(self, journal: PortfolioJournal) -> None:
+    def test_columns_are_three(self, journal: PortfolioJournal) -> None:
+        """3 列：分类 / 市值 / 占比（不再有 code / name / count）。"""
         spec = self._get_table(journal)
         col_names = [c["name"] for c in spec["columns"]]
-        assert col_names == ["code", "name", "class", "value", "weight"]
+        assert col_names == ["class", "value", "weight"]
 
     def test_rows_are_dict_shaped(self, journal: PortfolioJournal) -> None:
         """Feishu API 强制 row 是 dict（按列名取）。"""
         spec = self._get_table(journal)
         for row in spec["rows"]:
             assert isinstance(row, dict)
-            assert set(row.keys()) == {"code", "name", "class", "value", "weight"}
+            assert set(row.keys()) == {"class", "value", "weight"}
+
+    def test_rows_in_swensen_order(self, journal: PortfolioJournal) -> None:
+        """按 SwensenClass 枚举顺序排（不是市值倒序）。"""
+        from global_allocation.portfolio.breakdown import DISPLAY_NAME, SwensenClass
+
+        spec = self._get_table(journal)
+        actual_order = [row["class"] for row in spec["rows"]]
+        expected_order = [DISPLAY_NAME[c] for c in SwensenClass]
+        assert actual_order == expected_order
+
+    def test_all_rows_for_all_swensen_classes(self, journal: PortfolioJournal) -> None:
+        """表展示全部 14 个子类（含 count=0 的），不是只展示有持仓的。"""
+        spec = self._get_table(journal)
+        assert len(spec["rows"]) == 14
 
     def test_all_columns_text_type(self, journal: PortfolioJournal) -> None:
         """value / weight 是预格式化字符串，全 text 列。"""
@@ -186,14 +207,15 @@ class TestHoldingsTable:
             assert col["data_type"] == "text"
 
     def test_value_formatted_with_commas(self, journal: PortfolioJournal) -> None:
-        """市值带千分位逗号。"""
+        """市值带千分位逗号。空子类 = "0.00"（没逗号也行）。"""
         spec = self._get_table(journal)
         for row in spec["rows"]:
-            # 形如 "12,345.67"
-            assert "," in row["value"] or row["value"].count(".") == 1
+            v = row["value"]
+            # 形如 "12,345.67" 或 "0.00"
+            assert "," in v or v == "0.00"
 
     def test_weight_has_percent_sign(self, journal: PortfolioJournal) -> None:
-        """占比以 % 结尾。"""
+        """占比以 % 结尾。空子类 = "0.00%"。"""
         spec = self._get_table(journal)
         for row in spec["rows"]:
             assert row["weight"].endswith("%")
@@ -202,9 +224,7 @@ class TestHoldingsTable:
         """分类列显示中文类名（不是 enum value）。"""
         spec = self._get_table(journal)
         for row in spec["rows"]:
-            # 没在 SUBCLASS_BY_CODE 里的基金 → class 是空字符串
-            # 在的 → 是中文（不是 ASCII）
-            assert row["class"] == "" or not row["class"].isascii()
+            assert not row["class"].isascii()
 
 
 class TestRemovedSections:
