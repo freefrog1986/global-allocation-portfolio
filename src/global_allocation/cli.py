@@ -45,6 +45,11 @@ from global_allocation.portfolio.cli import app as portfolio_app  # noqa: E402
 
 app.add_typer(portfolio_app, name="portfolio")
 
+# 用户策略配置
+from global_allocation.strategy.cli import app as plan_app  # noqa: E402
+
+app.add_typer(plan_app, name="plan")
+
 
 # ────────────────────────────────────────────────────────────────────
 # 顶层

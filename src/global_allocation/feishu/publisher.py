@@ -11,9 +11,14 @@ import logging
 import time
 from typing import Any
 
-from global_allocation.feishu.card import build_backtest_card, card_to_json
+from global_allocation.feishu.card import (
+    build_backtest_card,
+    build_strategy_rebalance_card,
+    card_to_json,
+)
 from global_allocation.feishu.credentials import FeishuCredentials, load_credentials
 from global_allocation.models import BacktestResult
+from global_allocation.strategy.models import RebalanceSuggestion
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +53,59 @@ def publish_backtest_report(
     actual_chat_id = chat_id or credentials.chat_id
 
     card = build_backtest_card(result, title=title)
+    card_json = card_to_json(card)
+
+    if dry_run:
+        return card_json
+
+    # 真实发送（重试 3 次）
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            message_id = _send_card(
+                app_id=credentials.app_id,
+                app_secret=credentials.app_secret,
+                chat_id=actual_chat_id,
+                card_json=card_json,
+            )
+            return message_id
+        except Exception as e:
+            last_error = e
+            logger.warning("飞书发送失败 (attempt %d/3): %s", attempt + 1, e)
+            if attempt < 2:
+                time.sleep(0.5 * (2**attempt))
+            else:
+                break
+
+    raise RuntimeError(f"飞书发送失败（已重试 3 次）: {last_error}")
+
+
+def publish_strategy_rebalance(
+    suggestion: RebalanceSuggestion,
+    credentials: FeishuCredentials | None = None,
+    chat_id: str | None = None,
+    title: str | None = None,
+    dry_run: bool = False,
+) -> str:
+    """发送策略再平衡建议到飞书话题。
+
+    Args:
+        suggestion: 再平衡建议。
+        credentials: 自定义凭证（默认从 env/文件读）。
+        chat_id: 自定义 chat_id（默认用凭证里的）。
+        title: 卡片标题。
+        dry_run: True = 返回卡片 JSON，不真发。
+
+    Returns:
+        dry_run=True → 卡片 JSON 字符串
+        dry_run=False → message_id
+    """
+    if credentials is None:
+        credentials = load_credentials()
+
+    actual_chat_id = chat_id or credentials.chat_id
+
+    card = build_strategy_rebalance_card(suggestion, title=title)
     card_json = card_to_json(card)
 
     if dry_run:
@@ -117,4 +175,4 @@ def _send_card(
     return msg_id or ""
 
 
-__all__ = ["publish_backtest_report"]
+__all__ = ["publish_backtest_report", "publish_strategy_rebalance"]
