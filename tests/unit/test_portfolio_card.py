@@ -133,13 +133,25 @@ class TestBreakdownBarChart:
         assert "data" in spec
         assert "values" in spec["data"]
         assert spec["xField"] == "class"
-        assert spec["yField"] == "value"
+        assert spec["yField"] == "weight"  # 第三轮：纵坐标 = 占比
 
-    def test_values_have_class_and_value_keys(self, journal: PortfolioJournal) -> None:
+    def test_values_have_class_and_weight_keys(self, journal: PortfolioJournal) -> None:
         spec = self._get_bar(journal)
         for item in spec["data"]["values"]:
             assert "class" in item
-            assert "value" in item
+            assert "weight" in item
+
+    def test_weight_is_percent_scaled(self, journal: PortfolioJournal) -> None:
+        """weight 是 0~100 的百分比数字（不是 0~1 的小数）。
+
+        VChart 显示成 0/5/10/.../30，标题"占比（%）"明示单位。
+        不论种子数据哪些子类有持仓，全部 weight 都应该在 [0, 100] 区间内且总和不超过 100。
+        """
+        spec = self._get_bar(journal)
+        for item in spec["data"]["values"]:
+            assert 0 <= item["weight"] <= 100
+        total = sum(item["weight"] for item in spec["data"]["values"])
+        assert total <= 100.01  # 算上浮点误差，不会超过 100
 
     def test_includes_all_swensen_classes_in_order(self, journal: PortfolioJournal) -> None:
         """柱状图按 SwensenClass 枚举顺序展示全部 14 个子类（不按市值倒序排）。"""
@@ -151,10 +163,10 @@ class TestBreakdownBarChart:
         assert actual_order == expected_order
         assert len(actual_order) == 14  # 14 个子类，没漏
 
-    def test_empty_classes_have_zero_value(self, journal: PortfolioJournal) -> None:
-        """空子类（count=0）也展示，value=0。这样能看出框架里哪些没覆盖到。"""
+    def test_empty_classes_have_zero_weight(self, journal: PortfolioJournal) -> None:
+        """空子类（count=0）也展示，weight=0。这样能看出框架里哪些没覆盖到。"""
         spec = self._get_bar(journal)
-        zero_count = sum(1 for item in spec["data"]["values"] if item["value"] == 0)
+        zero_count = sum(1 for item in spec["data"]["values"] if item["weight"] == 0)
         # 测试只塞了 2 个基金，SUBCLASS mapping 也没覆盖，所以应该全是 0
         # （实际生产时 = count=0 的子类数，演示数据 = 14）
         assert zero_count >= 1  # 至少有一些是 0（SUBCLASS 缺失的）
@@ -163,7 +175,7 @@ class TestBreakdownBarChart:
 class TestHoldingsTable:
     """持仓聚合表：按 Swensen 大类聚合（不再下钻单只基金）。
 
-    3 列：class / value / weight。按 SwensenClass 枚举顺序展示全部 14 个子类。
+    4 列：index / class / value / weight。按 SwensenClass 枚举顺序展示全部 14 个子类。
     """
 
     def _get_table(self, journal: PortfolioJournal) -> dict[str, object]:
@@ -173,18 +185,24 @@ class TestHoldingsTable:
         assert len(tables) == 1
         return tables[0]
 
-    def test_columns_are_three(self, journal: PortfolioJournal) -> None:
-        """3 列：分类 / 市值 / 占比（不再有 code / name / count）。"""
+    def test_columns_are_four(self, journal: PortfolioJournal) -> None:
+        """4 列：# / 分类 / 市值 / 占比（不再有 code / name / count）。"""
         spec = self._get_table(journal)
         col_names = [c["name"] for c in spec["columns"]]
-        assert col_names == ["class", "value", "weight"]
+        assert col_names == ["index", "class", "value", "weight"]
 
     def test_rows_are_dict_shaped(self, journal: PortfolioJournal) -> None:
         """Feishu API 强制 row 是 dict（按列名取）。"""
         spec = self._get_table(journal)
         for row in spec["rows"]:
             assert isinstance(row, dict)
-            assert set(row.keys()) == {"class", "value", "weight"}
+            assert set(row.keys()) == {"index", "class", "value", "weight"}
+
+    def test_index_is_one_based_sequential(self, journal: PortfolioJournal) -> None:
+        """序号列 1~14（1-indexed，让用户看到 Swensen 框架总数）。"""
+        spec = self._get_table(journal)
+        indexes = [row["index"] for row in spec["rows"]]
+        assert indexes == list(range(1, 15))
 
     def test_rows_in_swensen_order(self, journal: PortfolioJournal) -> None:
         """按 SwensenClass 枚举顺序排（不是市值倒序）。"""
@@ -201,10 +219,17 @@ class TestHoldingsTable:
         assert len(spec["rows"]) == 14
 
     def test_all_columns_text_type(self, journal: PortfolioJournal) -> None:
-        """value / weight 是预格式化字符串，全 text 列。"""
+        """index / value / weight 全是预格式化字符串，全 text 列。"""
         spec = self._get_table(journal)
         for col in spec["columns"]:
             assert col["data_type"] == "text"
+
+    def test_index_is_string_format(self, journal: PortfolioJournal) -> None:
+        """index 序列化时是字符串（保持 text 列格式一致）。"""
+        spec = self._get_table(journal)
+        for row in spec["rows"]:
+            # json.dumps 后会是字符串，但这里直接读 dict 还是 int
+            assert isinstance(row["index"], int)
 
     def test_value_formatted_with_commas(self, journal: PortfolioJournal) -> None:
         """市值带千分位逗号。空子类 = "0.00"（没逗号也行）。"""

@@ -65,10 +65,14 @@ def _build_summary(journal: PortfolioJournal, title: str) -> str:
 
 
 def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
-    """各大类资产市值柱状图（vertical bar，X 轴 = 类名，Y 轴 = 金额）。
+    """各大类资产占比柱状图（vertical bar，X 轴 = 类名，Y 轴 = 占比 %）。
+
+    第三轮反馈：纵坐标改成占比（用户更关心配置比例而非绝对金额）。
+    weight 原始值是 0~1 的 Decimal，乘以 100 转成百分比数字交给 VChart（Y 轴
+    会显示成 0/5/10/.../30，标题"各大类资产占比（%）"明示单位）。
 
     按 SwensenClass 枚举自然顺序展示全部 14 个子类（含 count=0 的——这样能直观看到
-    哪些子类没覆盖到，是配置漏洞）。空子类 value=0 在柱状图上不画柱子、保留 X 轴标签。
+    哪些子类没覆盖到，是配置漏洞）。空子类 weight=0 在柱状图上不画柱子、保留 X 轴标签。
 
     飞书 VChart 柱状图 = simple 格式：type="bar" + data.values + xField/yField
     （column 是 VChart 内部名，飞书对外只认 "bar"；不加 direction 默认就是垂直柱状图）
@@ -77,25 +81,27 @@ def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
     bars: list[dict[str, object]] = [
         {
             "class": b["display_name"],
-            "value": float(b["value"]),
+            "weight": float(b["weight"]) * 100,  # 0~1 → 0~100
         }
         for b in breakdown
     ]
 
     return {
         "type": "bar",
-        "title": {"text": "各大类资产市值（按 Swensen 框架顺序）"},
+        "title": {"text": "各大类资产占比（%，按 Swensen 框架顺序）"},
         "data": {"values": bars},
         "xField": "class",
-        "yField": "value",
+        "yField": "weight",
         "legends": {"visible": False},
     }
 
 
 def _build_holdings_table(journal: PortfolioJournal) -> dict[str, object]:
-    """按 Swensen 大类聚合的持仓表：分类 + 市值 + 占比。
+    """按 Swensen 大类聚合的持仓表：序号 + 分类 + 市值 + 占比。
 
-    spec 096 第二轮反馈：用户不要"细致到具体基金"，表只回答"我每个大类持了多少"。
+    spec 096：
+    - 第二轮反馈：用户不要"细致到具体基金"，表只回答"我每个大类持了多少"
+    - 第三轮反馈：表加序号列（第 1 列，1-14），让用户一眼看到 Swensen 框架总数
     按 SwensenClass 枚举顺序展示全部 14 个子类（含 count=0 的——空子类显示 0 元 / 0.00%，
     这样能直观看到 Swensen 框架里哪些子类没覆盖到）。
 
@@ -105,15 +111,17 @@ def _build_holdings_table(journal: PortfolioJournal) -> dict[str, object]:
 
     rows: list[dict[str, object]] = [
         {
+            "index": idx,
             "class": b["display_name"],
             "value": f"{float(b['value']):,.2f}",
             "weight": f"{float(b['weight']) * 100:.2f}%",
         }
-        for b in breakdown
+        for idx, b in enumerate(breakdown, start=1)
     ]
 
     return {
         "columns": [
+            {"name": "index", "display_name": "#", "data_type": "text", "width": "auto"},
             {"name": "class", "display_name": "分类", "data_type": "text", "width": "auto"},
             {"name": "value", "display_name": "市值(¥)", "data_type": "text", "width": "auto"},
             {"name": "weight", "display_name": "占比", "data_type": "text", "width": "auto"},
