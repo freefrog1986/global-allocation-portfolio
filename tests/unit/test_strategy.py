@@ -1,9 +1,11 @@
 """测试 src/global_allocation/portfolio/strategy.py。
 
-spec 097 第十五轮：策略三层结构
+spec 097 第十六轮：策略三层结构（内部权重模型）
 - Layer 1：14 个 SwensenClass 子类上限
-- Layer 2a：4 个投资类超类目标（不含现金）
-- Layer 2b：现金区间策略（"子弹"区间 [20%, 50%]）
+- Layer 2a：4 个投资类超类内部权重（不含现金，合计 = 1.0）
+- Layer 2b：现金区间策略（"子弹"区间 [15%, 50%]）
+
+实际目标 = 内部权重 × (1 − 现金占比)，由 compute_actual_target() 计算。
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from global_allocation.portfolio.strategy import (
     CashRange,
     SubclassLimit,
     SuperCategory,
+    compute_actual_target,
     compute_super_category_breakdown,
 )
 
@@ -39,52 +42,59 @@ class TestAllocationStrategy:
         assert subclasses_in_strategy == set(SwensenClass)
         assert len(DEFAULT_STRATEGY.subclass_limits) == 14
 
-    def test_default_strategy_has_4_investment_targets(self) -> None:
-        """默认策略有 4 个投资类超类目标（股票/债券/REITs/商品，不含现金）。"""
-        assert len(DEFAULT_STRATEGY.investment_targets) == 4
-        categories = {t.category for t in DEFAULT_STRATEGY.investment_targets}
+    def test_default_strategy_has_4_investment_weights(self) -> None:
+        """默认策略有 4 个投资类超类内部权重（股票/REITs/债券/商品，不含现金）。
+
+        第十六轮变更：内部权重（不是绝对目标），4 类合计 = 1.0。
+        """
+        assert len(DEFAULT_STRATEGY.investment_weights) == 4
+        categories = {w.category for w in DEFAULT_STRATEGY.investment_weights}
         assert categories == set(INVESTMENT_CATEGORIES)
         assert SuperCategory.CASH not in categories
 
     def test_default_strategy_has_cash_range(self) -> None:
-        """默认策略有 cash_range（第十五轮新增）。"""
+        """默认策略有 cash_range（第十五轮新增，第十六轮改为 [15%, 50%]）。"""
         assert isinstance(DEFAULT_STRATEGY.cash_range, CashRange)
-        # 默认区间 [20%, 50%]
-        assert DEFAULT_STRATEGY.cash_range.min_weight == Decimal("0.20")
+        # 默认区间 [15%, 50%]（第十六轮：下限从 20% 放宽到 15%）
+        assert DEFAULT_STRATEGY.cash_range.min_weight == Decimal("0.15")
         assert DEFAULT_STRATEGY.cash_range.max_weight == Decimal("0.50")
 
-    def test_investment_targets_sum_to_less_than_one(self) -> None:
-        """4 个投资类目标之和 < 1.0（剩余由现金区间填充，不强制 = 100%）。
+    def test_investment_weights_sum_to_one(self) -> None:
+        """4 个投资类内部权重之和 = 1.0（精确等于，相对权重）。
 
-        第十五轮变更：之前 5 个超类目标和 = 100%，现在 4 类（不含现金）和 < 100%。
+        第十六轮变更：之前是 < 1.0（绝对目标和 = 97%），现在必须 = 1.0（相对权重和）。
         """
-        total = DEFAULT_STRATEGY.total_investment_target
-        # 默认 = 70% + 15% + 8% + 4% = 97%
-        assert abs(total - Decimal("0.97")) < Decimal("0.001")
-        # 重要约束：和 < 1（不能超 100%，否则跟现金区间矛盾）
-        assert total < Decimal("1")
+        total = DEFAULT_STRATEGY.total_investment_weight
+        assert total == Decimal("1")
+
+    def test_default_investment_weights_match_ranking(self) -> None:
+        """默认权重按"收益率排序"：股票 > REITs > 债券 > 商品（第十六轮确认）。"""
+        assert DEFAULT_STRATEGY.investment_weight(SuperCategory.EQUITY) == Decimal("0.70")
+        assert DEFAULT_STRATEGY.investment_weight(SuperCategory.REIT) == Decimal("0.15")
+        assert DEFAULT_STRATEGY.investment_weight(SuperCategory.BOND) == Decimal("0.10")
+        assert DEFAULT_STRATEGY.investment_weight(SuperCategory.COMMODITY) == Decimal("0.05")
 
     def test_subclass_upper_lookup(self) -> None:
         """subclass_upper 能查到具体子类的上限。"""
         upper = DEFAULT_STRATEGY.subclass_upper(SwensenClass.CN_EQUITY)
         assert upper == Decimal("0.40")
 
-    def test_investment_target_lookup(self) -> None:
-        """investment_target 能查到具体超类的目标。"""
-        target = DEFAULT_STRATEGY.investment_target(SuperCategory.EQUITY)
-        assert target == Decimal("0.70")
+    def test_investment_weight_lookup(self) -> None:
+        """investment_weight 能查到具体超类的内部权重。"""
+        weight = DEFAULT_STRATEGY.investment_weight(SuperCategory.EQUITY)
+        assert weight == Decimal("0.70")
 
-    def test_investment_target_returns_none_for_cash(self) -> None:
-        """investment_target 对现金返回 None（现金不在投资目标里，走 cash_range）。"""
-        target = DEFAULT_STRATEGY.investment_target(SuperCategory.CASH)
-        assert target is None
+    def test_investment_weight_returns_none_for_cash(self) -> None:
+        """investment_weight 对现金返回 None（现金不在投资权重里，走 cash_range）。"""
+        weight = DEFAULT_STRATEGY.investment_weight(SuperCategory.CASH)
+        assert weight is None
 
     def test_strategy_is_frozen(self) -> None:
         """frozen — 不能修改字段（保证不可变性）。"""
         from dataclasses import FrozenInstanceError
 
         with pytest.raises(FrozenInstanceError):
-            DEFAULT_STRATEGY.investment_targets = ()  # type: ignore[misc]
+            DEFAULT_STRATEGY.investment_weights = ()  # type: ignore[misc]
 
 
 class TestInvestmentCategories:
@@ -97,18 +107,22 @@ class TestInvestmentCategories:
         assert SuperCategory.CASH not in INVESTMENT_CATEGORIES
         assert set(INVESTMENT_CATEGORIES) == {
             SuperCategory.EQUITY,
-            SuperCategory.BOND,
             SuperCategory.REIT,
+            SuperCategory.BOND,
             SuperCategory.COMMODITY,
         }
 
-    def test_investment_categories_follows_super_category_order(self) -> None:
-        """INVESTMENT_CATEGORIES 按 SuperCategory 枚举顺序（股票→债券→REITs→商品）。"""
+    def test_investment_categories_follows_return_ranking(self) -> None:
+        """INVESTMENT_CATEGORIES 按收益率排序（spec 097 第十六轮）：股票 > REITs > 债券 > 商品。
+
+        跟 SuperCategory 枚举顺序（EQUITY/BOND/REIT/COMMODITY）不同，
+        这是策略上的排序：股票 #1，REITs #2，债券 #3，商品 #4。
+        """
         expected = (
-            SuperCategory.EQUITY,
-            SuperCategory.BOND,
-            SuperCategory.REIT,
-            SuperCategory.COMMODITY,
+            SuperCategory.EQUITY,    # 收益最高，"占大头"
+            SuperCategory.REIT,      # 介于股债之间
+            SuperCategory.BOND,      # 中等收益
+            SuperCategory.COMMODITY, # 长期没那么值钱
         )
         assert INVESTMENT_CATEGORIES == expected
 
@@ -146,7 +160,7 @@ class TestSubclassToSuperMapping:
 
 
 class TestCashRange:
-    """现金区间策略测试（spec 097 第十五轮新增）。
+    """现金区间策略测试（spec 097 第十五轮新增，第十六轮 [15%, 50%]）。
 
     CashRange 表示"子弹"区间 [min_weight, max_weight]：
     - 当前 < min → 子弹打光了
@@ -156,61 +170,158 @@ class TestCashRange:
 
     def test_is_in_range_returns_true_when_in_range(self) -> None:
         """当前值在区间内 → True。"""
-        cr = CashRange(min_weight=Decimal("0.20"), max_weight=Decimal("0.50"))
-        assert cr.is_in_range(Decimal("0.20")) is True  # 等于下限
+        cr = CashRange(min_weight=Decimal("0.15"), max_weight=Decimal("0.50"))
+        assert cr.is_in_range(Decimal("0.15")) is True  # 等于下限
         assert cr.is_in_range(Decimal("0.50")) is True  # 等于上限
         assert cr.is_in_range(Decimal("0.30")) is True  # 区间正中
 
     def test_is_in_range_returns_false_when_below_min(self) -> None:
         """当前值低于下限 → False。"""
-        cr = CashRange(min_weight=Decimal("0.20"), max_weight=Decimal("0.50"))
+        cr = CashRange(min_weight=Decimal("0.15"), max_weight=Decimal("0.50"))
         assert cr.is_in_range(Decimal("0.10")) is False
-        assert cr.is_in_range(Decimal("0.199")) is False
+        assert cr.is_in_range(Decimal("0.149")) is False
 
     def test_is_in_range_returns_false_when_above_max(self) -> None:
         """当前值高于上限 → False。"""
-        cr = CashRange(min_weight=Decimal("0.20"), max_weight=Decimal("0.50"))
+        cr = CashRange(min_weight=Decimal("0.15"), max_weight=Decimal("0.50"))
         assert cr.is_in_range(Decimal("0.60")) is False
         assert cr.is_in_range(Decimal("0.501")) is False
 
     def test_status_in_range(self) -> None:
         """区间内 → "区间内"。"""
-        cr = CashRange(min_weight=Decimal("0.20"), max_weight=Decimal("0.50"))
+        cr = CashRange(min_weight=Decimal("0.15"), max_weight=Decimal("0.50"))
         assert cr.status(Decimal("0.30")) == "区间内"
-        assert cr.status(Decimal("0.20")) == "区间内"
+        assert cr.status(Decimal("0.15")) == "区间内"
         assert cr.status(Decimal("0.50")) == "区间内"
 
     def test_status_below_min(self) -> None:
         """低于下限 → "低于下限"。"""
-        cr = CashRange(min_weight=Decimal("0.20"), max_weight=Decimal("0.50"))
+        cr = CashRange(min_weight=Decimal("0.15"), max_weight=Decimal("0.50"))
         assert cr.status(Decimal("0.10")) == "低于下限"
-        assert cr.status(Decimal("0.199")) == "低于下限"
+        assert cr.status(Decimal("0.149")) == "低于下限"
 
     def test_status_above_max(self) -> None:
         """高于上限 → "高于上限"。"""
-        cr = CashRange(min_weight=Decimal("0.20"), max_weight=Decimal("0.50"))
+        cr = CashRange(min_weight=Decimal("0.15"), max_weight=Decimal("0.50"))
         assert cr.status(Decimal("0.60")) == "高于上限"
         assert cr.status(Decimal("0.501")) == "高于上限"
 
     def test_display_range(self) -> None:
         """display_range 输出 "[min%, max%]" 字符串（卡片展示用）。"""
-        cr = CashRange(min_weight=Decimal("0.20"), max_weight=Decimal("0.50"))
-        assert cr.display_range == "[20%, 50%]"
+        cr = CashRange(min_weight=Decimal("0.15"), max_weight=Decimal("0.50"))
+        assert cr.display_range == "[15%, 50%]"
 
     def test_cash_range_is_frozen(self) -> None:
         """CashRange frozen — 不能修改字段。"""
         from dataclasses import FrozenInstanceError
 
-        cr = CashRange(min_weight=Decimal("0.20"), max_weight=Decimal("0.50"))
+        cr = CashRange(min_weight=Decimal("0.15"), max_weight=Decimal("0.50"))
         with pytest.raises(FrozenInstanceError):
             cr.min_weight = Decimal("0.30")  # type: ignore[misc]
 
     def test_default_cash_range_uses_correct_numbers(self) -> None:
-        """默认策略的现金区间是 [20%, 50%]（liubo 第十五轮明确）。"""
+        """默认策略的现金区间是 [15%, 50%]（liubo 第十六轮明确）。"""
         cr = DEFAULT_STRATEGY.cash_range
-        # 0.20 * 100 = 20, 0.50 * 100 = 50
-        assert int(cr.min_weight * 100) == 20
+        # 0.15 * 100 = 15, 0.50 * 100 = 50
+        assert int(cr.min_weight * 100) == 15
         assert int(cr.max_weight * 100) == 50
+
+
+class TestComputeActualTarget:
+    """compute_actual_target() 测试（spec 097 第十六轮新增）。
+
+    公式：actual_target = internal_weight × (1 − current_cash_weight)
+
+    例（默认策略）：
+    - 现金 30% → 投资 70% → 股票目标 = 70% × 70% = 49%
+    - 现金 50% → 投资 50% → 股票目标 = 70% × 50% = 35%
+    - 现金 15% → 投资 85% → 股票目标 = 70% × 85% = 59.5%
+    """
+
+    def test_returns_none_for_cash(self) -> None:
+        """现金类返回 None（现金不走权重公式，走 cash_range）。"""
+        actual = compute_actual_target(
+            DEFAULT_STRATEGY,
+            SuperCategory.CASH,
+            Decimal("0.30"),
+        )
+        assert actual is None
+
+    def test_equity_at_30pct_cash(self) -> None:
+        """现金 30% 时股票实际目标 = 70% × 70% = 49%。"""
+        actual = compute_actual_target(
+            DEFAULT_STRATEGY,
+            SuperCategory.EQUITY,
+            Decimal("0.30"),
+        )
+        assert actual == Decimal("0.70") * Decimal("0.70")  # = 0.49
+
+    def test_equity_at_50pct_cash(self) -> None:
+        """现金 50% 时股票实际目标 = 70% × 50% = 35%。"""
+        actual = compute_actual_target(
+            DEFAULT_STRATEGY,
+            SuperCategory.EQUITY,
+            Decimal("0.50"),
+        )
+        assert actual == Decimal("0.70") * Decimal("0.50")  # = 0.35
+
+    def test_equity_at_15pct_cash(self) -> None:
+        """现金 15% 时股票实际目标 = 70% × 85% = 59.5%（子弹下限的最大仓位）。"""
+        actual = compute_actual_target(
+            DEFAULT_STRATEGY,
+            SuperCategory.EQUITY,
+            Decimal("0.15"),
+        )
+        assert actual == Decimal("0.70") * Decimal("0.85")  # = 0.595
+
+    def test_reit_at_30pct_cash(self) -> None:
+        """现金 30% 时 REITs 实际目标 = 15% × 70% = 10.5%。"""
+        actual = compute_actual_target(
+            DEFAULT_STRATEGY,
+            SuperCategory.REIT,
+            Decimal("0.30"),
+        )
+        assert actual == Decimal("0.15") * Decimal("0.70")  # = 0.105
+
+    def test_bond_at_30pct_cash(self) -> None:
+        """现金 30% 时债券实际目标 = 10% × 70% = 7%。"""
+        actual = compute_actual_target(
+            DEFAULT_STRATEGY,
+            SuperCategory.BOND,
+            Decimal("0.30"),
+        )
+        assert actual == Decimal("0.10") * Decimal("0.70")  # = 0.07
+
+    def test_commodity_at_30pct_cash(self) -> None:
+        """现金 30% 时商品实际目标 = 5% × 70% = 3.5%。"""
+        actual = compute_actual_target(
+            DEFAULT_STRATEGY,
+            SuperCategory.COMMODITY,
+            Decimal("0.30"),
+        )
+        assert actual == Decimal("0.05") * Decimal("0.70")  # = 0.035
+
+    def test_total_actual_targets_equal_investment_part(self) -> None:
+        """4 个投资类实际目标之和 = 1 − 当前现金占比（内部权重和 = 1.0 的保证）。"""
+        current_cash = Decimal("0.30")
+        investment_total = Decimal("1") - current_cash
+        for cat in INVESTMENT_CATEGORIES:
+            actual = compute_actual_target(DEFAULT_STRATEGY, cat, current_cash)
+            assert actual is not None
+        # 所有投资类加总
+        total = sum(
+            compute_actual_target(DEFAULT_STRATEGY, cat, current_cash)  # type: ignore[misc]
+            for cat in INVESTMENT_CATEGORIES
+        )
+        # 因为 内部权重和 = 1，所以 实际目标和 = (1 − cash) × 1 = (1 − cash)
+        assert total == investment_total
+
+    def test_zero_cash_doubles_weights(self) -> None:
+        """现金 0% 时（极端情况），投资类实际目标 = 内部权重 × 100%。"""
+        for cat in INVESTMENT_CATEGORIES:
+            actual = compute_actual_target(DEFAULT_STRATEGY, cat, Decimal("0"))
+            assert actual is not None
+            assert actual == DEFAULT_STRATEGY.investment_weight(cat)
 
 
 class TestComputeSuperCategoryBreakdown:
