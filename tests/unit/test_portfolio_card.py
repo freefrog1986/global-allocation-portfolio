@@ -141,21 +141,17 @@ class TestBreakdownBarChart:
             assert "class" in item
             assert "weight" in item
 
-    def test_bar_label_has_percent_formatter(self, journal: PortfolioJournal) -> None:
-        """柱状图柱子顶部 label 加 % 后缀（第七轮反馈）。
+    def test_no_label_or_axes_with_format_method(self, journal: PortfolioJournal) -> None:
+        """第八轮反馈：飞书 VChart 卡片组件不支持 JavaScript 语法。
 
-        第六轮试过 axes[*].label.formatMethod，Feishu API 接受但 VChart 渲染端不解析，
-        整张图加载失败。改成 bar 自带的 label 字段——在每根柱子顶显示值，% 后缀
-        通过 formatMethod 加上去。
+        之前的 axes[*].label.formatMethod 和 bar.label.formatMethod 都是 JS 函数
+        表达式，飞书 API 接受但渲染端不解析 → 整张图加载失败。
+        现在不传 label / axes 字段，柱子顶上由 VChart 默认显示 yField 数值。
+        % 信息在标题"各大类资产占比（%）"里明示。
         """
         spec = self._get_bar(journal)
-        assert "label" in spec
-        assert spec["label"]["visible"] is True
-        assert spec["label"]["position"] == "top"
-        # formatMethod 是字符串（JS 函数表达式），不能是 dict
-        assert isinstance(spec["label"]["formatMethod"], str)
-        # 函数体里得有 "%" 字面量
-        assert "%" in spec["label"]["formatMethod"]
+        assert "label" not in spec
+        assert "axes" not in spec
 
     def test_weight_is_percent_scaled(self, journal: PortfolioJournal) -> None:
         """weight 是 0~100 的百分比数字（不是 0~1 的小数）。

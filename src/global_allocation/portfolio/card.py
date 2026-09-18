@@ -94,15 +94,11 @@ def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
         "xField": "class",
         "yField": "weight",
         "legends": {"visible": False},
-        # 第七轮反馈：Y 轴数字后面要带 % 后缀
-        # 之前的 axes[*].label.formatMethod（JS 函数字符串）Feishu API 接受但 VChart 渲染端
-        # 不解析，整张图加载失败。换成 VChart bar 自带的 label 字段——在每根柱子顶上显示
-        # 值（formatMethod 加 % 后缀），Y 轴虽然没 % 但柱子顶上能看到 %。
-        "label": {
-            "visible": True,
-            "position": "top",
-            "formatMethod": 'val => val + "%"',
-        },
+        # 第八轮反馈：label/axes 的 formatMethod 字段都是 JS 函数表达式，
+        # 飞书 VChart 卡片组件不支持 JS（"图表组件暂不支持 JavaScript 语法"），
+        # 传进去直接被忽略/抛错 → 整张图加载失败。
+        # 标题已经写了"占比（%）"明示单位，柱子顶上 VChart 默认显示 yField 数值。
+        # 后续要加 % 后缀得用 VChart formatter 模板字符串（不是函数）或者强制 Y 轴 ticks。
     }
 
 
