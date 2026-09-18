@@ -18,16 +18,22 @@
 - 不做 sleeve / strategy drift 对比（属于 spec 091 后续）
 - 不加图表交互（drill-down / tooltip 增强）
 
-## 设计原则（第六轮反馈修订）
+## 设计原则（第七轮反馈修订）
 
 只回答用户三个问题：
 1. **现在整体怎么样**（summary div 顶部 — 总市值 / 盈亏 / 周涨跌 / 累计涨跌）
 2. **大类资产怎么分布**（柱状图，按 Swensen 框架顺序，纵坐标 = 占比 %）
 3. **每个大类持多少**（聚合表，1 行 = 1 个 Swensen 大类）
 
+**第七轮反馈关键变化**（liubo 2026-09-18）：
+- 第六轮加 `axes[*].label.formatMethod` 让 Feishu API 接受但 VChart 渲染端不解析，**整张图加载失败**
+- 改用 VChart bar 自带的 `label` 字段（每根柱子顶部显示值）—— formatMethod 加 % 后缀
+- Y 轴本身仍然没 %（Feishu VChart 不支持 axes 字段的 formatMethod 解析），但柱子顶上能直接看到占比 %
+
 **第六轮反馈关键变化**（liubo 2026-09-18）：
 - 柱状图 Y 轴数字加 **% 后缀**（之前是 "29.9"，现在 "29.9%"）
 - 用 VChart 标准 axis formatter：`axes[*].label.formatMethod = 'val => val + "%"'`
+- （后来发现这方案让图表加载失败——见第七轮）
 
 **第五轮反馈关键变化**（liubo 2026-09-18）：
 - 持仓表 **# 信息嵌进分类名前缀**（"1. A 股股票"），干掉单独的 # 列

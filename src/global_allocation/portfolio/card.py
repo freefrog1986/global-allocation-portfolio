@@ -94,16 +94,15 @@ def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
         "xField": "class",
         "yField": "weight",
         "legends": {"visible": False},
-        # 第六轮反馈：Y 轴数字后面要带 % 后缀
-        # VChart 标准 axis formatter：用 formatMethod 给 left 轴的 label 加 % 后缀
-        "axes": [
-            {
-                "orient": "left",
-                "label": {
-                    "formatMethod": 'val => val + "%"',
-                },
-            }
-        ],
+        # 第七轮反馈：Y 轴数字后面要带 % 后缀
+        # 之前的 axes[*].label.formatMethod（JS 函数字符串）Feishu API 接受但 VChart 渲染端
+        # 不解析，整张图加载失败。换成 VChart bar 自带的 label 字段——在每根柱子顶上显示
+        # 值（formatMethod 加 % 后缀），Y 轴虽然没 % 但柱子顶上能看到 %。
+        "label": {
+            "visible": True,
+            "position": "top",
+            "formatMethod": 'val => val + "%"',
+        },
     }
 
 
