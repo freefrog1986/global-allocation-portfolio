@@ -96,6 +96,23 @@ class TestBuildPortfolioCard:
         assert "总市值" in text
         assert "CNY" in text
 
+    def test_summary_does_not_repeat_header_title(self, journal: PortfolioJournal) -> None:
+        """第十三轮反馈：summary 第一行不要重复 header.title。
+
+        卡片 header 已经写了"实盘周报"，body 开头 note section header 已经写了
+        "实盘持仓"，summary div 里再写一遍 title 是冗余。summary 第一行必须是
+        "**生成时间**"。
+        """
+        _seed(journal)
+        card = build_portfolio_card(journal, title="我的实盘 9 月")
+        divs = [e for e in card["elements"] if e.get("tag") == "div"]
+        text = divs[0]["text"]["content"]
+        # 第一行不能是 title 的粗体
+        first_line = text.split("\n", 1)[0]
+        assert not first_line.startswith("**我的实盘 9 月**")
+        # 第一行必须是生成时间
+        assert first_line.startswith("**生成时间**")
+
     def test_no_holdings_raises(self, journal: PortfolioJournal) -> None:
         with pytest.raises(ValueError, match="持仓"):
             build_portfolio_card(journal)

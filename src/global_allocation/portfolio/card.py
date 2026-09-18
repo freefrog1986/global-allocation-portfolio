@@ -54,7 +54,9 @@ def _build_summary(journal: PortfolioJournal, title: str) -> str:
         cumulative_str = _format_pct(latest.cumulative_return)
 
     return (
-        f"**{title}**\n"
+        # 第十三轮反馈（liubo 2026-09-18）：去掉第一行 "**{title}**"
+        # 卡片 header.title 已经是"实盘周报"，body 开头 note section header 已经是"实盘持仓"，
+        # summary div 里再写一遍 title 是冗余。
         f"**生成时间**：{datetime.now().strftime('%Y-%m-%d %H:%M')}  \n"
         f"**总市值**：{_format_money(total)} CNY  \n"
         f"**总成本**：{_format_money(total_cost)} CNY  \n"
@@ -147,17 +149,19 @@ def build_portfolio_card(
 ) -> dict[str, object]:
     """构造实盘账本的飞书交互卡片。
 
-    3 段元素（spec 096 第十二轮）：
+    3 段元素（spec 096 第十三轮）：
     1. section header（note 元素）—"实盘持仓" — 跟未来其他 section 区分
-    2. summary div（标题 + 总市值 + 盈亏 + 周涨跌）
+    2. summary div（生成时间 / 总市值 / 总成本 / 浮动盈亏 / 周涨跌 / 累计涨跌）
     3. 各大类资产柱状图
     4. 持仓明细表（按市值倒序）
 
-    第十二轮反馈（liubo 2026-09-18）：周报要分多个部分，第一部分是"实盘持仓"，
-    未来要加第二部分（如"大类资产配置策略"）。两个设计点：
-    1. header.title 默认改"实盘周报"（总标题，适配未来多 section）
-    2. body 开头加 note 元素做 section header（飞书原生浅灰背景块，视觉明显，
-       跟 footer 用的 note 是同一元素，视觉一致）
+    第十三轮反馈（liubo 2026-09-18）：
+    1. 卡片名确认叫"实盘周报"
+    2. summary 第一行去掉 "**{title}**"（跟 header 重复）
+    3. 现在只写第一部分（实盘持仓）
+    4. 未来周报每个 section 按 SwensenClass 大类资产类别划分
+       （A 股股票 → 港股 → 美股 → ... → 现金，14 个大类，每个 section 一个 note header）
+       —— 留口子给未来追加，元素列表是列表字面量可以直接 append
     """
     actual_title = title or "实盘周报"
     holdings = journal.compute_holdings()
