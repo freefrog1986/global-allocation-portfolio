@@ -23,6 +23,7 @@ from global_allocation.portfolio.strategy import (
     DEFAULT_STRATEGY,
     SUPER_CATEGORY_DISPLAY_NAME,
     AllocationStrategy,
+    SuperCategory,
     compute_super_category_breakdown,
 )
 
@@ -76,25 +77,34 @@ def _build_strategy_section(
     journal: PortfolioJournal,
     strategy: AllocationStrategy = DEFAULT_STRATEGY,
 ) -> list[dict[str, object]]:
-    """Section 2: 具体策略 — 5 个超类目标 + 当前实际 + 偏离。
+    """Section 2: 具体策略 — 4 投资类目标 + 现金区间 + 当前实际 + 偏离。
 
-    spec 097 第十四轮（liubo 2026-09-18）：
+    spec 097 第十五轮（liubo 2026-09-18）：
     - 策略数字存 strategy.DEFAULT_STRATEGY（独立模块，后续可改）
-    - Layer 2 表格：超类 / 目标 / 当前 / 偏离（5 行）
+    - Layer 2a（投资类）：4 个超类目标（股票/债券/REITs/商品）
+    - Layer 2b（现金区间）：子弹区间 [20%, 50%]，不设固定目标
     - Layer 1 摘要写在 div 文字里（14 子类上限不展示详细 table，避免卡片过长）
 
-    偏离 = 当前占比 - 目标占比（百分点）。正数 = 超配，负数 = 低配。
+    表格 5 行 × 4 列：
+    - 投资类 4 行：target = "70%"（固定），delta = "+/-X.Xpp"
+    - 现金 1 行：target = "[20%, 50%]"，delta = "区间内/低于下限/高于上限"
     """
     breakdown = compute_breakdown(journal)
     current_by_super = compute_super_category_breakdown(breakdown)
+    cash_range = strategy.cash_range
 
-    # div 文字：5 个超类目标 + Layer 1 摘要
+    # div 文字：4 投资类目标 + 现金区间 + Layer 1 摘要
     lines = ["**大类配置目标**"]
-    for t in strategy.super_category_targets:
+    for t in strategy.investment_targets:
         target_pct = float(t.target) * 100
         lines.append(
             f"**{SUPER_CATEGORY_DISPLAY_NAME[t.category]}**：{target_pct:.0f}%"
         )
+    lines.append("")
+    lines.append(
+        f"**现金子弹**：{cash_range.display_range}"
+        "（区间策略 — 市场大跌时抄底）"
+    )
     lines.append("")
     lines.append(
         "**子类上限**：14 个 SwensenClass 子类各设上限，"
@@ -102,21 +112,32 @@ def _build_strategy_section(
     )
     summary_text = "\n".join(lines)
 
-    # table: Layer 2 详情（5 行 × 4 列）
+    # table: 5 行（4 投资类 + 1 现金）× 4 列
     rows: list[dict[str, object]] = []
-    for t in strategy.super_category_targets:
-        cat = t.category
-        target_pct = float(t.target) * 100
+    # 按 SuperCategory 枚举顺序遍历（EQUITY → BOND → REIT → COMMODITY → CASH）
+    for cat in SuperCategory:
         current_pct = float(current_by_super[cat]) * 100
-        delta_pct = current_pct - target_pct
-        sign = "+" if delta_pct >= 0 else ""
-        # 偏离数字精度 1 位小数（跟柱状图 weight 一致）
-        delta_str = f"{sign}{delta_pct:.1f}pp"  # pp = percentage points
+        current_str = f"{current_pct:.1f}%"
+
+        if cat == SuperCategory.CASH:
+            # 现金走区间策略：target 列显示区间，delta 列显示状态文本
+            target_str = cash_range.display_range
+            delta_str = cash_range.status(current_by_super[cat])
+        else:
+            # 投资类走固定目标：target 列显示百分比，delta 列显示百分点偏离
+            target_val = strategy.investment_target(cat)
+            assert target_val is not None  # 4 投资类都有目标
+            target_pct = float(target_val) * 100
+            target_str = f"{target_pct:.0f}%"
+            delta_pct = current_pct - target_pct
+            sign = "+" if delta_pct >= 0 else ""
+            delta_str = f"{sign}{delta_pct:.1f}pp"  # pp = percentage points
+
         rows.append(
             {
                 "category": SUPER_CATEGORY_DISPLAY_NAME[cat],
-                "target": f"{target_pct:.0f}%",
-                "current": f"{current_pct:.1f}%",
+                "target": target_str,
+                "current": current_str,
                 "delta": delta_str,
             }
         )
@@ -225,7 +246,7 @@ def build_portfolio_card(
 ) -> dict[str, object]:
     """构造实盘账本的飞书交互卡片。
 
-    卡片结构（spec 096 + spec 097 第十四轮）：
+    卡片结构（spec 096 + spec 097 第十五轮）：
     - header.title: "实盘周报"
     - Section 1（实盘持仓）：
       - note header "实盘持仓"
@@ -234,12 +255,14 @@ def build_portfolio_card(
       - 大类资产柱状图（vertical bar，14 个子类）
       - hr 分隔
       - 持仓聚合表（14 行 × 3 列：分类 / 市值 / 占比）
-    - Section 2（具体策略）：
+    - Section 2（具体策略 — 第十五轮：现金区间策略）：
       - hr 分隔（跨 section）
       - note header "具体策略"
-      - 策略文字 div（5 超类目标 + Layer 1 摘要）
+      - 策略文字 div（4 投资类目标 + 现金区间 + Layer 1 摘要）
       - hr 分隔
       - 策略对比表（5 行 × 4 列：超类 / 目标 / 当前 / 偏离）
+        - 投资类 4 行：target = "70%"，delta = "+/-X.Xpp"
+        - 现金 1 行：target = "[20%, 50%]"，delta = "区间内/低于下限/高于上限"
 
     未来扩展（spec 096 第十三轮预留）：Section 3+ 按 SwensenClass 划分（每个大类资产一个 section）。
     """

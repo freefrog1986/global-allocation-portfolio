@@ -354,11 +354,14 @@ class TestRemovedSections:
 
 
 class TestStrategySection:
-    """spec 097 第十四轮：Section 2 具体策略。
+    """spec 097 第十五轮：Section 2 具体策略（现金区间策略）。
 
-    - Layer 2 文字：5 超类目标（股票 70% / 债券 15% / REITs 8% / 商品 4% / 现金 3%）
-    - Layer 2 表格：5 行 × 4 列（超类 / 目标 / 当前 / 偏离）
-    - 偏离格式：+X.Xpp / -X.Xpp（pp = percentage points）
+    - Layer 2a 文字：4 投资类目标（股票 70% / 债券 15% / REITs 8% / 商品 4%）
+    - Layer 2b 文字：现金子弹区间 [20%, 50%]（区间策略，不设固定目标）
+    - Layer 1 文字：14 子类上限摘要
+    - 表格：5 行 × 4 列
+      - 投资类 4 行：target = "70%"，delta = "+/-X.Xpp"
+      - 现金 1 行：target = "[20%, 50%]"，delta = "区间内/低于下限/高于上限"
     """
 
     def _get_strategy_table(self, journal: PortfolioJournal) -> dict[str, object]:
@@ -373,7 +376,7 @@ class TestStrategySection:
         raise AssertionError("Section 2 策略表未找到（4 列 category/target/current/delta）")
 
     def _get_strategy_text(self, journal: PortfolioJournal) -> str:
-        """Section 2 策略 div 文字（5 超类目标列表）。"""
+        """Section 2 策略 div 文字（4 投资类 + 现金区间 + 子类上限摘要）。"""
         _seed(journal)
         card = build_portfolio_card(journal)
         # Section 2 div 是第二个 div（第一个是 Section 1 summary）
@@ -381,16 +384,32 @@ class TestStrategySection:
         assert len(divs) >= 2
         return divs[1]["text"]["content"]  # type: ignore[arg-type, return-value]
 
-    def test_strategy_text_lists_all_5_super_categories(self, journal: PortfolioJournal) -> None:
-        """策略文字列出 5 个超类目标（股票/债券/REITs/商品/现金）。"""
+    def test_strategy_text_lists_4_investment_targets(self, journal: PortfolioJournal) -> None:
+        """策略文字列出 4 个投资类目标（股票/债券/REITs/商品，第十五轮不再含现金固定目标）。"""
         text = self._get_strategy_text(journal)
         # 验证股票 70%
         assert "**股票**：70%" in text
-        # 验证其他 4 个超类（不一定都按顺序，但都得有）
+        # 验证其他 3 个投资类
         assert "**债券**：15%" in text
         assert "**REITs**：8%" in text
         assert "**商品**：4%" in text
-        assert "**现金**：3%" in text
+
+    def test_strategy_text_does_not_list_cash_as_percent(self, journal: PortfolioJournal) -> None:
+        """第十五轮变更：现金不再以"**现金**：X%" 形式列出（走区间策略）。
+
+        现金单独以 "**现金子弹**：[20%, 50%]（区间策略 — ...）" 形式展示。
+        """
+        text = self._get_strategy_text(journal)
+        # 不应该有 "**现金**：3%"（旧格式）
+        assert "**现金**：3%" not in text
+
+    def test_strategy_text_lists_cash_range(self, journal: PortfolioJournal) -> None:
+        """策略文字列出现金子弹区间（第十五轮新增）。"""
+        text = self._get_strategy_text(journal)
+        # 默认区间 [20%, 50%]
+        assert "**现金子弹**：[20%, 50%]" in text
+        # 区间策略说明
+        assert "区间策略" in text
 
     def test_strategy_text_mentions_subclass_caps(self, journal: PortfolioJournal) -> None:
         """策略文字提到子类上限（Layer 1 摘要）。"""
@@ -399,7 +418,7 @@ class TestStrategySection:
         assert "14" in text  # 14 个子类
 
     def test_strategy_table_has_5_rows(self, journal: PortfolioJournal) -> None:
-        """策略表 5 行（每个超类一行）。"""
+        """策略表 5 行（4 投资类 + 1 现金）。"""
         spec = self._get_strategy_table(journal)
         assert len(spec["rows"]) == 5
 
@@ -424,52 +443,74 @@ class TestStrategySection:
             assert set(row.keys()) == {"category", "target", "current", "delta"}
 
     def test_strategy_table_rows_in_default_order(self, journal: PortfolioJournal) -> None:
-        """策略表按 DEFAULT_STRATEGY.super_category_targets 顺序排（股票→债券→REITs→商品→现金）。"""
+        """策略表按 SuperCategory 枚举顺序排：股票→债券→REITs→商品→现金。
+
+        第十五轮变更：遍历所有 5 个 SuperCategory（4 投资类 + 现金），不再是
+        super_category_targets 顺序（因为现金不在 investment_targets 里）。
+        """
         from global_allocation.portfolio.strategy import (
-            DEFAULT_STRATEGY,
             SUPER_CATEGORY_DISPLAY_NAME,
+            SuperCategory,
         )
 
         spec = self._get_strategy_table(journal)
         actual_order = [row["category"] for row in spec["rows"]]
-        expected_order = [
-            SUPER_CATEGORY_DISPLAY_NAME[t.category]
-            for t in DEFAULT_STRATEGY.super_category_targets
-        ]
+        expected_order = [SUPER_CATEGORY_DISPLAY_NAME[c] for c in SuperCategory]
         assert actual_order == expected_order
 
-    def test_strategy_table_target_column_uses_percent(self, journal: PortfolioJournal) -> None:
-        """目标列以 % 结尾（0 位小数）。"""
+    def test_strategy_table_investment_target_uses_percent(self, journal: PortfolioJournal) -> None:
+        """投资类 4 行的 target 列以 % 结尾（固定目标）。"""
         spec = self._get_strategy_table(journal)
-        for row in spec["rows"]:
+        # 前 4 行（股票/债券/REITs/商品）是投资类，target 是固定百分比
+        for row in spec["rows"][:4]:
             assert row["target"].endswith("%")
-            # 形如 "70%"（0 位小数）
             assert "%" in row["target"]
 
+    def test_strategy_table_cash_target_is_range(self, journal: PortfolioJournal) -> None:
+        """现金行的 target 列是区间字符串（不是 %）。"""
+        spec = self._get_strategy_table(journal)
+        cash_row = spec["rows"][4]  # 第 5 行是现金
+        # 形如 "[20%, 50%]"，不以 % 结尾（避免歧义）
+        assert cash_row["target"] == "[20%, 50%]"
+
     def test_strategy_table_current_column_uses_percent(self, journal: PortfolioJournal) -> None:
-        """当前列以 % 结尾（1 位小数）。"""
+        """当前列全部 5 行以 % 结尾（1 位小数）。"""
         spec = self._get_strategy_table(journal)
         for row in spec["rows"]:
             assert row["current"].endswith("%")
 
-    def test_strategy_table_delta_uses_pp_unit(self, journal: PortfolioJournal) -> None:
-        """偏离列用 pp (percentage points) 后缀，跟 % 区分。
+    def test_strategy_table_investment_delta_uses_pp_unit(self, journal: PortfolioJournal) -> None:
+        """投资类 4 行的偏离列用 pp (percentage points) 后缀。
 
         例：股票目标 70% / 当前 75% → 偏离 "+5.0pp"
-        例：现金目标 3% / 当前 0% → 偏离 "-3.0pp"
         """
         spec = self._get_strategy_table(journal)
-        for row in spec["rows"]:
+        for row in spec["rows"][:4]:  # 前 4 行是投资类
             delta = row["delta"]
-            # 必须以 pp 结尾
             assert delta.endswith("pp")
-            # 不能是 %（避免歧义——百分比 vs 百分点）
             assert not delta.endswith("%")
 
-    def test_strategy_table_delta_sign_matches_current_vs_target(self, journal: PortfolioJournal) -> None:
-        """偏离符号 = 当前 - 目标（正 = 超配，负 = 低配）。"""
+    def test_strategy_table_cash_delta_is_status_text(self, journal: PortfolioJournal) -> None:
+        """现金行的偏离列是状态文本（区间内/低于下限/高于上限），不是 pp。
+
+        第十五轮变更：现金不再用数字偏离，改用状态文本（区间策略本质）。
+        """
         spec = self._get_strategy_table(journal)
-        for row in spec["rows"]:
+        cash_row = spec["rows"][4]  # 第 5 行是现金
+        delta = cash_row["delta"]
+        # 是三种状态之一
+        assert delta in {"区间内", "低于下限", "高于上限"}
+        # 不是数字偏离
+        assert not delta.endswith("pp")
+        assert not delta.endswith("%")
+
+    def test_strategy_table_investment_delta_sign_matches_current_vs_target(self, journal: PortfolioJournal) -> None:
+        """投资类 4 行的偏离符号 = 当前 - 目标（正 = 超配，负 = 低配）。
+
+        现金行的 delta 是状态文本，跳过符号检查。
+        """
+        spec = self._get_strategy_table(journal)
+        for row in spec["rows"][:4]:  # 前 4 行是投资类
             target_pct = float(row["target"].rstrip("%"))
             current_pct = float(row["current"].rstrip("%"))
             expected_sign = "+" if current_pct >= target_pct else "-"
