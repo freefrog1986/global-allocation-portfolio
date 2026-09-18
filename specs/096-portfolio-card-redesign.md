@@ -25,10 +25,16 @@
 2. **大类资产怎么分布**（柱状图，按 Swensen 框架顺序，纵坐标 = 占比 %）
 3. **每个大类持多少**（聚合表，1 行 = 1 个 Swensen 大类）
 
-**第七轮反馈关键变化**（liubo 2026-09-18）：
-- 第六轮加 `axes[*].label.formatMethod` 让 Feishu API 接受但 VChart 渲染端不解析，**整张图加载失败**
-- 改用 VChart bar 自带的 `label` 字段（每根柱子顶部显示值）—— formatMethod 加 % 后缀
-- Y 轴本身仍然没 %（Feishu VChart 不支持 axes 字段的 formatMethod 解析），但柱子顶上能直接看到占比 %
+**第十一轮最终决定**（liubo 2026-09-18）：**柱状图柱顶不加 % 后缀**——飞书 VChart 卡片组件不支持。
+
+试过三种方案全部失败：
+1. `axes[*].label.formatMethod`（JS 函数）→ 飞书 API 接受但 VChart 渲染端不解析，整张图加载失败
+2. `bar.label.formatMethod`（JS 函数）→ 同上，整张图加载失败
+3. `bar.label.formatter = "{value}%"`（字符串模板）→ 基础 `{value}` 替换在飞书内置 VChart 版本（1.10.1/1.12.3）下不工作，柱子顶上显示成字面 `"%Y6%"`
+
+根因：飞书 VChart 卡片组件明确"暂不支持 JavaScript 语法"（chart 文档），formatter 模板字符串的 `{value}` 占位符替换需要 formatter plugin（VChart 1.10.0+），但飞书内置版本没有注册该 plugin。
+
+最终状态：去掉 label / axes 字段，恢复最简 bar spec。标题"各大类资产占比（%）"明示单位，柱子顶上 VChart 默认显示 yField 数值（29.9 这种，无 % 但不歧义）。
 
 **第六轮反馈关键变化**（liubo 2026-09-18）：
 - 柱状图 Y 轴数字加 **% 后缀**（之前是 "29.9"，现在 "29.9%"）
