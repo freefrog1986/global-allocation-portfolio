@@ -140,6 +140,16 @@ class TestBuildPortfolioCard:
         col_names = [c["name"] for c in breakdown["columns"]]
         assert col_names == ["class", "count", "value", "weight"]
 
+    def test_breakdown_rows_are_dict_shaped(self, journal: PortfolioJournal) -> None:
+        """Feishu table 要求 row 是 dict（按列名取），不能是 list。"""
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        tables = [e for e in card["elements"] if e.get("tag") == "table"]
+        breakdown = tables[0]
+        for row in breakdown["rows"]:
+            assert isinstance(row, dict)
+            assert set(row.keys()) == {"class", "count", "value", "weight"}
+
     def test_breakdown_table_position_after_summary(
         self, journal: PortfolioJournal
     ) -> None:
@@ -170,8 +180,17 @@ class TestBuildPortfolioCard:
         # 测试只塞了 2 个基金（MIXED + EQUITY），没 SUBCLASS mapping 的会被静默忽略
         # 所以空类不出现 = 表格里都是 count > 0 的
         for row in rows:
-            count = int(row[1])
+            count = int(row["count"])  # type: ignore[arg-type]
             assert count > 0
+
+    def test_breakdown_all_columns_text_type(self, journal: PortfolioJournal) -> None:
+        """Feishu number 列要求原生数字；breakdown 里都是格式化字符串所以全 text。"""
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        tables = [e for e in card["elements"] if e.get("tag") == "table"]
+        breakdown = tables[0]
+        for col in breakdown["columns"]:
+            assert col["data_type"] == "text"
 
     def test_no_holdings_raises(self, journal: PortfolioJournal) -> None:
         # 没有基金和交易

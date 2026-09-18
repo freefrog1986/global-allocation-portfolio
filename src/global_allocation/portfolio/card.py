@@ -121,25 +121,28 @@ def _build_history_line(journal: PortfolioJournal) -> dict[str, object]:
 
 
 def _build_breakdown_table(journal: PortfolioJournal) -> dict[str, object]:
-    """各大类资产占比（Swensen 框架：14 子类）。空类不显示。"""
+    """各大类资产占比（Swensen 框架：14 子类）。空类不显示。
+
+    Feishu 表格 row 必须是 dict（按列名取），不能用 list。
+    """
     breakdown = compute_breakdown(journal)
-    rows: list[list[str]] = []
+    rows: list[dict[str, object]] = []
     for b in breakdown:
         if b["count"] == 0:
             continue  # 跳过 0 基金的空类
         rows.append(
-            [
-                b["display_name"],
-                str(b["count"]),
-                f"{float(b['value']):,.2f}",
-                f"{float(b['weight']) * 100:.2f}%",
-            ]
+            {
+                "class": b["display_name"],
+                "count": b["count"],
+                "value": f"{float(b['value']):,.2f}",
+                "weight": f"{float(b['weight']) * 100:.2f}%",
+            }
         )
     return {
         "columns": [
             {"name": "class", "display_name": "大类资产", "data_type": "text", "width": "auto"},
-            {"name": "count", "display_name": "基金数", "data_type": "number", "width": "auto"},
-            {"name": "value", "display_name": "市值(¥)", "data_type": "number", "width": "auto"},
+            {"name": "count", "display_name": "基金数", "data_type": "text", "width": "auto"},
+            {"name": "value", "display_name": "市值(¥)", "data_type": "text", "width": "auto"},
             {"name": "weight", "display_name": "占比", "data_type": "text", "width": "auto"},
         ],
         "rows": rows,
