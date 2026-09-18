@@ -74,20 +74,28 @@ def _seed(journal: PortfolioJournal) -> None:
 
 class TestBuildPortfolioCard:
     def test_basic_structure(self, journal: PortfolioJournal) -> None:
-        """卡片 = header + 1 个 section（实盘持仓 — 第十九轮合并了 Section 2/3）。
+        """卡片 = header + 2 个 section（实盘持仓 + 大类资产策略 — 第二十轮恢复 Section 2）。
 
-        spec 097 第十九轮（liubo 2026-09-19）：把 Section 2（大类资产策略）+ Section 3
-        （大类资产明细）的策略对比表合并到 Section 1 持仓表，加 target/delta 列。
-        卡片从 3 个 section 简化为 1 个 section。
+        spec 097 演进：
+        - 第十九轮：把 Section 2 + 3 合并到 Section 1 持仓表（加 target/delta 列）
+        - 第二十轮：恢复 Section 2（liubo 反馈："我担心没控制好超类的比例了"）
+          Section 3 不恢复（子类粒度 target/delta 已在持仓表）
 
         现在的元素：
-        - note header "实盘持仓"
-        - div summary（生成时间 / 总市值 / 盈亏 / 周涨跌）
-        - hr
-        - chart（柱状图，带顶部数值标签）
-        - hr
-        - table（11 行 × 5 列：分类 / 市值 / 占比 / 目标 / 偏离）
-        合计：1 note + 1 div + 2 hr + 1 chart + 1 table = 6 个元素 + footer
+        - Section 1（实盘持仓）：
+          - note header "实盘持仓"
+          - div summary
+          - hr
+          - chart（柱状图，带顶部数值标签）
+          - hr
+          - table（11 行 × 5 列：分类 / 市值 / 占比 / 目标 / 偏离）
+        - Section 2（大类资产策略）：
+          - hr（跨 section 分隔）
+          - note header "大类资产策略"
+          - hr
+          - table（5 行 × 4 列：超类 / 目标 / 当前 / 偏离）
+
+        合计：2 note + 1 div + 4 hr + 1 chart + 2 table = 10 个元素 + footer
         """
         _seed(journal)
         card = build_portfolio_card(journal, title="我的实盘")
@@ -100,10 +108,10 @@ class TestBuildPortfolioCard:
         notes = [e for e in card["elements"] if e.get("tag") == "note"]
         hrs = [e for e in card["elements"] if e.get("tag") == "hr"]
         assert len(charts) == 1
-        assert len(tables) == 1
+        assert len(tables) == 2
         assert len(divs) == 1
-        assert len(notes) == 1
-        assert len(hrs) == 2
+        assert len(notes) == 2
+        assert len(hrs) == 4
 
     def test_summary_includes_total_and_return(self, journal: PortfolioJournal) -> None:
         _seed(journal)
@@ -247,12 +255,19 @@ class TestHoldingsTable:
     """
 
     def _get_table(self, journal: PortfolioJournal) -> dict[str, object]:
-        """唯一的持仓表 — 5 列（class / value / weight / target / delta）。"""
+        """Section 1 持仓表 — 5 列（class / value / weight / target / delta）。
+
+        第二十轮：卡片有 2 张表（持仓表 + Section 2 策略表），用列名区分。
+        """
         _seed(journal)
         card = build_portfolio_card(journal)
         tables = [e for e in card["elements"] if e.get("tag") == "table"]
-        assert len(tables) == 1
-        return tables[0]
+        assert len(tables) == 2  # Section 1 持仓表 + Section 2 策略表
+        for t in tables:
+            col_names = [c["name"] for c in t["columns"]]
+            if col_names == ["class", "value", "weight", "target", "delta"]:
+                return t
+        raise AssertionError("Section 1 持仓表未找到（5 列 class/value/weight/target/delta）")
 
     def test_columns_are_five(self, journal: PortfolioJournal) -> None:
         """5 列：分类 / 市值 / 占比 / 目标 / 偏离（不再有单独 # 列）。
@@ -502,17 +517,12 @@ class TestRemovedSections:
             col_names = {c["name"] for c in t["columns"]}
             assert "count" not in col_names
 
-    def test_no_section_2_strategy_header(self, journal: PortfolioJournal) -> None:
-        """第十九轮：旧的 Section 2 标题"大类资产策略"必须不存在（Section 2 已删除）。"""
-        _seed(journal)
-        card = build_portfolio_card(journal)
-        for e in card["elements"]:
-            if e.get("tag") == "note":
-                for elem in e.get("elements", []):
-                    assert elem.get("content") != "大类资产策略"
-
     def test_no_section_3_subclass_header(self, journal: PortfolioJournal) -> None:
-        """第十九轮：旧的 Section 3 标题"大类资产明细"必须不存在（Section 3 已删除）。"""
+        """第十九轮/第二十轮：旧的 Section 3 标题"大类资产明细"必须不存在（Section 3 删除不恢复）。
+
+        第二十轮恢复了 Section 2（大类资产策略），但 Section 3（子类明细）的 target/delta
+        已经在持仓表的每行里了，不需要重复展示。
+        """
         _seed(journal)
         card = build_portfolio_card(journal)
         for e in card["elements"]:
@@ -520,23 +530,200 @@ class TestRemovedSections:
                 for elem in e.get("elements", []):
                     assert elem.get("content") != "大类资产明细"
 
-    def test_no_strategy_or_subclass_table(self, journal: PortfolioJournal) -> None:
-        """第十九轮：只有 1 张表（持仓表），不应该有 4 列策略对比表（category/target/current/delta）
-        也不应该有 4 列子类对比表（subclass/target/current/delta）。"""
+    def test_no_subclass_table(self, journal: PortfolioJournal) -> None:
+        """第十九轮/第二十轮：不应该有 4 列子类对比表（subclass/target/current/delta）— 信息已在持仓表。
+
+        第二十轮允许 4 列策略对比表（category/target/current/delta）— 它是超类粒度，跟
+        持仓表（子类粒度）是不同聚合层级，用户需要看超类比例监控。
+        """
         _seed(journal)
         card = build_portfolio_card(journal)
         tables = [e for e in card["elements"] if e.get("tag") == "table"]
-        assert len(tables) == 1
         for t in tables:
             col_names = {c["name"] for c in t["columns"]}
-            assert "category" not in col_names
             assert "subclass" not in col_names
 
 
-class TestOrdering:
-    """元素顺序（spec 097 第十九轮 — 1 个 section 整合）。
+class TestStrategySection:
+    """spec 097 第二十轮：恢复 Section 2 大类资产策略（liubo 反馈要监控超类比例）。
 
-    元素序列：note (section header) + div (summary) + hr + chart + hr + table = 6 个元素。
+    之前第十八轮设计的 Section 2（5 行 × 4 列策略对比表），第十九轮被合并到持仓表，
+    第二十轮恢复 — 用户担心超类（股票/REITs/债券/商品/现金）整体比例失控。
+
+    - 表格：5 行 × 4 列
+      - 4 投资类（股票/REITs/债券/商品）：target = internal_weight × (1 − 当前现金占比)
+      - 现金：target = "[15%, 50%]"，delta = "区间内/低于下限/高于上限"
+    - 跟持仓表的区别：
+      - 持仓表：11 行子类粒度，target = subclass × super × (1 - 现金%)
+      - Section 2：5 行超类粒度，target = super 内部权重 × (1 - 现金%)
+      - 两者不严格相等但反映同一策略意图（用户在不同粒度看）
+    """
+
+    def _get_strategy_table(self, journal: PortfolioJournal) -> dict[str, object]:
+        """Section 2 策略表 — 4 列（category / target / current / delta）。"""
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        tables = [e for e in card["elements"] if e.get("tag") == "table"]
+        for t in tables:
+            col_names = [c["name"] for c in t["columns"]]
+            if col_names == ["category", "target", "current", "delta"]:
+                return t
+        raise AssertionError("Section 2 策略表未找到（4 列 category/target/current/delta）")
+
+    def test_section_2_header_present(self, journal: PortfolioJournal) -> None:
+        """第二十轮：Section 2 标题"大类资产策略"必须存在（liubo 反馈要监控超类比例）。"""
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        found = False
+        for e in card["elements"]:
+            if e.get("tag") == "note":
+                for elem in e.get("elements", []):
+                    if elem.get("content") == "大类资产策略":
+                        found = True
+        assert found, "Section 2 标题「大类资产策略」必须存在"
+
+    def test_strategy_table_has_5_rows(self, journal: PortfolioJournal) -> None:
+        """策略表 5 行（4 投资类 + 1 现金）。"""
+        spec = self._get_strategy_table(journal)
+        assert len(spec["rows"]) == 5
+
+    def test_strategy_table_columns_are_four(self, journal: PortfolioJournal) -> None:
+        """策略表 4 列：超类 / 目标 / 当前 / 偏离。"""
+        spec = self._get_strategy_table(journal)
+        col_names = [c["name"] for c in spec["columns"]]
+        assert col_names == ["category", "target", "current", "delta"]
+
+    def test_strategy_table_all_columns_text_and_auto(self, journal: PortfolioJournal) -> None:
+        """策略表所有列 text + width=auto（跟持仓表一致）。"""
+        spec = self._get_strategy_table(journal)
+        for col in spec["columns"]:
+            assert col["data_type"] == "text"
+            assert col["width"] == "auto"
+
+    def test_strategy_table_rows_are_dict(self, journal: PortfolioJournal) -> None:
+        """Feishu API 强制 row 是 dict。"""
+        spec = self._get_strategy_table(journal)
+        for row in spec["rows"]:
+            assert isinstance(row, dict)
+            assert set(row.keys()) == {"category", "target", "current", "delta"}
+
+    def test_strategy_table_rows_in_default_order(self, journal: PortfolioJournal) -> None:
+        """策略表按 SuperCategory 枚举顺序排：股票→债券→REITs→商品→现金。"""
+        from global_allocation.portfolio.strategy import (
+            SUPER_CATEGORY_DISPLAY_NAME,
+            SuperCategory,
+        )
+
+        spec = self._get_strategy_table(journal)
+        actual_order = [row["category"] for row in spec["rows"]]
+        expected_order = [SUPER_CATEGORY_DISPLAY_NAME[c] for c in SuperCategory]
+        assert actual_order == expected_order
+
+    def test_strategy_table_investment_target_uses_percent(self, journal: PortfolioJournal) -> None:
+        """投资类 4 行的 target 列以 % 结尾（动态公式计算的结果）。
+
+        第十六轮变更：target 不再是固定百分比，而是内部权重 × (1 − 当前现金%)。
+        测试只检查格式（以 % 结尾），具体值由 test_investment_target_uses_dynamic_formula 验证。
+        """
+        spec = self._get_strategy_table(journal)
+        for row in spec["rows"][:4]:
+            assert row["target"].endswith("%")
+            assert "%" in row["target"]
+
+    def test_strategy_table_investment_target_uses_dynamic_formula(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """投资类 target 列严格遵循公式 target = 内部权重 × (1 − 当前现金占比)。
+
+        这条测试是第十六轮新增 — 验证动态公式（不是固定百分比）。
+        """
+        from global_allocation.portfolio.strategy import (
+            DEFAULT_STRATEGY,
+            SUPER_CATEGORY_DISPLAY_NAME,
+            SuperCategory,
+            compute_actual_target,
+        )
+
+        spec = self._get_strategy_table(journal)
+        # 现金行（rows[4]）的当前列 → 当前现金占比
+        current_cash_str = spec["rows"][4]["current"]
+        current_cash_pct = float(current_cash_str.rstrip("%"))
+        current_cash = Decimal(str(current_cash_pct / 100))  # type: ignore[arg-type]
+
+        # 反向查表：display_name → SuperCategory
+        name_to_cat = {v: k for k, v in SUPER_CATEGORY_DISPLAY_NAME.items()}
+
+        # 遍历前 4 行（投资类），每行按 display_name 找 category → 算 expected target
+        for row in spec["rows"][:4]:
+            cat_name = row["category"]
+            cat = name_to_cat[cat_name]
+            assert cat != SuperCategory.CASH  # 前 4 行都是投资类
+            expected_target = compute_actual_target(DEFAULT_STRATEGY, cat, current_cash)
+            assert expected_target is not None
+            expected_str = f"{float(expected_target) * 100:.0f}%"
+            assert row["target"] == expected_str
+
+    def test_strategy_table_cash_target_is_range(self, journal: PortfolioJournal) -> None:
+        """现金行的 target 列是区间字符串（不是 %）。
+
+        第十六轮：从 [20%, 50%] 放宽到 [15%, 50%]。
+        """
+        spec = self._get_strategy_table(journal)
+        cash_row = spec["rows"][4]  # 第 5 行是现金
+        assert cash_row["target"] == "[15%, 50%]"
+
+    def test_strategy_table_current_column_uses_percent(self, journal: PortfolioJournal) -> None:
+        """当前列全部 5 行以 % 结尾（1 位小数）。"""
+        spec = self._get_strategy_table(journal)
+        for row in spec["rows"]:
+            assert row["current"].endswith("%")
+
+    def test_strategy_table_investment_delta_uses_pp_unit(self, journal: PortfolioJournal) -> None:
+        """投资类 4 行的偏离列用 pp (percentage points) 后缀。
+
+        例：股票目标 X% / 当前 Y% → 偏离 "+/-Z.Zpp"
+        """
+        spec = self._get_strategy_table(journal)
+        for row in spec["rows"][:4]:  # 前 4 行是投资类
+            delta = row["delta"]
+            assert delta.endswith("pp")
+            assert not delta.endswith("%")
+
+    def test_strategy_table_cash_delta_is_status_text(self, journal: PortfolioJournal) -> None:
+        """现金行的偏离列是状态文本（区间内/低于下限/高于上限），不是 pp。
+
+        第十六轮不变：现金走状态文本（区间策略本质）。
+        """
+        spec = self._get_strategy_table(journal)
+        cash_row = spec["rows"][4]  # 第 5 行是现金
+        delta = cash_row["delta"]
+        assert delta in {"区间内", "低于下限", "高于上限"}
+        assert not delta.endswith("pp")
+        assert not delta.endswith("%")
+
+    def test_strategy_table_investment_delta_sign_matches_current_vs_target(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """投资类 4 行的偏离符号 = 当前 - 目标（正 = 超配，负 = 低配）。
+
+        现金行的 delta 是状态文本，跳过符号检查。
+        """
+        spec = self._get_strategy_table(journal)
+        for row in spec["rows"][:4]:  # 前 4 行是投资类
+            target_pct = float(row["target"].rstrip("%"))
+            current_pct = float(row["current"].rstrip("%"))
+            expected_sign = "+" if current_pct >= target_pct else "-"
+            assert row["delta"].startswith(expected_sign)
+
+
+class TestOrdering:
+    """元素顺序（spec 097 第二十轮 — 2 个 section：持仓 + 超类策略）。
+
+    Section 1（实盘持仓）：note + div + chart + table
+    Section 2（大类资产策略）：note + table
+    跨 section 分隔：hr
+
+    元素序列（去掉 hr 后）：note + div + chart + table + note + table
     """
 
     def test_order(self, journal: PortfolioJournal) -> None:
@@ -548,18 +735,24 @@ class TestOrdering:
             if e.get("tag") in {"note", "div", "chart", "table"}
         ]
         assert tags == [
-            "note",  # section header "实盘持仓"
-            "div",   # summary
-            "chart", # 柱状图
-            "table", # 持仓聚合表（含 target/delta，第十九轮合并了 Section 2/3）
+            "note",  # Section 1 header "实盘持仓"
+            "div",   # Section 1 summary
+            "chart", # Section 1 柱状图
+            "table", # Section 1 持仓表（5 列：含 target/delta）
+            "note",  # Section 2 header "大类资产策略"（第二十轮恢复）
+            "table", # Section 2 策略对比表（5 行 × 4 列）
         ]
 
     def test_hr_count_and_position(self, journal: PortfolioJournal) -> None:
-        """第十九轮：只剩 2 个 hr（柱状图前后各一个），没有跨 section 的 hr。"""
+        """第二十轮：4 个 hr（Section 1 柱状图前后 + 跨 section 分隔 + Section 2 表格前）。
+
+        之前第十九轮 2 个 hr（删了 Section 2/3 后只剩 2 个 intra-section hr）
+        第二十轮恢复 Section 2 后多了一个跨 section 的 hr + Section 2 表格前 hr
+        """
         _seed(journal)
         card = build_portfolio_card(journal)
         hrs = [e for e in card["elements"] if e.get("tag") == "hr"]
-        assert len(hrs) == 2
+        assert len(hrs) == 4
 
     def test_first_element_is_section_header_note(self, journal: PortfolioJournal) -> None:
         """第一个元素是 note 标签（section header），内容是"实盘持仓"。
@@ -576,3 +769,24 @@ class TestOrdering:
             elem.get("tag") == "plain_text" and elem.get("content") == "实盘持仓"
             for elem in first["elements"]
         )
+
+    def test_section_2_note_header_after_hr(self, journal: PortfolioJournal) -> None:
+        """Section 2 开头：hr 分隔 + note "大类资产策略"。
+
+        第二十轮恢复：跟 Section 1 用 hr 隔开，视觉上明确区分。
+        """
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        elements = card["elements"]
+        # 找到 "大类资产策略" note 的索引
+        section_2_idx = None
+        for idx, e in enumerate(elements):
+            if e.get("tag") == "note" and any(
+                elem.get("content") == "大类资产策略"
+                for elem in e.get("elements", [])
+            ):
+                section_2_idx = idx
+                break
+        assert section_2_idx is not None
+        # 它前面必须是 hr（跨 section 分隔）
+        assert elements[section_2_idx - 1].get("tag") == "hr"

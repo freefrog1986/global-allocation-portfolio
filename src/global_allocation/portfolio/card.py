@@ -23,8 +23,10 @@ from global_allocation.portfolio.breakdown import SwensenClass, compute_breakdow
 from global_allocation.portfolio.journal import PortfolioJournal
 from global_allocation.portfolio.strategy import (
     DEFAULT_STRATEGY,
+    SUPER_CATEGORY_DISPLAY_NAME,
     AllocationStrategy,
     SuperCategory,
+    compute_actual_target,
     compute_subclass_actual_target,
     compute_super_category_breakdown,
 )
@@ -73,6 +75,92 @@ def _build_summary(journal: PortfolioJournal, title: str) -> str:
         f"**上周涨跌**：{week_str}  \n"
         f"**累计涨跌**：{cumulative_str}"
     )
+
+
+def _build_strategy_section(
+    journal: PortfolioJournal,
+    strategy: AllocationStrategy = DEFAULT_STRATEGY,
+) -> list[dict[str, object]]:
+    """Section 2: 大类资产策略 — 5 行 × 4 列超类对比表（股票/REITs/债券/商品/现金）。
+
+    spec 097 第二十轮（liubo 2026-09-19）：第十九轮删了 Section 2/3 后用户反馈
+    "我还是要看一下超类的，因为我担心没控制好这个超类的比例了" — 重新加回来。
+
+    跟第十九轮之前对比：
+    - 之前 Section 2 + Section 3 都展示 target/current/delta
+    - 第十九轮合并 Section 2 + 3 到 Section 1（持仓表加 target/delta 列）
+    - 第二十轮恢复 Section 2（但 Section 3 仍然删除 — 子类粒度的 target/delta 已在持仓表）
+
+    跟持仓表的"区别"在哪（不重复在哪）：
+    - 持仓表（Section 1）：子类粒度，11 行（A股/港股/.../现金）
+      target = subclass × super × (1 - 现金%)
+    - Section 2：超类粒度，5 行（股票/REITs/债券/商品/现金）
+      target = super 内部权重 × (1 - 现金%)
+    - 两者的 target 不严格相等（持仓表按子类累加 vs Section 2 直接按超类公式）
+      但都在 1% 误差内，反映同一意图
+    - 用户担心的"超类比例失控"主要看 Section 2（一眼看出股票 49%、REITs 10.5%）
+
+    表格 5 行 × 4 列：
+    - 4 投资类（股票/REITs/债券/商品）：target = internal_weight × (1 − 当前现金占比)
+      delta = current − target（pp 后缀）
+    - 1 现金：target = "[15%, 50]%"，delta = "区间内/低于下限/高于上限"
+
+    为什么 target 是动态计算：
+    - 现金区间 [15%, 50%] 不固定 → 投资部分 = 100% − 现金%（变量）
+    - 投资部分按内部权重分配（股票 70% / REITs 15% / 债券 10% / 商品 5%）
+    - 现金越多，投资部分越少 → 各投资类实际目标越小
+    - 现金越少，投资部分越多 → 各投资类实际目标越大
+    """
+    breakdown = compute_breakdown(journal)
+    current_by_super = compute_super_category_breakdown(breakdown)
+    cash_range = strategy.cash_range
+    current_cash = current_by_super[SuperCategory.CASH]
+
+    rows: list[dict[str, object]] = []
+    # 按 SuperCategory 枚举顺序遍历（EQUITY → BOND → REIT → COMMODITY → CASH）
+    for cat in SuperCategory:
+        current_pct = float(current_by_super[cat]) * 100
+        current_str = f"{current_pct:.1f}%"
+
+        if cat == SuperCategory.CASH:
+            # 现金走区间策略：target 列显示区间，delta 列显示状态文本
+            target_str = cash_range.display_range
+            delta_str = cash_range.status(current_by_super[cat])
+        else:
+            # 投资类走内部权重：target = 内部权重 × (1 − 当前现金占比)
+            # 动态公式 — 现金变时目标自动缩放
+            actual_target = compute_actual_target(strategy, cat, current_cash)
+            assert actual_target is not None  # 4 投资类都有权重
+            target_pct = float(actual_target) * 100
+            target_str = f"{target_pct:.0f}%"
+            delta_pct = current_pct - target_pct
+            sign = "+" if delta_pct >= 0 else ""
+            delta_str = f"{sign}{delta_pct:.1f}pp"
+
+        rows.append(
+            {
+                "category": SUPER_CATEGORY_DISPLAY_NAME[cat],
+                "target": target_str,
+                "current": current_str,
+                "delta": delta_str,
+            }
+        )
+
+    table: dict[str, object] = {
+        "columns": [
+            {"name": "category", "display_name": "超类", "data_type": "text", "width": "auto"},
+            {"name": "target", "display_name": "目标", "data_type": "text", "width": "auto"},
+            {"name": "current", "display_name": "当前", "data_type": "text", "width": "auto"},
+            {"name": "delta", "display_name": "偏离", "data_type": "text", "width": "auto"},
+        ],
+        "rows": rows,
+    }
+
+    return [
+        {"tag": "note", "elements": [{"tag": "plain_text", "content": "大类资产策略"}]},
+        {"tag": "hr"},
+        {"tag": "table", **table},
+    ]
 
 
 def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
@@ -224,27 +312,33 @@ def build_portfolio_card(
 ) -> dict[str, object]:
     """构造实盘账本的飞书交互卡片。
 
-    卡片结构（spec 097 第十九轮 — 1 个 section 整合持仓 + 策略对比）：
+    卡片结构（spec 097 第二十轮 — 2 个 section：持仓 + 超类策略）：
     - header.title: "实盘周报"
-    - 实盘持仓 section（卡片唯一 section）：
-      - note header "实盘持仓"（浅灰背景块，作为 section 标题）
+    - Section 1（实盘持仓）：
+      - note header "实盘持仓"
       - summary div（生成时间 / 总市值 / 总成本 / 浮动盈亏 / 周涨跌 / 累计涨跌）
       - hr 分隔
       - 大类资产柱状图（vertical bar，11 个子类，柱子顶部带数值标签 — 第十九轮加）
       - hr 分隔
-      - 持仓聚合表（11 行 × 5 列：分类 / 市值 / 占比 / 目标 / 偏离）
+      - 持仓聚合表（11 行 × 5 列：分类 / 市值 / 占比 / 目标 / 偏离 — 第十九轮扩列）
+    - Section 2（大类资产策略 — 第二十轮恢复）：
+      - hr 分隔（跨 section）
+      - note header "大类资产策略"
+      - hr 分隔
+      - 策略对比表（5 行 × 4 列：超类 / 目标 / 当前 / 偏离）
+        - 4 投资类：target = 内部权重 × (1 − 当前现金占比)（动态）
+        - 现金：target = "[15%, 50%]"，delta = "区间内/低于下限/高于上限"
 
-    第十九轮（liubo 2026-09-19）：
-    - 把 Section 2（大类资产策略）+ Section 3（大类资产明细）的策略对比表
-      合并到 Section 1 持仓表（加 目标 / 偏离 列）
-    - liubo 反馈："第一部分持仓里边其实每一个大类的占比都有，干脆就把
-      策略里边的目标和偏离放在这张表里了，然后那上边后边就不用再重复"
-    - 结果：卡片从 3 个 section 简化为 1 个 section，信息密度不变（target/delta
-      不再重复展示两次）
-    - 柱状图加 data labels（label.visible + position="top"）— 之前默认不显示
-      数值，liubo 反馈"股票和港股的上边那个数字怎么没在上面了，希望它在上面"
+    第十九轮（liubo 2026-09-19）：合并 Section 2 + 3 到 Section 1 持仓表（加 target/delta）
+    第二十轮（liubo 2026-09-19）：恢复 Section 2，保留 Section 3 删除状态
+    - liubo 反馈："我还是要看一下超类的，因为我担心没控制好这个超类的比例了"
+    - 用户担心超类（股票/REITs/债券/商品）的整体比例 — Section 2 给的是超类粒度
+      的当前/目标/偏离，跟持仓表（11 行子类粒度）是不同聚合层级
+    - 持仓表的 11 行 mental sum ≈ Section 2 的 5 行（按超类聚合），但 Section 2
+      是独立的视图，方便用户一眼看出"股票 49% / REITs 10.5% / 债券 7% / 商品 3.5%"
+    - Section 3 不恢复：子类粒度的 target/delta 已经在持仓表的每行里有
 
-    元素总数：1 note + 1 div + 2 hr + 1 chart + 1 table = 6 + footer。
+    元素总数：2 note + 1 div + 3 hr + 1 chart + 2 table = 9 + footer。
     """
     actual_title = title or "实盘周报"
     holdings = journal.compute_holdings()
@@ -260,7 +354,7 @@ def build_portfolio_card(
             },
         },
         "elements": [
-            # 实盘持仓 section（第十九轮：卡片唯一 section，note 仍作浅灰标题块）
+            # Section 1: 实盘持仓
             {
                 "tag": "note",
                 "elements": [
@@ -287,6 +381,9 @@ def build_portfolio_card(
                 "tag": "table",
                 **_build_holdings_table(journal),
             },
+            # Section 2: 大类资产策略（第二十轮恢复 — 用户担心超类比例失控）
+            {"tag": "hr"},
+            *_build_strategy_section(journal),
         ],
         "footer": {
             "tag": "note",
