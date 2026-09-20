@@ -772,8 +772,18 @@ def _collect_region_valuation_data(
     Returns:
         _RegionValuationData，含 4 指标 + 综合分行、strategy_note、over_target、per-fund 行
     """
+    # spec 098.5：估值指标改用"最新可用"日期，而不是强制今天 —
+    # 工作日 17 点后/周末/节假日，今天没数据很正常，回退到 DB 里最新一天的
+    # 数据，per-fund 表同理（list_latest_fund_valuations_for_codes）。
     today = date.today()
-    indicators = journal.db.list_valuation_indicators_for_date(today)
+    today_indicators = journal.db.list_valuation_indicators_for_date(today)
+    if today_indicators:
+        indicators = today_indicators
+        valuation_date = today
+    else:
+        indicators = journal.db.list_latest_valuation_indicators()
+        # 取最新日期（最新一批 indicators 的 record_date 都一样）
+        valuation_date = indicators[0].record_date if indicators else today
     region_indicators = [i for i in indicators if i.indicator_code in set(codes)]
 
     indicator_rows: list[dict[str, object]] = []
