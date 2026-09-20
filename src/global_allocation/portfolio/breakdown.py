@@ -111,7 +111,7 @@ SUBCLASS_BY_CODE: dict[str, SwensenClass] = {
     "457001": SwensenClass.FOREIGN_DM_EQUITY,  # 国富亚洲机会（业绩比较基准：MSCI AC Asia ex Japan 净总收益）
     # 新兴市场股票 (1)
     "378006": SwensenClass.EM_EQUITY,  # 摩根全球新兴市场（业绩比较基准：MSCI Emerging Markets 总回报）
-    # REITs (2)
+    # REITs (2) — lixinger 无指数估值数据，per-fund 表显示"数据缺失"
     "028277": SwensenClass.CN_REIT,  # 华夏中证REITs全收益
     "160140": SwensenClass.US_REIT,  # 南方道琼斯美国精选REIT
     # 国内利率债 (7) - 含原国内信用债 4 只（第十七轮合并，统计口径不变）
