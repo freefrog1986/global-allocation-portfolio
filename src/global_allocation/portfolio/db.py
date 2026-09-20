@@ -17,6 +17,7 @@ from typing import Any
 
 from global_allocation.portfolio.models import (
     Fund,
+    FundValuation,
     Transaction,
     ValuationIndicator,
     ValuationIndicatorCode,
@@ -97,6 +98,28 @@ class PortfolioDB:
 
             CREATE INDEX IF NOT EXISTS idx_val_date
                 ON valuation_indicators(record_date);
+
+            -- spec 098 第二十七轮：每只 A 股基金的估值快照（按基金，不是按指数）
+            -- 一个 fund_code 可以有多条记录（不同日期覆盖式 upsert）
+            CREATE TABLE IF NOT EXISTS fund_valuations (
+                id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+                record_date                 TEXT NOT NULL,                  -- YYYY-MM-DD
+                fund_code                   TEXT NOT NULL,                  -- 基金代码（如 014532）
+                index_code                  TEXT NOT NULL,                  -- 跟踪的指数代码（如 930050 中证A50）
+                pe_ttm                      TEXT,                          -- PE-TTM 实数（如 15.7851）；空 = 数据缺失
+                pe_percentile               TEXT,                          -- 10 年分位（fraction：0.4638 = 46.38%）
+                dividend_yield              TEXT,                          -- 股息率（fraction：0.0251 = 2.51%）
+                pe_percentile_dy_weighted   TEXT,                          -- 股息率加权 PE 分位（红利低波手动填，来自银行螺丝钉）
+                roe_latest                  TEXT,                          -- 最新报告期 ROE（fraction：0.0834 = 8.34%）
+                roe_year_ago                TEXT,                          -- 去年同期 ROE（同口径）
+                source                      TEXT NOT NULL,                 -- "lixinger_csv:..." 来源标识
+                UNIQUE (record_date, fund_code)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_fund_val_fund
+                ON fund_valuations(fund_code);
+            CREATE INDEX IF NOT EXISTS idx_fund_val_date
+                ON fund_valuations(record_date);
             """
         )
         self._conn.commit()
@@ -361,6 +384,115 @@ class PortfolioDB:
         )
         return [_row_to_valuation_indicator(r) for r in cur.fetchall()]
 
+    # ─── fund_valuations（spec 098 第二十七轮）───
+
+    def upsert_fund_valuation(self, fv: FundValuation) -> int:
+        """插入或更新单只基金的估值快照（按 record_date + fund_code 去重）。
+
+        同一天同一基金多次导入时只保留最新一次（ON CONFLICT 覆盖）。
+        返回 rowid。
+        """
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO fund_valuations (
+                record_date, fund_code, index_code,
+                pe_ttm, pe_percentile, dividend_yield,
+                pe_percentile_dy_weighted, roe_latest, roe_year_ago,
+                source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(record_date, fund_code) DO UPDATE SET
+                index_code=excluded.index_code,
+                pe_ttm=excluded.pe_ttm,
+                pe_percentile=excluded.pe_percentile,
+                dividend_yield=excluded.dividend_yield,
+                pe_percentile_dy_weighted=excluded.pe_percentile_dy_weighted,
+                roe_latest=excluded.roe_latest,
+                roe_year_ago=excluded.roe_year_ago,
+                source=excluded.source
+            """,
+            (
+                fv.record_date.isoformat(),
+                fv.fund_code,
+                fv.index_code,
+                str(fv.pe_ttm) if fv.pe_ttm is not None else None,
+                str(fv.pe_percentile) if fv.pe_percentile is not None else None,
+                str(fv.dividend_yield) if fv.dividend_yield is not None else None,
+                str(fv.pe_percentile_dy_weighted) if fv.pe_percentile_dy_weighted is not None else None,
+                str(fv.roe_latest) if fv.roe_latest is not None else None,
+                str(fv.roe_year_ago) if fv.roe_year_ago is not None else None,
+                fv.source,
+            ),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)  # type: ignore[arg-type]
+
+    def get_fund_valuation(
+        self,
+        record_date: date,
+        fund_code: str,
+    ) -> FundValuation | None:
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            SELECT * FROM fund_valuations
+            WHERE record_date = ? AND fund_code = ?
+            """,
+            (record_date.isoformat(), fund_code),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return _row_to_fund_valuation(row)
+
+    def list_fund_valuations_for_date(
+        self,
+        record_date: date,
+    ) -> list[FundValuation]:
+        """取某一天的全部基金估值（卡片展示用：用户持有的所有 A 股基金）。"""
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            SELECT * FROM fund_valuations
+            WHERE record_date = ?
+            ORDER BY fund_code
+            """,
+            (record_date.isoformat(),),
+        )
+        return [_row_to_fund_valuation(r) for r in cur.fetchall()]
+
+    def list_latest_fund_valuations_for_codes(
+        self,
+        fund_codes: list[str],
+    ) -> dict[str, FundValuation]:
+        """取每只基金最新一天的估值（卡片用：按 holdings 里的 fund_code 找最新数据）。
+
+        用 LEFT JOIN + 找每只 fund_code 的 MAX(record_date) — 比循环 N 次 query 快。
+        返回 fund_code → FundValuation 映射（缺失的 fund 不在结果里）。
+
+        实现：先用子查询挑出每只基金的最新日期，再 LEFT JOIN fund_valuations。
+        """
+        if not fund_codes:
+            return {}
+        cur = self._conn.cursor()
+        placeholders = ",".join("?" for _ in fund_codes)
+        cur.execute(
+            f"""
+            SELECT fv.* FROM fund_valuations fv
+            INNER JOIN (
+                SELECT fund_code, MAX(record_date) AS max_date
+                FROM fund_valuations
+                WHERE fund_code IN ({placeholders})
+                GROUP BY fund_code
+            ) latest
+                ON fv.fund_code = latest.fund_code
+                AND fv.record_date = latest.max_date
+            WHERE fv.fund_code IN ({placeholders})
+            """,
+            (*fund_codes, *fund_codes),
+        )
+        return {r["fund_code"]: _row_to_fund_valuation(r) for r in cur.fetchall()}
+
 
 # ─── helpers ───
 
@@ -414,6 +546,26 @@ def _row_to_valuation_indicator(row: sqlite3.Row) -> ValuationIndicator:
         record_date=date.fromisoformat(row["record_date"]),
         indicator_code=ValuationIndicatorCode(row["indicator_code"]),
         value=Decimal(row["value"]),
+        source=row["source"],
+    )
+
+
+def _row_to_fund_valuation(row: sqlite3.Row) -> FundValuation:
+    """SQLite row → FundValuation。空值（None / 空字符串）→ Decimal 字段 None。"""
+    def _d(col: str) -> Decimal | None:
+        v = row[col]
+        return Decimal(v) if v else None
+
+    return FundValuation(
+        record_date=date.fromisoformat(row["record_date"]),
+        fund_code=row["fund_code"],
+        index_code=row["index_code"],
+        pe_ttm=_d("pe_ttm"),
+        pe_percentile=_d("pe_percentile"),
+        dividend_yield=_d("dividend_yield"),
+        pe_percentile_dy_weighted=_d("pe_percentile_dy_weighted"),
+        roe_latest=_d("roe_latest"),
+        roe_year_ago=_d("roe_year_ago"),
         source=row["source"],
     )
 

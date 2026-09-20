@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from global_allocation.models import AssetClass, Currency, DataSource
 from global_allocation.portfolio.models import (
     Fund,
+    FundValuation,
     Holding,
     Transaction,
     TransactionSide,
@@ -211,21 +212,38 @@ class TestTransactionSide:
 
 
 class TestValuationIndicatorCode:
-    """spec 098：估值指标代码枚举。
+    """spec 098 + 098.2：估值指标代码枚举。
 
     关键设计：str-mixin（继承 str），JSON 序列化直接用 .value。
-    4 个指标对应 A 股估值的 4 个维度（股债利差 / PE 分位 / 巴菲特 / 股息率）。
+    12 个指标对应 3 个大类的估值（A 股 4 + 港股 4 + 美股 4）。
+    DB UNIQUE (record_date, indicator_code) 索引依赖 .value 字符串值，不能随便改。
+
+    A 股 4 维度：股债利差 / PE 分位 / 巴菲特 / 股息率（spec 098 第一期）
+    港股 4 维度：PE 分位 / 股息率 / AH 溢价 / 港股巴菲特（spec 098.2 — liubo 2026-09-19 方案 A）
+    美股 4 维度：PE 分位 / 股息率 / 美股巴菲特 / 美股股债利差（spec 098.3 — liubo 2026-09-20 拍板）
     """
 
-    def test_has_four_codes(self) -> None:
-        assert len(ValuationIndicatorCode) == 4
+    def test_has_twelve_codes(self) -> None:
+        """4 个 A 股 + 4 个港股 + 4 个美股 = 12 个。"""
+        assert len(ValuationIndicatorCode) == 12
 
     def test_specific_values(self) -> None:
-        """spec 098 写死的 4 个 code — DB UNIQUE 索引依赖这些字符串。"""
+        """spec 098 + 098.2 + 098.3 写死的 12 个 code — DB UNIQUE 索引依赖这些字符串。"""
+        # A 股 4
         assert ValuationIndicatorCode.EQUITY_RISK_PREMIUM.value == "equity_risk_premium"
         assert ValuationIndicatorCode.PE_PERCENTILE.value == "pe_percentile"
         assert ValuationIndicatorCode.BUFFETT_INDICATOR.value == "buffett_indicator"
         assert ValuationIndicatorCode.DIVIDEND_YIELD.value == "dividend_yield"
+        # 港股 4
+        assert ValuationIndicatorCode.HK_PE_PERCENTILE.value == "hk_pe_percentile"
+        assert ValuationIndicatorCode.HK_DIVIDEND_YIELD.value == "hk_dividend_yield"
+        assert ValuationIndicatorCode.HK_AH_PREMIUM.value == "hk_ah_premium"
+        assert ValuationIndicatorCode.HK_BUFFETT_INDICATOR.value == "hk_buffett_indicator"
+        # 美股 4
+        assert ValuationIndicatorCode.US_PE_PERCENTILE.value == "us_pe_percentile"
+        assert ValuationIndicatorCode.US_DIVIDEND_YIELD.value == "us_dividend_yield"
+        assert ValuationIndicatorCode.US_BUFFETT_INDICATOR.value == "us_buffett_indicator"
+        assert ValuationIndicatorCode.US_EQUITY_RISK_PREMIUM.value == "us_equity_risk_premium"
 
     def test_is_str_mixin(self) -> None:
         """继承 str，所以可以直接当字符串用（序列化 / 比较）。"""
@@ -300,4 +318,102 @@ class TestValuationIndicator:
                 value=Decimal("0.05"),
                 source="x",
                 unknown_field="bad",  # type: ignore[call-arg]
+            )
+
+
+class TestFundValuation:
+    """每只 A 股基金的估值快照（spec 098 第二十七轮）。"""
+
+    def test_basic(self) -> None:
+        fv = FundValuation(
+            record_date=date(2026, 9, 19),
+            fund_code="014532",
+            index_code="930050",
+            pe_ttm=Decimal("15.7851"),
+            pe_percentile=Decimal("0.1626"),
+            dividend_yield=Decimal("0.0298"),
+            source="lixinger_csv:foo.csv",
+        )
+        assert fv.fund_code == "014532"
+        assert fv.index_code == "930050"
+        assert fv.pe_ttm == Decimal("15.7851")
+        # 新增字段默认值
+        assert fv.pe_percentile_dy_weighted is None
+        assert fv.roe_latest is None
+        assert fv.roe_year_ago is None
+
+    def test_with_dividend_yielded_pe_pct(self) -> None:
+        """红利低波带股息率加权 PE 分位（银行螺丝钉手动填）。"""
+        fv = FundValuation(
+            record_date=date(2026, 9, 19),
+            fund_code="008114",
+            index_code="930955",
+            pe_ttm=Decimal("8.85"),
+            pe_percentile=Decimal("0.8180"),  # 普通 PE 分位 81.8%
+            dividend_yield=Decimal("0.0448"),
+            pe_percentile_dy_weighted=Decimal("0.20"),  # 股息率加权 PE 分位 20%
+            source="lixinger_csv:foo.csv + 银行螺丝钉",
+        )
+        assert fv.pe_percentile_dy_weighted == Decimal("0.20")
+
+    def test_with_growth_roe(self) -> None:
+        """成长股带 ROE 最新 + 去年（用于算 ROE 同比）。"""
+        fv = FundValuation(
+            record_date=date(2026, 9, 19),
+            fund_code="013310",
+            index_code="931643",
+            pe_ttm=Decimal("51.20"),
+            pe_percentile=Decimal("0.65"),
+            dividend_yield=Decimal("0.006"),
+            roe_latest=Decimal("0.0834"),  # 2026Q2
+            roe_year_ago=Decimal("0.0543"),  # 2025Q2
+            source="lixinger_csv:foo.csv",
+        )
+        assert fv.roe_latest == Decimal("0.0834")
+        assert fv.roe_year_ago == Decimal("0.0543")
+
+    def test_optional_fields_default_none(self) -> None:
+        """所有可选字段默认 None。"""
+        fv = FundValuation(
+            record_date=date(2026, 9, 19),
+            fund_code="008114",
+            index_code="930955",
+            pe_ttm=None,
+            pe_percentile=None,
+            dividend_yield=None,
+            source="manual",
+        )
+        assert fv.pe_ttm is None
+        assert fv.pe_percentile is None
+        assert fv.dividend_yield is None
+        assert fv.pe_percentile_dy_weighted is None
+        assert fv.roe_latest is None
+        assert fv.roe_year_ago is None
+
+    def test_immutable(self) -> None:
+        from dataclasses import FrozenInstanceError
+
+        fv = FundValuation(
+            record_date=date(2026, 9, 19),
+            fund_code="014532",
+            index_code="930050",
+            pe_ttm=Decimal("15.78"),
+            pe_percentile=Decimal("0.16"),
+            dividend_yield=Decimal("0.03"),
+            source="x",
+        )
+        with pytest.raises((FrozenInstanceError, ValidationError)):
+            fv.fund_code = "999999"  # type: ignore[misc]
+
+    def test_extra_fields_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            FundValuation(
+                record_date=date(2026, 9, 19),
+                fund_code="014532",
+                index_code="930050",
+                pe_ttm=Decimal("15.78"),
+                pe_percentile=Decimal("0.16"),
+                dividend_yield=Decimal("0.03"),
+                source="x",
+                unknown="bad",  # type: ignore[call-arg]
             )

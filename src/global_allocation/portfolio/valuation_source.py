@@ -60,6 +60,50 @@ class ValuationSource(Protocol):
         """中国最近一期 GDP（单位：元 CNY，季度数据）。"""
         ...
 
+    # ─── 港股估值指标（spec 098.2）───
+
+    def get_hk_ah_premium(self, on: date) -> Decimal | None:
+        """AH 溢价（恒生沪深港通 AH 溢价指数 HSAHP / 100）。
+
+        返回 ratio（1.24 = A 股比 H 股贵 24%）。
+        值越大表示 H 股越便宜（低估信号）。
+        """
+        ...
+
+    def get_hk_total_market_cap(self, on: date) -> Decimal | None:
+        """港股通总市值（单位：HKD）。
+
+        注：akshare/HKEX 没有现成 API 直接拉总市值。
+        实现靠硬编码 HKEX 月度统计（详见 AkshareValuationSource 实现）。
+        """
+        ...
+
+    def get_hk_gdp(self, on: date) -> Decimal | None:
+        """香港最近一期 GDP（单位：百万 HKD，季度数据）。"""
+        ...
+
+    # ─── 美股估值指标（spec 098.3）───
+
+    def get_us_10y_treasury_yield(self, on: date) -> Decimal | None:
+        """美 10 年期国债收益率（返回 0~1 小数，不是 %）。"""
+        ...
+
+    def get_us_total_market_cap(self, on: date) -> Decimal | None:
+        """美股总市值（NYSE + NASDAQ，单位：USD）。
+
+        注：akshare 没有现成接口。硬编码 ~50 万亿 USD（2024 末）。
+        TODO: 接 NYSE/NASDAQ 官方统计或本地缓存按月刷新。
+        """
+        ...
+
+    def get_us_gdp(self, on: date) -> Decimal | None:
+        """美国最近一期 GDP（单位：USD，绝对值）。
+
+        注：akshare 的 macro_usa_gdp_monthly 返回的是 YoY 增长率，不是绝对值。
+        硬编码 ~29 万亿 USD（2024 末）。TODO: 接 BEA 官方或 World Bank API。
+        """
+        ...
+
 
 class AkshareValuationSource:
     """akshare 数据源实现。
@@ -167,20 +211,24 @@ class AkshareValuationSource:
     # ─── 10 年期国债收益率 ───
 
     def get_10y_treasury_yield(self, on: date) -> Decimal | None:
+        """10 年期中国国债收益率（返回 0~1 小数，不是 %）。
+
+        数据源：ak.bond_zh_us_rate()
+        列：日期 / 中国国债收益率2年 / 5年 / 10年 / 30年 / ...
+        注：早期实现用 ak.bond_china_yield()（"中债国债收益率曲线" 那个），但其
+        数据被卡在 2021-01-22 附近（akshare 老 bug），导致估值永远错算。换成
+        bond_zh_us_rate() 后日期稳定到今天（2026-09-19 实测最新 = 2026-09-18）。
+        """
         try:
             import akshare as ak
 
-            df = ak.bond_china_yield()
+            df = ak.bond_zh_us_rate()
             if df is None or df.empty:
                 return None
-            # 过滤出"中债国债收益率曲线"（其他曲线有信用利差）
-            df = df[df["曲线名称"] == "中债国债收益率曲线"]
-            if df.empty:
-                return None
-            y_pct = _find_value_on_or_latest(df, "日期", on, "10年")
+            y_pct = _find_value_on_or_latest(df, "日期", on, "中国国债收益率10年")
             if y_pct is None:
                 return None
-            # akshare 返回百分数（2.85 = 2.85%），转 0~1 小数
+            # akshare 返回百分数（1.68 = 1.68%），转 0~1 小数
             return Decimal(str(y_pct)) / Decimal("100")
         except Exception:
             return None
@@ -293,6 +341,177 @@ class AkshareValuationSource:
         except Exception:
             return None
 
+    # ─── 港股估值指标（spec 098.2）───
+
+    def get_hk_ah_premium(self, on: date) -> Decimal | None:
+        """AH 溢价（恒生沪深港通 AH 溢价指数 HSAHP / 100）。
+
+        数据源：ak.stock_hk_index_daily_sina('HSAHP')
+        HSAHP 是恒生指数公司编制的"A 股 vs H 股"溢价指数：
+          - 100 = A = H（无溢价）
+          - >100 = A 贵于 H（A 溢价 / H 折价）
+          - <100 = A 便宜于 H（A 折价 / H 溢价）
+        返回 ratio（1.24 = A 股比 H 股贵 24%），方向是"值大=H便宜=低估"。
+        """
+        try:
+            import akshare as ak
+
+            df = ak.stock_hk_index_daily_sina("HSAHP")
+            if df is None or df.empty:
+                return None
+            # 找 on 或 on 之前最近一天的收盘价
+            df_sorted = df.sort_values("date")
+            target = on
+            df_sorted = df_sorted[df_sorted["date"] <= target]
+            if df_sorted.empty:
+                return None
+            close = df_sorted["close"].iloc[-1]
+            if close is None or close != close:  # NaN check
+                return None
+            # HSAHP 是"指数值"（100 为基准），ratio = 指数 / 100
+            return Decimal(str(close)) / Decimal("100")
+        except Exception:
+            return None
+
+    def get_hk_total_market_cap(self, on: date) -> Decimal | None:
+        """港股通总市值（单位：HKD）。
+
+        注：akshare 没有港股总市值的现成接口（eastmoney 代理不稳；
+        HKEX 官网月报 Excel 直链经常变）。先用 liubo 提供的近期硬编码值
+        （HKEX 月度统计，约 35-38 万亿 HKD），后续接 HKEX 官网或手动更新。
+
+        Fallback: 2025-12 HKEX 月度统计约 38.5 万亿 HKD（主板+创业板，含非港股通）。
+        TODO: 接 HKEX 官网或本地缓存按月刷新。
+        """
+        # Fallback: 2025-12 HKEX 月度统计（HKEX 主板 + 创业板）
+        # 约 38.5 万亿 HKD（含非港股通股票）。保守估计取 35 万亿。
+        from datetime import date as _date
+
+        fallback_mcap_hkd = Decimal("38500000000000")  # 38.5 万亿 HKD
+        cutoff = _date(2025, 12, 31)
+        if on >= cutoff:
+            return fallback_mcap_hkd
+        # 历史月份按比例缩放 - 简化：返回同一值
+        return fallback_mcap_hkd
+
+    def get_hk_gdp(self, on: date) -> Decimal | None:
+        """香港最近一期 GDP（单位：HKD，季度数据，绝对值）。
+
+        数据源：ak.macro_china_hk_gbp()
+        列：时间 / 前值 / 现值 / 发布日期
+        单位：百万 HKD（注意不是元！）
+        返回最近一个完整年度的 4 个季度累加。
+        """
+        try:
+            import akshare as ak
+
+            df = ak.macro_china_hk_gbp()
+            if df is None or df.empty:
+                return None
+            # 数据按时间倒序（最新在 head）。找最近 4 个季度累加。
+            # 时间格式："2025第3季度" → 解析年/季度
+            import re
+
+            def parse_period(s: str) -> tuple[int, int] | None:
+                m = re.match(r"(\d{4})第([1-4])季度", str(s))
+                if m is None:
+                    return None
+                return int(m.group(1)), int(m.group(2))
+
+            # 找最近一个 Q4（即完整年度的最后季度）作为年度终点
+            q4_rows = []
+            for _, row in df.iterrows():
+                p = parse_period(row["时间"])
+                if p is None or row["现值"] != row["现值"]:  # NaN check
+                    continue
+                q4_rows.append((p, Decimal(str(row["现值"]))))
+            if not q4_rows:
+                return None
+            # 按 (年, 季度) 降序排
+            q4_rows.sort(key=lambda x: (x[0][0], x[0][1]), reverse=True)
+            # 找最近一个 Q4
+            recent_year_q4 = None
+            for (y, q), v in q4_rows:
+                if q == 4:
+                    recent_year_q4 = (y, q)
+                    break
+            if recent_year_q4 is None:
+                # 没有 Q4（数据不全），用最近 4 季度累加
+                return sum(v for _, v in q4_rows[:4]) * Decimal("1000000")
+            # 累加到该 Q4 为止（4 个季度）
+            y_end, _ = recent_year_q4
+            annual = sum(
+                v for (y, q), v in q4_rows if y == y_end
+            )
+            # 单位：百万 HKD → HKD
+            return annual * Decimal("1000000")
+        except Exception:
+            return None
+
+    # ─── 美股估值指标（spec 098.3）───
+
+    def get_us_10y_treasury_yield(self, on: date) -> Decimal | None:
+        """美 10 年期国债收益率（返回 0~1 小数，不是 %）。
+
+        数据源：ak.bond_zh_us_rate()
+        列：日期 / ... / 美国国债收益率10年 / ...
+        单位：百分数（5.01 = 5.01%）。
+        """
+        try:
+            import akshare as ak
+
+            df = ak.bond_zh_us_rate()
+            if df is None or df.empty:
+                return None
+            y_pct = _find_value_on_or_latest(
+                df, "日期", on, "美国国债收益率10年"
+            )
+            if y_pct is None:
+                return None
+            return Decimal(str(y_pct)) / Decimal("100")
+        except Exception:
+            return None
+
+    def get_us_total_market_cap(self, on: date) -> Decimal | None:
+        """美股总市值（NYSE + NASDAQ，单位：USD）。
+
+        注：akshare 没有美股总市值的现成接口（eastmoney 代理不稳；
+        NYSE/NASDAQ 官网月报 Excel 直链经常变）。
+
+        硬编码 2024 年末值（NYSE ~$32 万亿 + NASDAQ ~$30 万亿）=
+        约 $50 万亿 USD（含非美股 ADR）。保守估计 $50T。
+
+        TODO: 接 NYSE 月度统计 https://www.nyse.com/markets/market-data
+        或 NASDAQ 总市值月报 + 本地缓存按月刷新。
+        """
+        from datetime import date as _date
+
+        fallback_mcap_usd = Decimal("50000000000000")  # 50 万亿 USD
+        cutoff = _date(2024, 12, 31)
+        if on >= cutoff:
+            return fallback_mcap_usd
+        # 历史月份按当前统一 fallback（数据缺失场景）
+        return fallback_mcap_usd
+
+    def get_us_gdp(self, on: date) -> Decimal | None:
+        """美国最近一期 GDP（单位：USD，绝对值）。
+
+        注：akshare 的 macro_usa_gdp_monthly 返回 YoY 增长率（%），不是绝对值。
+        World Bank API 在本环境 SSL 受限（EOF 错误），BEA 需 API key。
+        硬编码 2024 末值约 $29.2 万亿 USD（BEA Q4 2024 release）。
+
+        TODO: 接 BEA 官方 https://apps.bea.gov/API/signup/index.cfm
+        或本地缓存按季度刷新。
+        """
+        from datetime import date as _date
+
+        fallback_gdp_usd = Decimal("29200000000000")  # 29.2 万亿 USD
+        cutoff = _date(2024, 12, 31)
+        if on >= cutoff:
+            return fallback_gdp_usd
+        # 历史月份按当前统一 fallback
+        return fallback_gdp_usd
+
 
 def _find_value_on_or_latest(
     df: object,
@@ -301,6 +520,8 @@ def _find_value_on_or_latest(
     value_col: str,
 ) -> object | None:
     """按 on 日期匹配行，找不到就用最新一行（容错：节假日/周末 akshare 不更新）。
+
+    akshare 接口按日期升序排（head=最早，tail=最新），所以 fallback 用 tail(1)。
 
     返回原始值（可能是 float / Decimal / NaN）。返回 None 表示数据真没有。
     """
@@ -314,8 +535,9 @@ def _find_value_on_or_latest(
     df_str[date_col] = df_str[date_col].astype(str)
     rows = df_str[df_str[date_col] == target]
     if rows.empty:
-        # 没匹配到精确日期 → 用最新一条（节假日 / 周末兜底）
-        rows = df_str.head(1)
+        # 没匹配到精确日期 → 取最新一行（节假日 / 周末兜底）。
+        # akshare 数据按日期升序排，所以 latest = tail(1)。
+        rows = df_str.tail(1)
     if rows.empty:
         return None
     val = rows[value_col].iloc[0]

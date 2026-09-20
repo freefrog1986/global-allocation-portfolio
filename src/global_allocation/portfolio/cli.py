@@ -19,6 +19,7 @@ from global_allocation.models import AssetClass
 from global_allocation.portfolio.db import PortfolioDB
 from global_allocation.portfolio.journal import PortfolioJournal
 from global_allocation.portfolio.models import (
+    FundValuation,
     TransactionSide,
     ValuationIndicator,
     ValuationIndicatorCode,
@@ -454,7 +455,7 @@ def _update_valuation_for_date(target_date: date) -> int:
                     record_date=target_date,
                     indicator_code=ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
                     value=erp,
-                    source="akshare:stock_zh_index_value_csindex+bond_china_yield",
+                    source="akshare:stock_zh_index_value_csindex+bond_zh_us_rate",
                 )
             )
             saved += 1
@@ -542,8 +543,16 @@ def cmd_valuation_update(
 
 @valuation_app.command("show")
 def cmd_valuation_show() -> None:
-    """显示数据库里最新一天的估值指标 + 评估。"""
-    from global_allocation.portfolio.valuation_indicators import compute_verdict
+    """显示数据库里最新一天的估值指标 + 评估 + 综合分（spec 098 第二十二轮）。
+
+    spec 098.2：港股加 4 个指标后改成两段（A 股 + 港股），每段 4 指标 + 综合分。
+    """
+    from global_allocation.portfolio.valuation_indicators import (
+        compute_composite_score,
+        compute_verdict,
+        interpret_composite_score,
+        score_indicator,
+    )
 
     db = _default_db()
     inds = db.list_latest_valuation_indicators()
@@ -554,49 +563,1057 @@ def cmd_valuation_show() -> None:
     record_date = inds[0].record_date
     console.print(f"[bold]估值日期：{record_date}[/bold]\n")
 
-    table = Table(show_header=True, header_style="bold blue")
-    table.add_column("指标", style="cyan")
-    table.add_column("当前", justify="right")
-    table.add_column("评估", justify="center")
-    table.add_column("阈值", justify="left")
-
-    # 按指标代码顺序展示（spec 098 卡片顺序）
+    # 按 code 分桶（A 股 vs 港股）— spec 098.2 把两类指标分两段展示
     by_code = {i.indicator_code: i for i in inds}
-    labels = {
+    a_share_codes = {
+        ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
+        ValuationIndicatorCode.PE_PERCENTILE,
+        ValuationIndicatorCode.BUFFETT_INDICATOR,
+        ValuationIndicatorCode.DIVIDEND_YIELD,
+    }
+    hk_codes = {
+        ValuationIndicatorCode.HK_PE_PERCENTILE,
+        ValuationIndicatorCode.HK_DIVIDEND_YIELD,
+        ValuationIndicatorCode.HK_AH_PREMIUM,
+        ValuationIndicatorCode.HK_BUFFETT_INDICATOR,
+    }
+
+    # 渲染单段（A 股 或 港股）：返回是否实际渲染
+    def _render_section(
+        title: str,
+        codes: list[ValuationIndicatorCode],
+        labels: dict[ValuationIndicatorCode, tuple[str, str, str]],
+        short_names: dict[ValuationIndicatorCode, str],
+    ) -> bool:
+        """渲染一段（4 指标 + 综合分），返回该段是否有任何数据。
+
+        没数据 → 返回 False（让 caller 决定要不要打 section header）。
+        """
+        has_any = any(c in by_code for c in codes)
+        if not has_any:
+            return False
+
+        console.print(f"[bold]{title}[/bold]")
+        table = Table(show_header=True, header_style="bold blue")
+        table.add_column("指标", style="cyan")
+        table.add_column("当前", justify="right")
+        table.add_column("评估", justify="center")
+        table.add_column("阈值", justify="left")
+
+        scores: dict[ValuationIndicatorCode, int] = {}
+        for code in codes:
+            name, _, threshold = labels[code]
+            if code not in by_code:
+                table.add_row(name, "数据缺失", "n/a", threshold)
+                continue
+            ind = by_code[code]
+            current = _format_indicator_value_for_cli(code, ind.value)
+            verdict = compute_verdict(code, ind.value)
+            verdict_color = {
+                "偏低估": "green",
+                "正常": "yellow",
+                "偏高估": "red",
+            }.get(verdict, "white")
+            table.add_row(
+                name,
+                current,
+                f"[{verdict_color}]{verdict}[/{verdict_color}]",
+                threshold,
+            )
+            try:
+                scores[code] = score_indicator(code, ind.value)
+            except ValueError:
+                pass
+
+        # 综合分行（liubo 反馈"投票不加权"）
+        if scores:
+            score_list = [scores[c] for c in codes if c in scores]
+            composite = compute_composite_score(score_list)
+            verdict_str = interpret_composite_score(composite)
+            parts = [
+                f"{short_names[c]}:{scores[c]}" if c in scores else f"{short_names[c]}:-"
+                for c in codes
+            ]
+            composite_value = "[" + " ".join(parts) + "]"
+            verdict_color = {
+                "极低": "bright_green",
+                "低估": "green",
+                "正常": "yellow",
+                "偏高估": "red",
+                "极高估": "bright_red",
+            }.get(verdict_str, "white")
+            table.add_row(
+                "综合分",
+                composite_value,
+                f"[bold {verdict_color}]{float(composite):.1f} {verdict_str}[/bold {verdict_color}]",
+                "1=极低估 5=极高估",
+            )
+        console.print(table)
+        console.print()
+        return True
+
+    # A 股段
+    a_share_labels = {
         ValuationIndicatorCode.EQUITY_RISK_PREMIUM: ("股债利差", "1/PE - 10Y国债", ">5% 低 / <2% 高"),
         ValuationIndicatorCode.PE_PERCENTILE: ("PE 分位", "10年百分位", "<30% 低 / >70% 高"),
         ValuationIndicatorCode.BUFFETT_INDICATOR: ("巴菲特指标", "市值/GDP", "<50% 低 / >80% 高"),
         ValuationIndicatorCode.DIVIDEND_YIELD: ("股息率", "分红/市值", ">3% 低 / <1% 高"),
     }
-    for code in ValuationIndicatorCode:
-        if code not in by_code:
-            # 数据缺失行
-            name, _, threshold = labels[code]
-            table.add_row(name, "数据缺失", "n/a", threshold)
-            continue
-        ind = by_code[code]
-        name, _, threshold = labels[code]
-        if code == ValuationIndicatorCode.EQUITY_RISK_PREMIUM:
-            current = f"{float(ind.value) * 100:+.2f}%"
-        elif code == ValuationIndicatorCode.PE_PERCENTILE:
-            current = f"{float(ind.value) * 100:.1f}%"
-        elif code == ValuationIndicatorCode.BUFFETT_INDICATOR:
-            current = f"{float(ind.value) * 100:.1f}%"
-        else:  # DIVIDEND_YIELD
-            current = f"{float(ind.value) * 100:.2f}%"
-        verdict = compute_verdict(code, ind.value)
-        verdict_color = {
-            "偏低估": "green",
-            "正常": "yellow",
-            "偏高估": "red",
-        }.get(verdict, "white")
-        table.add_row(
-            name,
-            current,
-            f"[{verdict_color}]{verdict}[/{verdict_color}]",
-            threshold,
+    a_share_short = {
+        ValuationIndicatorCode.EQUITY_RISK_PREMIUM: "股债",
+        ValuationIndicatorCode.PE_PERCENTILE: "PE",
+        ValuationIndicatorCode.BUFFETT_INDICATOR: "巴菲特",
+        ValuationIndicatorCode.DIVIDEND_YIELD: "股息",
+    }
+    _render_section(
+        "A 股估值", list(a_share_codes), a_share_labels, a_share_short,
+    )
+
+    # 港股段（spec 098.2）
+    hk_labels = {
+        ValuationIndicatorCode.HK_PE_PERCENTILE: ("PE 分位", "10年百分位", "<30% 低 / >70% 高"),
+        ValuationIndicatorCode.HK_DIVIDEND_YIELD: ("股息率", "分红/市值", ">3% 低 / <1% 高"),
+        ValuationIndicatorCode.HK_AH_PREMIUM: ("AH 溢价", "A/H 价格比", ">150% 低估 / <40% 高估"),
+        ValuationIndicatorCode.HK_BUFFETT_INDICATOR: ("港股巴菲特", "市值/GDP", "<800% 低估 / >1200% 高估"),
+    }
+    hk_short = {
+        ValuationIndicatorCode.HK_PE_PERCENTILE: "PE",
+        ValuationIndicatorCode.HK_DIVIDEND_YIELD: "股息",
+        ValuationIndicatorCode.HK_AH_PREMIUM: "AH",
+        ValuationIndicatorCode.HK_BUFFETT_INDICATOR: "港股巴",
+    }
+    _render_section(
+        "港股估值", list(hk_codes), hk_labels, hk_short,
+    )
+
+    # 美股段（spec 098.3 — liubo 2026-09-20 拍板）
+    us_codes = {
+        ValuationIndicatorCode.US_PE_PERCENTILE,
+        ValuationIndicatorCode.US_DIVIDEND_YIELD,
+        ValuationIndicatorCode.US_BUFFETT_INDICATOR,
+        ValuationIndicatorCode.US_EQUITY_RISK_PREMIUM,
+    }
+    us_labels = {
+        ValuationIndicatorCode.US_PE_PERCENTILE: ("PE 分位", "10年百分位", "<30% 低 / >70% 高"),
+        ValuationIndicatorCode.US_DIVIDEND_YIELD: ("股息率", "分红/市值", ">3% 低 / <1% 高"),
+        ValuationIndicatorCode.US_BUFFETT_INDICATOR: ("美股巴菲特", "市值/GDP", "<80% 低估 / >180% 高估"),
+        ValuationIndicatorCode.US_EQUITY_RISK_PREMIUM: ("股债利差", "1/PE - 美10Y", ">5% 低 / <2% 高"),
+    }
+    us_short = {
+        ValuationIndicatorCode.US_PE_PERCENTILE: "PE",
+        ValuationIndicatorCode.US_DIVIDEND_YIELD: "股息",
+        ValuationIndicatorCode.US_BUFFETT_INDICATOR: "巴菲特",
+        ValuationIndicatorCode.US_EQUITY_RISK_PREMIUM: "股债",
+    }
+    _render_section(
+        "美股估值", list(us_codes), us_labels, us_short,
+    )
+
+
+def _parse_lixinger_csv_value(raw: str) -> Decimal:
+    """解析理杏仁 CSV 里的 Excel 公式格式（="12345.6"）。
+
+    理杏仁导出的 CSV 用 Excel 公式表示（="12345.6"），前缀 "=" 加双引号。
+    返回干净的 Decimal。
+    """
+    s = raw.strip()
+    if s.startswith("="):
+        s = s[1:]
+    if s.startswith('"') and s.endswith('"'):
+        s = s[1:-1]
+    return Decimal(s)
+
+
+def _format_indicator_value_for_cli(code: ValuationIndicatorCode, value: Decimal) -> str:
+    """cli show 命令里单个指标值的格式化字符串（跟 card.py 的 _format_indicator_value 一致）。
+
+    12 个指标的格式差异：
+    - 股债利差 / 美股股债利差：保留正负号 + 2 位小数
+    - A 股 / 港股 / 美股 PE 分位 + 股息率 + A 股巴菲特：2 位小数百分比
+    - AH 溢价 / 港股巴菲特 / 美股巴菲特：整数百分比
+    """
+    pct = float(value) * 100
+    if code in (
+        ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
+        ValuationIndicatorCode.US_EQUITY_RISK_PREMIUM,
+    ):
+        return f"{pct:+.2f}%"
+    if code in (
+        ValuationIndicatorCode.HK_AH_PREMIUM,
+        ValuationIndicatorCode.HK_BUFFETT_INDICATOR,
+        ValuationIndicatorCode.US_BUFFETT_INDICATOR,
+    ):
+        return f"{pct:.0f}%"
+    return f"{pct:.2f}%"
+
+
+# ─── Per-fund 估值：指数 → 基金映射（spec 098 第二十七轮）───
+#
+# liubo 2026-09-19 反馈："我想知道每个基金的估值"。
+# 数据来源：用户 6 只 A 股基金实际跟踪的指数（理杏仁 CSV 行 = 指数）。
+#
+# 索引规则（为什么存 index_code 而不是 fund_code）：
+# - CSV 是按"指数"导出的（每行一个指数），不是按"基金"
+# - 多只基金可能跟踪同一个指数（中证A500 + 增强A500）
+# - 映射写死在 CLI 里（用户固定持有这 6 只基金），后续要加新基金改这里
+#
+# 特殊映射说明：
+# - 930050 中证A50 作为 014532 MSCI中国A50 的替代（理杏仁无 MSCI中国A50）
+# - 000510 中证A500 → 同时对应 022434 + 022424 两只基金（同跟踪一个指数）
+
+
+DEFAULT_INDEX_TO_FUND_MAP: dict[str, list[str]] = {
+    "930050": ["014532"],  # 中证A50  → MSCI中国A50（替身）
+    "930955": ["008114"],  # 红利低波100 → 红利低波
+    "000510": ["022434", "022424"],  # 中证A500 → 两只 A500 基金
+    "000852": ["017644"],  # 中证1000 → 中证1000
+    "931643": ["013310"],  # 科创创业50 → 科创创业50
+    # 港股 3 指数（spec 098.2 — liubo 2026-09-19 方案 A）
+    # 映射名跟 lixinger 导出格式对齐（用户灌 CSV 时如果 code 不对再改这里）
+    "HSSCHKY": ["004098"],   # 恒生港股通高股息率 → 港股通股息率50（liubo 2026-09-20 实测，理杏仁实际指数代码）
+    "930792": ["006809"],    # HK 银行（理杏仁 CSV 实际指数代码是 930792，数字格式）
+    "HSTECH": ["013127"],    # 恒生科技 → 恒生科技 ETF
+    # 美股 4 指数（spec 098.3 — liubo 2026-09-20）
+    # liubo 2026-09-20 实测：理杏仁 lixinger CSV 里 NDX 行 PE/PB/PS/股息率全空，
+    # 只能拿到 INX（标普 500）的估值。per-fund 阶段所有美股基金都 fallback 到 INX。
+    # 等理杏仁补 NDX 数据后，NDX 行的 FundValuation 会被写入；当前 DB 查询按
+    # index_code 路由，没 NDX 数据就 fallback 到 INX（per-fund 卡片显示 fallback 提示）。
+    "INX":  ["017641"],   # 标普 500（lixinger "INX"，带 ="..." 格式）→ 摩根标普 500
+    "GSPC": ["017641"],   # 标普 500（yahoo/alt code，备用）→ 摩根标普 500
+    "OEX":  ["519981"],   # 标普 100 → 长信标普 100 等权重
+    "NDX":  [
+        "018966", "539001", "016452", "019524",  # 4 只纳指 100 ETF
+        "017730", "016664", "006373",            # 3 只全球主题 QDII（实际偏纳指）
+    ],
+}
+
+
+def _is_hk_fund(fund_code: str) -> bool:
+    """判断基金代码是否属于港股（SwensenClass.HK_EQUITY）。
+
+    通过 breakdown 模块的 SUBCLASS_BY_CODE 反查（避免在 cli 里硬编码）。
+    """
+    from global_allocation.portfolio.breakdown import SUBCLASS_BY_CODE, SwensenClass
+
+    return SUBCLASS_BY_CODE.get(fund_code) == SwensenClass.HK_EQUITY
+
+
+def _is_us_fund(fund_code: str) -> bool:
+    """判断基金代码是否属于美股（SwensenClass.US_EQUITY）。
+
+    通过 breakdown 模块的 SUBCLASS_BY_CODE 反查。
+    """
+    from global_allocation.portfolio.breakdown import SUBCLASS_BY_CODE, SwensenClass
+
+    return SUBCLASS_BY_CODE.get(fund_code) == SwensenClass.US_EQUITY
+
+
+# 港股指数代码集合（从 DEFAULT_INDEX_TO_FUND_MAP 自动派生，CSV 多市场筛选用）
+HK_INDEX_CODES: set[str] = {
+    code
+    for code, funds in DEFAULT_INDEX_TO_FUND_MAP.items()
+    if any(_is_hk_fund(f) for f in funds)
+}
+
+# 美股指数代码集合（从 DEFAULT_INDEX_TO_FUND_MAP 自动派生）
+US_INDEX_CODES: set[str] = {
+    code
+    for code, funds in DEFAULT_INDEX_TO_FUND_MAP.items()
+    if any(_is_us_fund(f) for f in funds)
+}
+
+
+@valuation_app.command("import-fund-csv")
+def cmd_valuation_import_fund_csv(
+    file: Annotated[Path, typer.Option("--file", "-f", help="理杏仁导出的 CSV 文件路径")],
+    on: str | None = typer.Option(
+        None, "--date", help="估值日期 YYYY-MM-DD（默认今天）"
+    ),
+) -> None:
+    """从理杏仁 CSV 导入每只 A 股基金的估值（spec 098 第二十七轮）。
+
+    CSV 格式：每行一个指数，列 = 收盘点位 / PE-TTM / PE分位 / 股息率（同 import-csv）。
+    区别：import-csv 只读第一行（中证全指 → 4 个 A 股整体指标），本命令读所有行
+    （每行一个指数 → 对应到用户持有的基金 → 写 fund_valuations 表）。
+
+    映射规则（写死在 DEFAULT_INDEX_TO_FUND_MAP）：
+    - 中证A50 (930050) → MSCI中国A50 (014532)
+    - 红利低波100 (930955) → 红利低波 (008114)
+    - 中证A500 (000510) → 中证A500 (022434) + 中证A500ETF联接 (022424)
+    - 中证1000 (000852) → 中证1000 (017644)
+    - 科创创业50 (931643) → 科创创业50 (013310)
+
+    CSV 里没在映射表的指数（000985 中证全指）→ 跳过（那是整体指标，不是单基金）。
+
+    同一天同一基金多次导入 → 覆盖最新一次（ON CONFLICT）。
+    """
+    from datetime import date as _date
+
+    if not file.exists():
+        console.print(f"[red]✗[/red] 文件不存在：{file}")
+        raise typer.Exit(code=1)
+
+    target_date = _parse_date(on) if on else _date.today()
+
+    # 解析 CSV（理杏仁格式：Excel formula 前缀 = "value"，多个数据行）
+    import csv as _csv
+
+    saved = 0
+    skipped = 0
+    db = _default_db()
+    src_name = f"lixinger_csv:{file.name}"
+
+    try:
+        with file.open(encoding="utf-8") as f:
+            reader = _csv.reader(f)
+            try:
+                header = next(reader)
+            except StopIteration:
+                console.print("[red]✗[/red] CSV 是空的（没 header）")
+                raise typer.Exit(code=1)
+            col_idx = {name: idx for idx, name in enumerate(header)}
+
+            def _get(row: list[str], col: str) -> Decimal | None:
+                if col not in col_idx:
+                    return None
+                raw = row[col_idx[col]]
+                if not raw or raw == "n/a" or raw == "":
+                    return None
+                try:
+                    return _parse_lixinger_csv_value(raw)
+                except (InvalidOperation, IndexError):
+                    return None
+
+            for row in reader:
+                # CSV 行：index_code 在第 1 列（="930050" 这种）
+                if not row:
+                    continue
+                idx_raw = row[0].strip()
+                if idx_raw.startswith("="):
+                    idx_raw = idx_raw[1:]
+                if idx_raw.startswith('"') and idx_raw.endswith('"'):
+                    idx_raw = idx_raw[1:-1]
+                idx_code = idx_raw.strip()
+
+                if idx_code not in DEFAULT_INDEX_TO_FUND_MAP:
+                    # 不在映射表（通常是 000985 中证全指 — 整体指标不入基金表）
+                    skipped += 1
+                    continue
+
+                pe_ttm = _get(row, "PE-TTM(当前值)")
+                pe_pct = _get(row, "PE-TTM(分位点%)")
+                dy = _get(row, "股息率(当前值)")
+                # 红利低波专用：股息率加权 PE 分位（用户手动从银行螺丝钉抄）
+                pe_pct_dyw = _get(row, "PE分位(按股息率加权)")
+                # ROE：最新 + 去年同期（成长股估值辅助）
+                roe_latest = _get(row, "净资产收益率(ROE)(2026Q2)")
+                roe_year_ago = _get(row, "净资产收益率(ROE)(2025Q2)")
+
+                if (
+                    pe_ttm is None
+                    and pe_pct is None
+                    and dy is None
+                    and pe_pct_dyw is None
+                    and roe_latest is None
+                    and roe_year_ago is None
+                ):
+                    # 这行没数据（CSV 空行 / 数据列全是 n/a）
+                    skipped += 1
+                    continue
+
+                for fund_code in DEFAULT_INDEX_TO_FUND_MAP[idx_code]:
+                    fv = FundValuation(
+                        record_date=target_date,
+                        fund_code=fund_code,
+                        index_code=idx_code,
+                        pe_ttm=pe_ttm,
+                        pe_percentile=pe_pct,
+                        dividend_yield=dy,
+                        pe_percentile_dy_weighted=pe_pct_dyw,
+                        roe_latest=roe_latest,
+                        roe_year_ago=roe_year_ago,
+                        source=src_name,
+                    )
+                    db.upsert_fund_valuation(fv)
+                    saved += 1
+
+    except UnicodeDecodeError as e:
+        console.print(f"[red]✗[/red] CSV 编码错误（要用 UTF-8）：{e}")
+        raise typer.Exit(code=1) from e
+
+    console.print(f"[green]✓[/green] {target_date} 已导入 {saved} 条基金估值")
+    if skipped:
+        console.print(f"[yellow]![/yellow] 跳过 {skipped} 行（未在映射表或无数据）")
+    console.print("下一步：跑 `gap portfolio publish` 发飞书看效果。")
+
+
+@valuation_app.command("import-csv")
+def cmd_valuation_import_csv(
+    file: Annotated[Path, typer.Option("--file", "-f", help="理杏仁导出的 CSV 文件路径")],
+    on: str | None = typer.Option(
+        None, "--date", help="估值日期 YYYY-MM-DD（默认今天）"
+    ),
+    auto_fill: bool = typer.Option(
+        True,
+        "--auto-fill/--no-auto-fill",
+        help="是否自动用 akshare 补齐 CSV 里没有的指标（10Y 国债/巴菲特）",
+    ),
+) -> None:
+    """从理杏仁导出的 CSV 导入估值指标（spec 098 第二十二轮）。
+
+    CSV 来源：理杏仁「指数估值」页 → 导出 CSV。
+    推荐格式：总市值加权 + 10年窗口（如 frog_总市值加权_10年_20260919_xxxxxx.csv）。
+
+    CSV 列（只读这 3 个，其余字段忽略）：
+    - 收盘点位：指数收盘点（仅信息记录）
+    - PE-TTM(当前值)：PE-TTM 实数（如 20.18）
+    - PE-TTM(分位点%)：10 年 PE 分位（**已经是 fraction**：如 0.7826 = 78.26%，直接用）
+    - 股息率(当前值)：股息率（**已经是 fraction**：如 0.0206 = 2.06%，直接用）
+
+    注：CSV 列名带"%"但值是 fraction，不要再 × 100。
+
+    股债利差和巴菲特指标 CSV 里没有，--auto-fill=True 时用 akshare 拉：
+    - 10Y 国债收益率（ak.bond_zh_us_rate）→ 算股债利差
+    - A 股总市值 + GDP（ak.macro_china_stock_market_cap + macro_china_gdp）→ 算巴菲特
+    """
+    from datetime import date as _date
+    from global_allocation.portfolio.valuation_indicators import (
+        compute_buffett_indicator,
+        compute_equity_risk_premium,
+    )
+
+    if not file.exists():
+        console.print(f"[red]✗[/red] 文件不存在：{file}")
+        raise typer.Exit(code=1)
+
+    target_date = _parse_date(on) if on else _date.today()
+
+    # 解析 CSV（理杏仁导出格式 = Excel formula 前缀）
+    import csv as _csv
+
+    try:
+        with file.open(encoding="utf-8-sig") as f:
+            reader = _csv.reader(f)
+            header = next(reader)
+            data_rows = [r for r in reader if r and r[0] and not r[0].startswith("数据")]
+    except (StopIteration, _csv.Error, UnicodeDecodeError) as e:
+        console.print(f"[red]✗[/red] CSV 解析失败：{e}")
+        raise typer.Exit(code=1) from e
+
+    # 找 000985 中证全指行（spec 098 第一期约定）。多市场 CSV（spec 098.3）里
+    # INX/港股等都在前面，必须跳过。中证全指是 A 股整体估值的"代表指数"。
+    data_row = None
+    for r in data_rows:
+        if len(r) > 0:
+            idx_code = r[0].strip().strip('="').strip('"').lstrip(".")
+            if idx_code == "000985":
+                data_row = r
+                break
+    if data_row is None:
+        console.print(
+            "[red]✗[/red] CSV 里没找到 000985（中证全指）行 — A 股 region 需要中证全指数据。"
+            " 如果是美股/港股专用 CSV，请用 `import-us-csv` 或 `import-hk-csv`。"
         )
-    console.print(table)
+        raise typer.Exit(code=1)
+
+    # header → idx 映射
+    col_idx = {name: idx for idx, name in enumerate(header)}
+
+    def _get(col: str) -> Decimal | None:
+        if col not in col_idx:
+            return None
+        raw = data_row[col_idx[col]]
+        if not raw or raw == "n/a" or raw == "":
+            return None
+        try:
+            return _parse_lixinger_csv_value(raw)
+        except (InvalidOperation, IndexError):
+            return None
+
+    # 必填：收盘点位 / PE / PE 分位 / 股息率
+    close_price = _get("收盘点位")
+    pe_ttm = _get("PE-TTM(当前值)")
+    pe_percentile_pct = _get("PE-TTM(分位点%)")
+    dividend_yield_pct = _get("股息率(当前值)")
+
+    missing = []
+    if pe_ttm is None:
+        missing.append("PE-TTM(当前值)")
+    if pe_percentile_pct is None:
+        missing.append("PE-TTM(分位点%)")
+    if dividend_yield_pct is None:
+        missing.append("股息率(当前值)")
+    if missing:
+        console.print(f"[red]✗[/red] CSV 缺少必填列：{', '.join(missing)}")
+        console.print("提示：导 CSV 时选「总市值加权 + 10 年窗口」，包含 PE/PE分位/股息率。")
+        raise typer.Exit(code=1)
+
+    # 入库 3 个 CSV 直接给的指标
+    # CSV 列名带 "%" 但值已经是 fraction（0.7826 = 78.26%），不要再 × 100
+    db = _default_db()
+    db.upsert_valuation_indicator(
+        ValuationIndicator(
+            record_date=target_date,
+            indicator_code=ValuationIndicatorCode.PE_PERCENTILE,
+            value=pe_percentile_pct,  # CSV 已是 fraction：0.7826 = 78.26%
+            source=f"lixinger_csv:{file.name}",
+        )
+    )
+    db.upsert_valuation_indicator(
+        ValuationIndicator(
+            record_date=target_date,
+            indicator_code=ValuationIndicatorCode.DIVIDEND_YIELD,
+            value=dividend_yield_pct,  # CSV 已是 fraction：0.0206 = 2.06%
+            source=f"lixinger_csv:{file.name}",
+        )
+    )
+    saved = 3
+    console.print(f"[green]✓[/green] 已导入 CSV 指标 × 3（PE 分位 / 股息率 / 收盘点位 {float(close_price) if close_price else 'n/a'}）")
+
+    # 自动补齐：股债利差（要 PE + 国债）+ 巴菲特（市值 + GDP）
+    if not auto_fill:
+        console.print("[yellow]![/yellow] --no-auto-fill：跳过股债利差 + 巴菲特补齐")
+    else:
+        src = AkshareValuationSource()
+
+        # 股债利差 = 1/PE - 国债
+        treasury = src.get_10y_treasury_yield(target_date)
+        if pe_ttm is not None and treasury is not None:
+            try:
+                erp = compute_equity_risk_premium(pe_ttm, treasury)
+                db.upsert_valuation_indicator(
+                    ValuationIndicator(
+                        record_date=target_date,
+                        indicator_code=ValuationIndicatorCode.EQUITY_RISK_PREMIUM,
+                        value=erp,
+                        source="lixinger_csv_pe+akshare:bond_zh_us_rate",
+                    )
+                )
+                saved += 1
+                console.print(
+                    f"[green]✓[/green] 股债利差补齐：1/{float(pe_ttm):.2f} - {float(treasury) * 100:.2f}% = {float(erp) * 100:+.2f}%"
+                )
+            except ValueError as e:
+                console.print(f"[yellow]![/yellow] 股债利差算失败：{e}")
+        else:
+            console.print("[yellow]![/yellow] 股债利差未补齐（akshare 国债接口失败）")
+
+        # 巴菲特指标 = 总市值 / GDP
+        market_cap = src.get_a_share_total_market_cap(target_date)
+        gdp = src.get_china_gdp(target_date)
+        if market_cap is not None and gdp is not None:
+            try:
+                bf = compute_buffett_indicator(market_cap, gdp)
+                db.upsert_valuation_indicator(
+                    ValuationIndicator(
+                        record_date=target_date,
+                        indicator_code=ValuationIndicatorCode.BUFFETT_INDICATOR,
+                        value=bf,
+                        source="akshare:stock_sse_summary+macro_china_gdp",
+                    )
+                )
+                saved += 1
+                console.print(
+                    f"[green]✓[/green] 巴菲特指标补齐：{float(bf) * 100:.1f}%（市值 {float(market_cap) / 1e12:.1f}万亿 / GDP {float(gdp) / 1e12:.1f}万亿）"
+                )
+            except ValueError as e:
+                console.print(f"[yellow]![/yellow] 巴菲特指标算失败：{e}")
+        else:
+            console.print("[yellow]![/yellow] 巴菲特指标未补齐（akshare 市值/GDP 接口失败）")
+
+    console.print(f"\n[bold]{target_date} 共入库 {saved}/4 个指标[/bold]")
+    console.print("下一步：跑 `gap valuation show` 看效果，或 `gap portfolio publish` 发飞书。")
+
+
+@valuation_app.command("import-hk-csv")
+def cmd_valuation_import_hk_csv(
+    file: Annotated[Path, typer.Option("--file", "-f", help="理杏仁导出的 HK 指数 CSV 文件路径")],
+    on: str | None = typer.Option(
+        None, "--date", help="估值日期 YYYY-MM-DD（默认今天）"
+    ),
+    auto_fill: bool = typer.Option(
+        True,
+        "--auto-fill/--no-auto-fill",
+        help="是否自动用 akshare 补齐 CSV 里没有的指标（AH 溢价 / 港股巴菲特）",
+    ),
+) -> None:
+    """从理杏仁导出的 HK 指数 CSV 导入估值指标（spec 098.2）。
+
+    CSV 来源：理杏仁「指数估值」页 → 导出（多个 HK 指数）。
+    推荐 CSV 包含 3 个 HK 指数（liubo 2026-09-20 实测）：
+      - HSTECH（恒生科技）→ 013127
+      - 930792（HK 银行） → 006809
+      - HSSCHKY（恒生港股通高股息率） → 004098
+
+    CSV 列（每个指数一行）：
+      - PE-TTM(分位点%)：10 年 PE 分位（已 fraction：0.7826 = 78.26%）
+      - 股息率(当前值)：已 fraction：0.0206 = 2.06%
+
+    聚合策略（liubo 2026-09-20 拍板）：HK 综合 = 3 指数**算术平均**。
+
+    自动补齐（akshare）：
+      - AH 溢价（ak.stock_hk_index_daily_sina('HSAHP')）
+      - 港股巴菲特（HK 总市值 / HK GDP）
+        - HK 总市值：akshare 没现成接口，先用 HKEX 月度统计硬编码（约 38.5 万亿 HKD）
+        - HK GDP：ak.macro_china_hk_gbp（季度累加 = 年度）
+    """
+    from datetime import date as _date
+    from global_allocation.portfolio.valuation_indicators import (
+        compute_buffett_indicator,
+    )
+
+    if not file.exists():
+        console.print(f"[red]✗[/red] 文件不存在：{file}")
+        raise typer.Exit(code=1)
+
+    target_date = _parse_date(on) if on else _date.today()
+
+    # 解析 CSV（理杏仁导出格式 = Excel formula 前缀）
+    import csv as _csv
+
+    try:
+        with file.open(encoding="utf-8-sig") as f:  # utf-8-sig 自动剥 BOM
+            reader = _csv.reader(f)
+            header = next(reader)
+            data_rows = list(reader)
+    except (StopIteration, _csv.Error, UnicodeDecodeError) as e:
+        console.print(f"[red]✗[/red] CSV 解析失败：{e}")
+        raise typer.Exit(code=1) from e
+
+    # 跳过注释/空行（"数据来源于" 之类）
+    data_rows = [r for r in data_rows if r and r[0] and not r[0].startswith("数据")]
+
+    col_idx = {name: idx for idx, name in enumerate(header)}
+
+    pe_pcts: list[Decimal] = []
+    div_yields: list[Decimal] = []
+    # 收集 per-fund 估值（spec 098 第二十七轮 — liubo 2026-09-20 反问"我只有 3 个港股基金吗"）
+    fund_data: list[tuple[str, dict[str, Decimal | None]]] = []
+
+    skipped = 0
+    for row in data_rows:
+        # 指数代码（用于日志 + 过滤）
+        idx_code_raw = row[col_idx["指数代码"]] if "指数代码" in col_idx else "?"
+        # 理杏仁 CSV 里指数代码带 ="..." 格式（如 ="HSTECH"），剥掉 ="" 包裹
+        idx_code = idx_code_raw.strip().strip('="')
+
+        # 只保留港股指数（HSTECH / HKBANK / HSSCHKY），跳过 A 股
+        if idx_code not in HK_INDEX_CODES:
+            skipped += 1
+            continue
+
+        # 解析 PE / 股息率（用于市场综合）
+        pe_pct_raw = row[col_idx["PE-TTM(分位点%)"]] if "PE-TTM(分位点%)" in col_idx else ""
+        div_raw = row[col_idx["股息率(当前值)"]] if "股息率(当前值)" in col_idx else ""
+
+        try:
+            pe = _parse_lixinger_csv_value(pe_pct_raw) if pe_pct_raw else None
+            dy = _parse_lixinger_csv_value(div_raw) if div_raw else None
+        except (InvalidOperation, IndexError):
+            continue
+
+        if pe is not None:
+            pe_pcts.append(pe)
+            console.print(f"  · {idx_code} PE 分位 {float(pe) * 100:.1f}%")
+        if dy is not None:
+            div_yields.append(dy)
+            console.print(f"  · {idx_code} 股息率 {float(dy) * 100:.2f}%")
+
+        # 解析 PE-TTM 实数 + ROE（用于 per-fund）
+        pe_ttm_raw = row[col_idx.get("PE-TTM(当前值)", -1)] if "PE-TTM(当前值)" in col_idx else ""
+        roe_q2_raw = row[col_idx.get("净资产收益率(ROE)(2026Q2)", -1)] if "净资产收益率(ROE)(2026Q2)" in col_idx else ""
+        roe_yq_raw = row[col_idx.get("净资产收益率(ROE)(2025Q4)", -1)] if "净资产收益率(ROE)(2025Q4)" in col_idx else ""
+        roe_yy_raw = row[col_idx.get("净资产收益率(ROE)(2025Q2)", -1)] if "净资产收益率(ROE)(2025Q2)" in col_idx else ""
+
+        def _opt(raw: str) -> Decimal | None:
+            if not raw:
+                return None
+            try:
+                return _parse_lixinger_csv_value(raw)
+            except (InvalidOperation, IndexError):
+                return None
+
+        fund_data.append((
+            idx_code,
+            {
+                "pe_ttm": _opt(pe_ttm_raw),
+                "pe_percentile": pe,
+                "dividend_yield": dy,
+                "roe_latest": _opt(roe_q2_raw) or _opt(roe_yq_raw),  # Q2 优先，回落到 Q4
+                "roe_year_ago": _opt(roe_yy_raw),
+            },
+        ))
+
+    if skipped > 0:
+        console.print(f"[dim]跳过 {skipped} 行非港股指数（A 股）[/dim]")
+
+    if not pe_pcts or not div_yields:
+        console.print("[red]✗[/red] CSV 里没有 PE 分位 / 股息率数据")
+        raise typer.Exit(code=1)
+
+    # 算术平均 → HK 综合
+    n = len(pe_pcts)
+    avg_pe_pct = sum(pe_pcts) / Decimal(n)
+    avg_div = sum(div_yields) / Decimal(n)
+
+    console.print(
+        f"\n[cyan]→[/cyan] {n} 个 HK 指数算术平均："
+        f"PE 分位 {float(avg_pe_pct) * 100:.1f}% / 股息率 {float(avg_div) * 100:.2f}%"
+    )
+
+    db = _default_db()
+    db.upsert_valuation_indicator(
+        ValuationIndicator(
+            record_date=target_date,
+            indicator_code=ValuationIndicatorCode.HK_PE_PERCENTILE,
+            value=avg_pe_pct,
+            source=f"lixinger_csv_avg:{file.name}",
+        )
+    )
+    db.upsert_valuation_indicator(
+        ValuationIndicator(
+            record_date=target_date,
+            indicator_code=ValuationIndicatorCode.HK_DIVIDEND_YIELD,
+            value=avg_div,
+            source=f"lixinger_csv_avg:{file.name}",
+        )
+    )
+    saved = 2
+    console.print(f"[green]✓[/green] 已导入 HK CSV 指标 × 2（PE 分位 / 股息率）")
+
+    # per-fund 估值（spec 098 第二十七轮）— 通过 DEFAULT_INDEX_TO_FUND_MAP 反查
+    from global_allocation.portfolio.models import FundValuation
+
+    fund_count = 0
+    for idx_code, vals in fund_data:
+        for fund_code in DEFAULT_INDEX_TO_FUND_MAP.get(idx_code, []):
+            fv = FundValuation(
+                record_date=target_date,
+                fund_code=fund_code,
+                index_code=idx_code,
+                pe_ttm=vals["pe_ttm"],
+                pe_percentile=vals["pe_percentile"],
+                dividend_yield=vals["dividend_yield"],
+                roe_latest=vals["roe_latest"],
+                roe_year_ago=vals["roe_year_ago"],
+                source=f"lixinger_csv:{file.name}",
+            )
+            db.upsert_fund_valuation(fv)
+            fund_count += 1
+            console.print(
+                f"  · per-fund {fund_code} ({idx_code}): "
+                f"PE {float(vals['pe_ttm']):.2f}, "
+                f"PE 分位 {float(vals['pe_percentile']) * 100:.1f}%, "
+                f"股息率 {float(vals['dividend_yield']) * 100:.2f}%"
+                + (
+                    f", ROE {float(vals['roe_latest']) * 100:.1f}%"
+                    if vals["roe_latest"] is not None
+                    else ""
+                )
+            )
+    if fund_count:
+        console.print(f"[green]✓[/green] per-fund 估值已写入 {fund_count} 只港股基金")
+
+    # 自动补齐：AH 溢价 + 港股巴菲特
+    if not auto_fill:
+        console.print("[yellow]![/yellow] --no-auto-fill：跳过 AH 溢价 + 港股巴菲特补齐")
+    else:
+        src = AkshareValuationSource()
+
+        # AH 溢价（ratio：1.24 = A 贵 24%）
+        ah = src.get_hk_ah_premium(target_date)
+        if ah is not None:
+            db.upsert_valuation_indicator(
+                ValuationIndicator(
+                    record_date=target_date,
+                    indicator_code=ValuationIndicatorCode.HK_AH_PREMIUM,
+                    value=ah,
+                    source="akshare:stock_hk_index_daily_sina(HSAHP)",
+                )
+            )
+            saved += 1
+            console.print(
+                f"[green]✓[/green] AH 溢价补齐：{float(ah) * 100:.1f}%（A 股比 H 股贵 {float(ah) * 100:.1f}%）"
+            )
+        else:
+            console.print("[yellow]![/yellow] AH 溢价未补齐（akshare HSAHP 接口失败）")
+
+        # 港股巴菲特（HK mcap / HK GDP）
+        mcap = src.get_hk_total_market_cap(target_date)
+        gdp = src.get_hk_gdp(target_date)
+        if mcap is not None and gdp is not None:
+            try:
+                bf = compute_buffett_indicator(mcap, gdp)
+                db.upsert_valuation_indicator(
+                    ValuationIndicator(
+                        record_date=target_date,
+                        indicator_code=ValuationIndicatorCode.HK_BUFFETT_INDICATOR,
+                        value=bf,
+                        source="akshare:hk_mcap(hardcoded)+macro_china_hk_gbp",
+                    )
+                )
+                saved += 1
+                console.print(
+                    f"[green]✓[/green] 港股巴菲特补齐：{float(bf):.2f}"
+                    f"（市值 {float(mcap) / 1e12:.1f}万亿 HKD / GDP {float(gdp) / 1e12:.1f}万亿 HKD）"
+                )
+            except ValueError as e:
+                console.print(f"[yellow]![/yellow] 港股巴菲特算失败：{e}")
+        else:
+            console.print("[yellow]![/yellow] 港股巴菲特未补齐（akshare HK GDP 接口失败）")
+
+    console.print(f"\n[bold]{target_date} 共入库 {saved}/4 个 HK 指标[/bold]")
+    console.print("下一步：跑 `gap valuation show` 看效果，或 `gap portfolio publish` 发飞书。")
+
+
+@valuation_app.command("import-us-csv")
+def cmd_valuation_import_us_csv(
+    file: Annotated[Path, typer.Option("--file", "-f", help="理杏仁导出的美股指数 CSV 文件路径")],
+    on: str | None = typer.Option(
+        None, "--date", help="估值日期 YYYY-MM-DD（默认今天）"
+    ),
+    auto_fill: bool = typer.Option(
+        True,
+        "--auto-fill/--no-auto-fill",
+        help="是否自动用 akshare/硬编码 补齐 CSV 里没有的指标（美股巴菲特 + 美股股债利差）",
+    ),
+) -> None:
+    """从理杏仁导出的美股指数 CSV 导入估值指标（spec 098.3）。
+
+    CSV 来源：理杏仁「指数估值」页 → 导出（多个美股指数）。
+    liubo 2026-09-20 实测：理杏仁能拉到 标普 500 (INX) 一行的 PE/股息率，
+    NDX (纳斯达克 100) 那行 PE/PB/PS/股息率全空（理杏仁未提供）。
+
+    CSV 列（每个指数一行）：
+      - PE-TTM(分位点%)：10 年 PE 分位（已 fraction：0.6017 = 60.17%）
+      - 股息率(当前值)：已 fraction：0.0106 = 1.06%
+
+    聚合策略（liubo 2026-09-20 拍板）：US 综合 = INX 单指数（NDX 没数据）。
+    后续理杏仁补 NDX 后会自动平均。
+
+    自动补齐：
+      - 美股巴菲特（us_buffett_indicator = US 市值 / US GDP）
+        - US 市值：硬编码 50T USD（NYSE 32T + NASDAQ 30T - 重复 12T ≈ 50T）
+        - US GDP：硬编码 29.2T USD（BEA Q4 2024）
+      - 美股股债利差 = 1/PE - 美 10Y 国债（ak.bond_zh_us_rate 列 "美国国债收益率10年"）
+    """
+    from datetime import date as _date
+    from global_allocation.portfolio.valuation_indicators import (
+        compute_buffett_indicator,
+        compute_equity_risk_premium,
+    )
+
+    if not file.exists():
+        console.print(f"[red]✗[/red] 文件不存在：{file}")
+        raise typer.Exit(code=1)
+
+    target_date = _parse_date(on) if on else _date.today()
+
+    # 解析 CSV（理杏仁导出格式 = Excel formula 前缀）
+    import csv as _csv
+
+    try:
+        with file.open(encoding="utf-8-sig") as f:  # utf-8-sig 自动剥 BOM
+            reader = _csv.reader(f)
+            header = next(reader)
+            data_rows = list(reader)
+    except (StopIteration, _csv.Error, UnicodeDecodeError) as e:
+        console.print(f"[red]✗[/red] CSV 解析失败：{e}")
+        raise typer.Exit(code=1) from e
+
+    # 跳过注释/空行（"数据来源于" 之类）
+    data_rows = [r for r in data_rows if r and r[0] and not r[0].startswith("数据")]
+
+    col_idx = {name: idx for idx, name in enumerate(header)}
+
+    # per-fund 估值数据（spec 098 第二十七轮 — spec 098.3 同样落 fund_valuations 表）
+    fund_data: list[tuple[str, dict[str, Decimal | None]]] = []
+    saved = 0
+    skipped = 0
+
+    # ── 1. 解析 INX（标普 500）整体指标（PE 分位 / 股息率） ──
+    # 整张 CSV 只有 INX 一行有数据；NDX 行全空被过滤掉
+    for row in data_rows:
+        idx_code_raw = row[col_idx["指数代码"]] if "指数代码" in col_idx else "?"
+        # 理杏仁 CSV 里指数代码格式：="CODE"（Excel formula wrap）
+        # 美股代码可能含 "."（如 .INX / .NDX — Yahoo Finance 风格 lixinger 命名）
+        # 剥掉 =" 和 " 包裹，再去前导点
+        idx_code = idx_code_raw.strip().strip('="').strip('"').lstrip(".")
+
+        # 只保留美股指数（INX / GSPC / OEX / NDX），跳过 A 股 / 港股
+        if idx_code not in US_INDEX_CODES:
+            skipped += 1
+            continue
+
+        # PE-TTM 分位 + 股息率（用于市场综合）
+        pe_pct_raw = row[col_idx["PE-TTM(分位点%)"]] if "PE-TTM(分位点%)" in col_idx else ""
+        div_raw = row[col_idx["股息率(当前值)"]] if "股息率(当前值)" in col_idx else ""
+
+        try:
+            pe = _parse_lixinger_csv_value(pe_pct_raw) if pe_pct_raw else None
+            dy = _parse_lixinger_csv_value(div_raw) if div_raw else None
+        except (InvalidOperation, IndexError):
+            console.print(f"[yellow]![/yellow] {idx_code} PE/股息率 解析失败：{pe_pct_raw!r} / {div_raw!r}")
+            continue
+
+        if pe is None and dy is None:
+            console.print(f"[dim]跳过 {idx_code}（PE / 股息率 全空 — lixinger 未提供）[/dim]")
+            continue
+
+        # 写整体指标（us_pe_percentile / us_dividend_yield）
+        db = _default_db()
+        if pe is not None:
+            db.upsert_valuation_indicator(
+                ValuationIndicator(
+                    record_date=target_date,
+                    indicator_code=ValuationIndicatorCode.US_PE_PERCENTILE,
+                    value=pe,
+                    source=f"lixinger_csv:{file.name}",
+                )
+            )
+            saved += 1
+            console.print(
+                f"[green]✓[/green] {idx_code} 美股 PE 分位 {float(pe) * 100:.1f}%"
+            )
+        if dy is not None:
+            db.upsert_valuation_indicator(
+                ValuationIndicator(
+                    record_date=target_date,
+                    indicator_code=ValuationIndicatorCode.US_DIVIDEND_YIELD,
+                    value=dy,
+                    source=f"lixinger_csv:{file.name}",
+                )
+            )
+            saved += 1
+            console.print(
+                f"[green]✓[/green] {idx_code} 美股股息率 {float(dy) * 100:.2f}%"
+            )
+
+        # per-fund 估值数据
+        pe_ttm_raw = row[col_idx.get("PE-TTM(当前值)", -1)] if "PE-TTM(当前值)" in col_idx else ""
+        roe_q2_raw = row[col_idx.get("净资产收益率(ROE)(2026Q2)", -1)] if "净资产收益率(ROE)(2026Q2)" in col_idx else ""
+        roe_yq_raw = row[col_idx.get("净资产收益率(ROE)(2025Q4)", -1)] if "净资产收益率(ROE)(2025Q4)" in col_idx else ""
+        roe_yy_raw = row[col_idx.get("净资产收益率(ROE)(2025Q2)", -1)] if "净资产收益率(ROE)(2025Q2)" in col_idx else ""
+
+        def _opt(raw: str) -> Decimal | None:
+            if not raw:
+                return None
+            try:
+                return _parse_lixinger_csv_value(raw)
+            except (InvalidOperation, IndexError):
+                return None
+
+        fund_data.append((
+            idx_code,
+            {
+                "pe_ttm": _opt(pe_ttm_raw),
+                "pe_percentile": pe,
+                "dividend_yield": dy,
+                "roe_latest": _opt(roe_q2_raw) or _opt(roe_yq_raw),  # Q2 优先，回落到 Q4
+                "roe_year_ago": _opt(roe_yy_raw),
+            },
+        ))
+
+    if skipped > 0:
+        console.print(f"[dim]跳过 {skipped} 行非美股指数（A 股 / 港股 / HS 等）[/dim]")
+
+    if saved == 0:
+        console.print("[red]✗[/red] CSV 里没有可用的美股估值数据（PE / 股息率 全空）")
+        raise typer.Exit(code=1)
+
+    # per-fund 估值写入（spec 098 第二十七轮 — 通过 DEFAULT_INDEX_TO_FUND_MAP 反查）
+    from global_allocation.portfolio.models import FundValuation
+
+    fund_count = 0
+    for idx_code, vals in fund_data:
+        for fund_code in DEFAULT_INDEX_TO_FUND_MAP.get(idx_code, []):
+            fv = FundValuation(
+                record_date=target_date,
+                fund_code=fund_code,
+                index_code=idx_code,  # 标准形式（INX 而非 .INX）
+                pe_ttm=vals["pe_ttm"],
+                pe_percentile=vals["pe_percentile"],
+                dividend_yield=vals["dividend_yield"],
+                roe_latest=vals["roe_latest"],
+                roe_year_ago=vals["roe_year_ago"],
+                source=f"lixinger_csv:{file.name}",
+            )
+            db.upsert_fund_valuation(fv)
+            fund_count += 1
+            if vals['pe_ttm'] is not None:
+                console.print(
+                    f"  · per-fund {fund_code} ({idx_code}): "
+                    f"PE {float(vals['pe_ttm']):.2f}, "
+                    f"PE 分位 {float(vals['pe_percentile']) * 100:.1f}%, "
+                    f"股息率 {float(vals['dividend_yield']) * 100:.2f}%"
+                )
+            else:
+                console.print(
+                    f"  · per-fund {fund_code} ({idx_code}): 数据缺失"
+                )
+    if fund_count:
+        console.print(f"[green]✓[/green] per-fund 估值已写入 {fund_count} 只美股基金")
+
+    # 自动补齐：美股巴菲特 + 美股股债利差
+    if not auto_fill:
+        console.print("[yellow]![/yellow] --no-auto-fill：跳过美股巴菲特 + 股债利差补齐")
+    else:
+        src = AkshareValuationSource()
+
+        # 美股巴菲特（US mcap / US GDP）
+        mcap = src.get_us_total_market_cap(target_date)
+        gdp = src.get_us_gdp(target_date)
+        if mcap is not None and gdp is not None:
+            try:
+                bf = compute_buffett_indicator(mcap, gdp)
+                db.upsert_valuation_indicator(
+                    ValuationIndicator(
+                        record_date=target_date,
+                        indicator_code=ValuationIndicatorCode.US_BUFFETT_INDICATOR,
+                        value=bf,
+                        source="akshare:us_mcap(50T_USD_hardcoded)+us_gdp(29.2T_USD_hardcoded)",
+                    )
+                )
+                saved += 1
+                console.print(
+                    f"[green]✓[/green] 美股巴菲特补齐：{float(bf) * 100:.0f}%"
+                    f"（市值 {float(mcap) / 1e12:.1f}万亿 USD / GDP {float(gdp) / 1e12:.1f}万亿 USD）"
+                )
+            except ValueError as e:
+                console.print(f"[yellow]![/yellow] 美股巴菲特算失败：{e}")
+        else:
+            console.print("[yellow]![/yellow] 美股巴菲特未补齐（市值/GDP 接口失败）")
+
+        # 美股股债利差 = 1/PE - 美 10Y 国债
+        # 需要 PE-TTM 实数：取 US_PE_PERCENTILE 当前值对应的指数（INX）的 PE 实数
+        # 从 fund_data 里抓 pe_ttm（INX 有的话）
+        pe_ttm = next((v["pe_ttm"] for code, v in fund_data if code == "INX" and v["pe_ttm"] is not None), None)
+        us_treasury = src.get_us_10y_treasury_yield(target_date)
+        if pe_ttm is not None and us_treasury is not None:
+            try:
+                erp = compute_equity_risk_premium(pe_ttm, us_treasury)
+                db.upsert_valuation_indicator(
+                    ValuationIndicator(
+                        record_date=target_date,
+                        indicator_code=ValuationIndicatorCode.US_EQUITY_RISK_PREMIUM,
+                        value=erp,
+                        source="akshare:bond_zh_us_rate(美国国债收益率10年)+lixinger_csv",
+                    )
+                )
+                saved += 1
+                console.print(
+                    f"[green]✓[/green] 美股股债利差补齐：{float(erp) * 100:+.2f}%"
+                    f"（1/{float(pe_ttm):.2f} - {float(us_treasury) * 100:.2f}%）"
+                )
+            except ValueError as e:
+                console.print(f"[yellow]![/yellow] 美股股债利差算失败：{e}")
+        else:
+            console.print(
+                f"[yellow]![/yellow] 美股股债利差未补齐（PE-TTM={pe_ttm}, 国债={us_treasury}）"
+            )
+
+    console.print(f"\n[bold]{target_date} 共入库 {saved}/4 个 US 指标[/bold]")
+    console.print("下一步：跑 `gap valuation show` 看效果，或 `gap portfolio publish` 发飞书。")
 
 
 # ─── tx subcommand ───

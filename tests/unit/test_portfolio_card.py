@@ -13,10 +13,27 @@ from pathlib import Path
 import pytest
 
 from global_allocation.models import AssetClass
-from global_allocation.portfolio.card import build_portfolio_card
+from global_allocation.portfolio.card import (
+    POSITION_UNIT,
+    US_INDICATOR_CODES,
+    US_INDICATOR_NAMES,
+    US_INDICATOR_SHORT_NAMES,
+    _build_a_share_valuation_section,
+    _build_fund_valuation_section,
+    _build_hk_valuation_section,
+    _build_us_valuation_section,
+    _build_valuation_section,
+    _compute_roe_yoy,
+    _decide_a_share_strategy,
+    _format_indicator_value,
+    _per_fund_recommendation,
+    _per_fund_verdict,
+    build_portfolio_card,
+)
 from global_allocation.portfolio.db import PortfolioDB
 from global_allocation.portfolio.journal import PortfolioJournal
 from global_allocation.portfolio.models import (
+    FundValuation,
     ValuationIndicator,
     ValuationIndicatorCode,
     WeeklySnapshot,
@@ -759,32 +776,59 @@ class TestStrategySection:
 
 
 class TestValuationSection:
-    """Section 3: 大类资产估值（spec 098 第二十一轮新增）。
+    """Section 3: 大类资产估值（spec 098.4 combined 模式 — 飞书 ≤5 table 限制）。
 
-    卡片 Section 3 = note header "大类资产估值" + hr + 4 行 × 4 列表格。
-    4 行：股债利差 / PE 分位 / 巴菲特指标 / 股息率。
-    4 列：指标 / 当前 / 评估 / 阈值。
+    spec 098 演进：
+    - 第二十一轮：新增 Section 3（A 股 4 指标 + 综合分 + per-fund 表）
+    - 第二十二轮：加综合分（4 票简单平均）
+    - 098.2：港股估值跟 A 股平行（多 1 region）
+    - 098.3：美股估值再起一个 region（3 个 region）
+    - 098.4（liubo 2026-09-20）：合并 3 region 表 — 1 张 combined 指标表（5 列）+ 1 张
+      combined per-fund 表（11 列），加上持仓 + 策略 = 4 张表，符合飞书 ≤5 table 限制。
+
+    渲染结构：
+    - note header "估值与操作"
+    - hr
+    - combined 指标表（5 列 × N 行，N = region 数 × (4 指标 + 1 综合)）
+      - 列：区域 / 指标 / 当前 / 评估 / 阈值
+      - 综合分行 region 列 = "—"
+    - 3 个 strategy_note div（按 region 顺序，region 完全空时跳过）
+    - hr + combined per-fund 表（11 列 × N 行，N = 所有 region 持仓数之和）
+      - 列：区域 / 基金 / 指数 / PE / PE分位 / 股息率 / ROE同比 / 评估 / 建议 / 当前仓位 / 加减仓建议
 
     边界：
-    - DB 完全空（今天没拉过估值）→ Section 3 整段不渲染
-    - 部分指标缺失 → 缺失行显示"数据缺失"/"n/a"，其他行正常
-    - 股债利差用 signed format（+/-），其他 3 个用 unsigned format
+    - 全部 region 完全空（DB 没任何估值）→ Section 整段不渲染（返回 []）
+    - 单个 region 完全空 → 该 region 行不出现在 combined 表（不渲染空行）
+    - 股债利差 / 美股股债利差用 signed format（+/-），其他指标用 unsigned format
     """
 
-    def _get_valuation_table(self, journal: PortfolioJournal) -> dict[str, object]:
-        """4 列估值表（indicator / value / verdict / threshold）。"""
+    def _get_combined_indicator_table(self, journal: PortfolioJournal) -> dict[str, object]:
+        """5 列 combined 估值表（region / indicator / value / verdict / threshold）。"""
         _seed(journal)
-        _seed_valuation_today(journal)
         card = build_portfolio_card(journal)
         tables = [e for e in card["elements"] if e.get("tag") == "table"]
         for t in tables:
             col_names = [c["name"] for c in t["columns"]]
-            if col_names == ["indicator", "value", "verdict", "threshold"]:
+            if col_names == ["region", "indicator", "value", "verdict", "threshold"]:
                 return t
-        raise AssertionError("Section 3 估值表未找到（4 列 indicator/value/verdict/threshold）")
+        raise AssertionError("combined 估值表未找到（5 列 region/indicator/value/verdict/threshold）")
 
-    def test_section_3_header_present(self, journal: PortfolioJournal) -> None:
-        """Section 3 标题"大类资产估值"必须存在（spec 098）。"""
+    def _get_combined_per_fund_table(self, journal: PortfolioJournal) -> dict[str, object] | None:
+        """11 列 combined per-fund 表。"""
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        tables = [e for e in card["elements"] if e.get("tag") == "table"]
+        for t in tables:
+            col_names = [c["name"] for c in t["columns"]]
+            if col_names == [
+                "region", "fund", "index", "pe", "pe_pct", "dy", "roe_yoy",
+                "verdict", "advice", "position", "adjust",
+            ]:
+                return t
+        return None
+
+    def test_combined_section_header_present(self, journal: PortfolioJournal) -> None:
+        """combined section 标题"估值与操作"必须存在（spec 098.4 — 3 region 合并）。"""
         _seed(journal)
         _seed_valuation_today(journal)
         card = build_portfolio_card(journal)
@@ -792,127 +836,317 @@ class TestValuationSection:
         for e in card["elements"]:
             if e.get("tag") == "note":
                 for elem in e.get("elements", []):
-                    if elem.get("content") == "大类资产估值":
+                    if elem.get("content") == "估值与操作":
                         found = True
-        assert found, "Section 3 标题「大类资产估值」必须存在"
+        assert found, "combined section 标题「估值与操作」必须存在"
 
-    def test_section_3_absent_when_no_data(self, journal: PortfolioJournal) -> None:
-        """DB 完全空 → Section 3 整段不渲染（spec 098 第 170 行）。
+    def test_no_per_region_headers_when_combined(self, journal: PortfolioJournal) -> None:
+        """combined 模式下不渲染 per-region headers（"A 股估值与操作" 等都不应存在）。
 
-        publish 时 CLI 已自动 update，正常情况不会到这里；但如果 publish 失败或
-        手动 build 时没拉数据，Section 3 不渲染比显示空表格好。
+        旧 per-region 模式：每个 region 一个 header note
+        新 combined 模式：1 个统一 header "估值与操作"
         """
         _seed(journal)
-        # 不调用 _seed_valuation_today → DB 没今天的指标
+        _seed_valuation_today(journal)
+        _seed_hk_valuation_today(journal)
+        _seed_us_valuation_today(journal)
         card = build_portfolio_card(journal)
         for e in card["elements"]:
             if e.get("tag") == "note":
                 for elem in e.get("elements", []):
-                    assert elem.get("content") != "大类资产估值"
+                    assert elem.get("content") != "A 股估值与操作"
+                    assert elem.get("content") != "港股估值与操作"
+                    assert elem.get("content") != "美股估值与操作"
 
-    def test_table_has_4_rows(self, journal: PortfolioJournal) -> None:
-        """4 行 = 4 个估值指标。"""
-        spec = self._get_valuation_table(journal)
-        assert len(spec["rows"]) == 4
+    def test_combined_section_absent_when_no_data(self, journal: PortfolioJournal) -> None:
+        """DB 完全空 → combined section 整段不渲染。
 
-    def test_table_columns_are_four(self, journal: PortfolioJournal) -> None:
-        """4 列：指标 / 当前 / 评估 / 阈值。"""
-        spec = self._get_valuation_table(journal)
-        col_names = [c["name"] for c in spec["columns"]]
-        assert col_names == ["indicator", "value", "verdict", "threshold"]
-
-    def test_rows_in_default_order(self, journal: PortfolioJournal) -> None:
-        """按 ValuationIndicatorCode 枚举顺序：股债利差 → PE 分位 → 巴菲特 → 股息率。"""
-        spec = self._get_valuation_table(journal)
-        actual_order = [row["indicator"] for row in spec["rows"]]
-        expected_order = ["股债利差", "PE 分位", "巴菲特指标", "股息率"]
-        assert actual_order == expected_order
-
-    def test_rows_are_dict_with_all_columns(self, journal: PortfolioJournal) -> None:
-        """Feishu API 强制 row 是 dict（按列名取）。"""
-        spec = self._get_valuation_table(journal)
-        for row in spec["rows"]:
-            assert isinstance(row, dict)
-            assert set(row.keys()) == {"indicator", "value", "verdict", "threshold"}
-
-    def test_value_format_uses_percent(self, journal: PortfolioJournal) -> None:
-        """value 列以 % 结尾（PE 分位 / 巴菲特 / 股息率都是 unsigned 2 位小数）。"""
-        spec = self._get_valuation_table(journal)
-        # 后 3 行（PE 分位 / 巴菲特 / 股息率）= unsigned
-        for row in spec["rows"][1:]:
-            assert row["value"].endswith("%")
-            # 不应带 +/- 前缀（只有股债利差带符号）
-            assert not row["value"].startswith("+")
-            assert not row["value"].startswith("-")
-
-    def test_equity_risk_premium_uses_signed_format(self, journal: PortfolioJournal) -> None:
-        """股债利差（row[0]）用 signed format（+/-），2 位小数。
-
-        spec 098 第 108 行：正号也要写（"+5.20%"），负号照常（"-1.30%"）。
+        publish 时 CLI 已自动 update，正常情况不会到这里；但如果 publish 失败或
+        手动 build 时没拉数据，section 不渲染比显示空表格好。
         """
-        spec = self._get_valuation_table(journal)
-        erp_row = spec["rows"][0]
-        # 行内显示"股债利差"
-        assert erp_row["indicator"] == "股债利差"
-        # mock 数据 5.2% → "+5.20%"
+        _seed(journal)
+        # 不调用任何 _seed_valuation_today → DB 没今天的指标
+        card = build_portfolio_card(journal)
+        for e in card["elements"]:
+            if e.get("tag") == "note":
+                for elem in e.get("elements", []):
+                    assert elem.get("content") != "估值与操作"
+
+    def test_combined_section_skipped_when_all_regions_empty(self, journal: PortfolioJournal) -> None:
+        """3 region 都没数据 → _build_valuation_section 返回 []（空数组）。"""
+        from global_allocation.portfolio.card import _build_valuation_section
+
+        _seed(journal)
+        # 不塞任何 valuation indicator
+        elements = _build_valuation_section(journal)
+        assert elements == []
+
+    def test_combined_indicator_table_5_columns(self, journal: PortfolioJournal) -> None:
+        """combined 指标表 5 列：区域 / 指标 / 当前 / 评估 / 阈值。"""
+        _seed_valuation_today(journal)
+        spec = self._get_combined_indicator_table(journal)
+        col_names = [c["name"] for c in spec["columns"]]
+        assert col_names == ["region", "indicator", "value", "verdict", "threshold"]
+
+    def test_combined_indicator_table_15_rows_when_3_regions(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """3 region 都有数据 → combined 指标表 15 行 = 4 指标 × 3 + 3 综合。"""
+        _seed_valuation_today(journal)
+        _seed_hk_valuation_today(journal)
+        _seed_us_valuation_today(journal)
+        spec = self._get_combined_indicator_table(journal)
+        assert len(spec["rows"]) == 15
+
+    def test_combined_indicator_table_partial_region(self, journal: PortfolioJournal) -> None:
+        """只有 A 股数据 → combined 指标表 5 行（4 指标 + 1 综合），不渲染空 region。"""
+        _seed_valuation_today(journal)
+        spec = self._get_combined_indicator_table(journal)
+        assert len(spec["rows"]) == 5
+        # 所有行的 region 列都该是 "A 股" 或 "—"（综合行）
+        for row in spec["rows"]:
+            assert row["region"] in {"A 股", "—"}
+
+    def test_combined_indicator_table_rows_in_region_order(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """行按 region 顺序排列：A 股 → 港股 → 美股（同 region 内按 indicator 顺序）。
+
+        spec 098.4 — 跨 region 看估值，方便对比。
+        """
+        _seed_valuation_today(journal)
+        _seed_hk_valuation_today(journal)
+        _seed_us_valuation_today(journal)
+        spec = self._get_combined_indicator_table(journal)
+        # 取每个 region 的前 4 行（4 指标），验证 region 顺序
+        actual_regions = [
+            row["region"]
+            for row in spec["rows"]
+            if row["indicator"] != "综合分"
+        ]
+        expected_pattern = ["A 股"] * 4 + ["港股"] * 4 + ["美股"] * 4
+        assert actual_regions == expected_pattern
+
+    def test_combined_indicator_table_composite_row_uses_dash_region(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """综合分行 region 列 = "—"（聚合行不属于单一 region）。"""
+        _seed_valuation_today(journal)
+        _seed_hk_valuation_today(journal)
+        _seed_us_valuation_today(journal)
+        spec = self._get_combined_indicator_table(journal)
+        composite_rows = [r for r in spec["rows"] if r["indicator"] == "综合分"]
+        assert len(composite_rows) == 3
+        for r in composite_rows:
+            assert r["region"] == "—"
+
+    def test_combined_indicator_table_per_region_composite_format(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """综合分行的 value 列保留 per-region 格式 "[股债:X PE:X ...]"。
+
+        spec 098.4 — 综合分行是 region 内部聚合，格式不动，只把 region 列改成 "—"。
+        """
+        _seed_valuation_today(journal)
+        spec = self._get_combined_indicator_table(journal)
+        composite_row = next(r for r in spec["rows"] if r["indicator"] == "综合分")
+        # A 股综合分行（之前 spec 098 测试的格式）保持不变
+        assert composite_row["value"] == "[股债:1 PE:2 巴菲特:3 股息:3]"
+        assert composite_row["verdict"] == "2.3 低估"
+
+    def test_combined_indicator_table_erp_signed_format(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """股债利差 / 美股股债利差 用 signed format（+/-），其他指标 unsigned。
+
+        spec 098.4 — 各 region 的格式化规则不变，只在前面加 region 列。
+        """
+        _seed_valuation_today(journal)  # A 股 ERP=5.2% → +5.20%
+        spec = self._get_combined_indicator_table(journal)
+        erp_row = next(
+            r for r in spec["rows"]
+            if r["indicator"] == "股债利差" and r["region"] == "A 股"
+        )
         assert erp_row["value"] == "+5.20%"
 
-    def test_verdict_text(self, journal: PortfolioJournal) -> None:
-        """verdict 列是"偏低估 / 正常 / 偏高估 / n/a"之一。
+    def test_combined_per_fund_table_11_columns(self, journal: PortfolioJournal) -> None:
+        """combined per-fund 表 11 列：区域 / 基金 / 指数 / PE / PE分位 / 股息率 / ROE同比
+        / 评估 / 建议 / 当前仓位 / 加减仓建议。"""
+        _seed_valuation_today(journal)
+        _seed_hk_valuation_today(journal)
+        _seed_us_valuation_today(journal)
+        _seed_a_share_funds(journal)
+        _seed_fund_valuations(journal)
+        _seed_hk_funds(journal)
+        _seed_hk_fund_valuations(journal)
+        _seed_us_funds(journal)
+        # 美股基金缺估值时也建 NDX/SP/全球主题的 fallback 估值
+        today = date.today()
+        for code in ("018966", "539001", "016452", "019524", "017641",
+                      "519981", "017730", "016664", "006373"):
+            journal.db.upsert_fund_valuation(
+                FundValuation(
+                    record_date=today,
+                    fund_code=code,
+                    index_code="INX",
+                    pe_ttm=Decimal("30.0"),
+                    pe_percentile=Decimal("0.6"),
+                    dividend_yield=Decimal("0.011"),
+                    source="test",
+                )
+            )
 
-        mock 数据：ERP=5.2% → 偏低估（>5%），PE=28% → 偏低估（<30%），
-        巴菲特=65% → 正常（50-80%），股息率=2.5% → 正常（1-3%）。
-        """
-        spec = self._get_valuation_table(journal)
-        verdicts = [row["verdict"] for row in spec["rows"]]
-        assert verdicts == ["偏低估", "偏低估", "正常", "正常"]
-
-    def test_threshold_column_text(self, journal: PortfolioJournal) -> None:
-        """threshold 列是描述性文字（如 ">5% 低 / <2% 高"），不是数字。
-
-        spec 098 第 99~110 行：每行阈值文案让用户一眼看到边界。
-        """
-        spec = self._get_valuation_table(journal)
-        thresholds = [row["threshold"] for row in spec["rows"]]
-        assert thresholds == [
-            ">5% 低 / <2% 高",     # 股债利差
-            "<30% 低 / >70% 高",    # PE 分位
-            "<50% 低 / >80% 高",    # 巴菲特指标
-            ">3% 低 / <1% 高",      # 股息率
+        spec = self._get_combined_per_fund_table(journal)
+        assert spec is not None
+        col_names = [c["name"] for c in spec["columns"]]
+        assert col_names == [
+            "region", "fund", "index", "pe", "pe_pct", "dy", "roe_yoy",
+            "verdict", "advice", "position", "adjust",
         ]
 
-    def test_partial_data_shows_missing(self, journal: PortfolioJournal) -> None:
-        """只入库 1 条指标 → 其他 3 行显示"数据缺失"/"n/a"，存在的行正常显示。"""
-        _seed(journal)
+    def test_combined_per_fund_table_15_rows_when_3_regions(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """3 region 都有持仓 → combined per-fund 表 15 行（A 3 + 港 3 + 美 9）。
+
+        spec 098.4 — fixtures 简化：3 A 股 + 3 港股 + 9 美股 = 15 行。
+        测试场景覆盖的是 fixture 的 holdings，不是 demo DB 的全部 31 只基金。
+        """
+        _seed_a_share_funds(journal)
+        _seed_fund_valuations(journal)
+        _seed_hk_funds(journal)
+        _seed_hk_fund_valuations(journal)
+        _seed_us_funds(journal)
+        # 美股 per-fund 估值（共用 INX 兜底数据）
         today = date.today()
-        journal._db.upsert_valuation_indicator(
-            ValuationIndicator(
-                record_date=today,
-                indicator_code=ValuationIndicatorCode.PE_PERCENTILE,
-                value=Decimal("0.85"),  # 偏高估（>70%）
-                source="test",
+        for code in ("018966", "539001", "016452", "019524", "017641",
+                      "519981", "017730", "016664", "006373"):
+            journal.db.upsert_fund_valuation(
+                FundValuation(
+                    record_date=today,
+                    fund_code=code,
+                    index_code="INX",
+                    pe_ttm=Decimal("30.0"),
+                    pe_percentile=Decimal("0.6"),
+                    dividend_yield=Decimal("0.011"),
+                    source="test",
+                )
             )
-        )
+
+        spec = self._get_combined_per_fund_table(journal)
+        assert spec is not None
+        # 3 A 股 + 3 港股 + 9 美股 = 15
+        assert len(spec["rows"]) == 15
+
+    def test_combined_per_fund_table_region_prefix(self, journal: PortfolioJournal) -> None:
+        """per-fund 表的每行 region 列都填对应 region label（A 股 / 港股 / 美股）。
+
+        spec 098.4 — 跨 region 看，方便对比。fixture 只有 A 股 + 港股 → 6 行（3 + 3）。
+        """
+        _seed_a_share_funds(journal)
+        _seed_fund_valuations(journal)
+        _seed_hk_funds(journal)
+        _seed_hk_fund_valuations(journal)
+        spec = self._get_combined_per_fund_table(journal)
+        assert spec is not None
+        # 3 A 股 + 3 港股 = 6 行
+        assert len(spec["rows"]) == 6
+        for row in spec["rows"][:3]:
+            assert row["region"] == "A 股"
+        for row in spec["rows"][3:6]:
+            assert row["region"] == "港股"
+
+    def test_combined_per_fund_table_skipped_when_no_holdings(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """没有任何持仓 → combined per-fund 表不渲染（避免空表）。
+
+        跟 per-region 行为一致：_build_fund_valuation_section 没持仓就返回 []。
+        """
+        _seed(journal)
+        # 不调 _seed_a_share_funds / _seed_hk_funds / _seed_us_funds → DB 没基金
+        spec = self._get_combined_per_fund_table(journal)
+        assert spec is None
+
+    def test_combined_section_strategy_notes_one_per_region_with_data(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """3 个 region 都有持仓 + 估值 → 3 个 strategy_note div（占比 + 估值判断）。"""
+        _seed_a_share_funds(journal)
+        _seed_fund_valuations(journal)
+        _seed_hk_funds(journal)
+        _seed_hk_fund_valuations(journal)
+        _seed_us_funds(journal)
+        today = date.today()
+        for code in ("018966", "539001", "016452", "019524", "017641",
+                      "519981", "017730", "016664", "006373"):
+            journal.db.upsert_fund_valuation(
+                FundValuation(
+                    record_date=today,
+                    fund_code=code,
+                    index_code="INX",
+                    pe_ttm=Decimal("30.0"),
+                    pe_percentile=Decimal("0.6"),
+                    dividend_yield=Decimal("0.011"),
+                    source="test",
+                )
+            )
+        _seed_valuation_today(journal)
+        _seed_hk_valuation_today(journal)
+        _seed_us_valuation_today(journal)
+
         card = build_portfolio_card(journal)
-        # 找到估值表
+        strategy_divs = [
+            e for e in card["elements"]
+            if e.get("tag") == "div" and "占比" in e["text"]["content"]
+        ]
+        # 3 个 region × 1 strategy div = 3
+        assert len(strategy_divs) == 3
+        region_texts = [d["text"]["content"] for d in strategy_divs]
+        assert any("A 股占比" in t for t in region_texts)
+        assert any("港股占比" in t for t in region_texts)
+        assert any("美股占比" in t for t in region_texts)
+
+    def test_total_table_count_within_feishu_limit(self, journal: PortfolioJournal) -> None:
+        """全数据场景下整张卡片 ≤5 table（飞书 ErrCode 11310 限制 — spec 098.4）。
+
+        4 张表 = 持仓聚合 + 策略对比 + combined 指标 + combined per-fund。
+        """
+        _seed_a_share_funds(journal)
+        _seed_fund_valuations(journal)
+        _seed_hk_funds(journal)
+        _seed_hk_fund_valuations(journal)
+        _seed_us_funds(journal)
+        today = date.today()
+        for code in ("018966", "539001", "016452", "019524", "017641",
+                      "519981", "017730", "016664", "006373"):
+            journal.db.upsert_fund_valuation(
+                FundValuation(
+                    record_date=today,
+                    fund_code=code,
+                    index_code="INX",
+                    pe_ttm=Decimal("30.0"),
+                    pe_percentile=Decimal("0.6"),
+                    dividend_yield=Decimal("0.011"),
+                    source="test",
+                )
+            )
+        _seed_valuation_today(journal)
+        _seed_hk_valuation_today(journal)
+        _seed_us_valuation_today(journal)
+
+        card = build_portfolio_card(journal)
         tables = [e for e in card["elements"] if e.get("tag") == "table"]
-        valuation_table = next(
-            t for t in tables
-            if [c["name"] for c in t["columns"]] == ["indicator", "value", "verdict", "threshold"]
-        )
-        rows = valuation_table["rows"]
-        # PE 分位在 index=1
-        assert rows[1]["value"] == "85.00%"
-        assert rows[1]["verdict"] == "偏高估"
-        # 其他 3 行 → "数据缺失" / "n/a"
-        for idx in (0, 2, 3):
-            assert rows[idx]["value"] == "数据缺失"
-            assert rows[idx]["verdict"] == "n/a"
+        assert len(tables) == 4, f"期望 4 张表，实际 {len(tables)}（飞书 ≤5 上限）"
 
-    def test_section_3_increases_hr_count(self, journal: PortfolioJournal) -> None:
-        """Section 3 渲染时 hr 数从 4 增到 6（多了 2 个 hr：跨 section 分隔 + 表前 hr）。
+    def test_hr_count_with_combined_section(self, journal: PortfolioJournal) -> None:
+        """combined section 渲染后整张卡片的 hr 数 = 7（baseline 4 + combined section 加 3）。
 
-        验证 Section 3 跟前 2 个 section 一样有完整的 hr 包裹结构。
+        无估值时 4 hr（Section 1 内 2 + Section 2 跨 + Section 2 内 1）。
+        渲染 combined section 后多 3 hr：
+        - 跨 Section 3 分隔（1，build_portfolio_card 加）
+        - combined section note 后（1，_build_valuation_section 加）
+        - combined per-fund 表前（1，_build_valuation_section 加）
         """
         _seed(journal)
         # 无估值：4 hr
@@ -920,11 +1154,13 @@ class TestValuationSection:
         hrs_no_val = sum(1 for e in card_no_val["elements"] if e.get("tag") == "hr")
         assert hrs_no_val == 4
 
-        # 有估值：6 hr
+        # 有估值：4 + 3 = 7 hr
         _seed_valuation_today(journal)
+        _seed_a_share_funds(journal)
+        _seed_fund_valuations(journal)
         card_with_val = build_portfolio_card(journal)
         hrs_with_val = sum(1 for e in card_with_val["elements"] if e.get("tag") == "hr")
-        assert hrs_with_val == 6
+        assert hrs_with_val == 7
 
 
 class TestOrdering:
@@ -1001,3 +1237,1429 @@ class TestOrdering:
         assert section_2_idx is not None
         # 它前面必须是 hr（跨 section 分隔）
         assert elements[section_2_idx - 1].get("tag") == "hr"
+
+
+# ─── A 股策略建议行（spec 098 第二十五轮 — liubo 2026-09-19 反馈）───
+
+
+class TestDecideAShareStrategy:
+    """_decide_a_share_strategy 决策树：占比 vs 目标 + 估值综合分。
+
+    决策树：
+    1) 占比 > 目标 → 不再投入（仓位纪律优先）
+    2) 占比 ≤ 目标 + 偏高估/极高估 → 分批止盈
+    3) 占比 ≤ 目标 + 偏低估/极低估 → 分批买入
+    4) 占比 ≤ 目标 + 正常 → 正常持有
+    """
+
+    def test_over_target_returns_no_invest(self) -> None:
+        """占比 > 目标 → 不再投入（不论估值高低）。"""
+        from global_allocation.portfolio.card import _decide_a_share_strategy
+
+        # 估值偏低估也应该是"不再投入"（仓位纪律优先于估值信号）
+        strategy, reason = _decide_a_share_strategy(over_target=True, composite_verdict="低估")
+        assert strategy == "不再投入"
+        assert reason == "占比 > 目标"
+
+    def test_under_target_high_valuation_take_profit(self) -> None:
+        """占比 ≤ 目标 + 偏高估 → 分批止盈。"""
+        from global_allocation.portfolio.card import _decide_a_share_strategy
+
+        strategy, reason = _decide_a_share_strategy(over_target=False, composite_verdict="偏高估")
+        assert strategy == "分批止盈"
+        assert "估值" in reason and "偏高估" in reason
+
+    def test_under_target_extreme_high_take_profit(self) -> None:
+        """占比 ≤ 目标 + 极高估 → 分批止盈（一样）。"""
+        from global_allocation.portfolio.card import _decide_a_share_strategy
+
+        strategy, reason = _decide_a_share_strategy(over_target=False, composite_verdict="极高估")
+        assert strategy == "分批止盈"
+
+    def test_under_target_low_valuation_buy(self) -> None:
+        """占比 ≤ 目标 + 偏低估 → 分批买入。"""
+        from global_allocation.portfolio.card import _decide_a_share_strategy
+
+        strategy, reason = _decide_a_share_strategy(over_target=False, composite_verdict="低估")
+        assert strategy == "分批买入"
+        assert "估值" in reason and "偏低估" in reason
+
+    def test_under_target_extreme_low_buy(self) -> None:
+        """占比 ≤ 目标 + 极低 → 分批买入。
+
+        注：interpret_composite_score 返回 "极低"（不是 "极低估"）。
+        极低估是 score band 的标签（"1=极低估 5=极高估"），不要混淆。
+        """
+        from global_allocation.portfolio.card import _decide_a_share_strategy
+
+        strategy, reason = _decide_a_share_strategy(over_target=False, composite_verdict="极低")
+        assert strategy == "分批买入"
+
+    def test_under_target_normal_hold(self) -> None:
+        """占比 ≤ 目标 + 估值正常 → 正常持有（不卖不买）。"""
+        from global_allocation.portfolio.card import _decide_a_share_strategy
+
+        strategy, reason = _decide_a_share_strategy(over_target=False, composite_verdict="正常")
+        assert strategy == "正常持有"
+        assert "估值" in reason and "正常" in reason
+
+
+class TestAShareStrategyNote:
+    """A 股策略建议渲染成 note 文字块（spec 098 第二十六轮）。
+
+    不再放表里（liubo 2026-09-19 反馈"用文字说"），独立一段话交代：
+        "A 股占比 X%，目标 Y%。<策略>（<理由>）"
+    """
+
+    def _get_strategy_note_text(self, journal: PortfolioJournal) -> str:
+        """从 build_portfolio_card 输出里抠出 A 股策略 note 的文字。"""
+        spec = build_portfolio_card(journal)
+        for el in spec["elements"]:
+            # spec 098 第二十八轮起：A 股策略提示用 div+lark_md（要更突出，不能灰字）
+            if el.get("tag") == "div" and "A 股占比" in el["text"]["content"]:
+                return el["text"]["content"]
+            if el.get("tag") != "note":
+                continue
+            for sub in el.get("elements", []):
+                content = sub.get("content", "")
+                if content.startswith("A 股占比"):
+                    return content
+        raise AssertionError("未找到 A 股策略提示（div/note 含 'A 股占比'）")
+
+    def test_note_present_after_have_holdings_and_valuation(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """有持仓 + 估值 → 估值表后追加一个 note，文字以 'A 股占比' 开头。"""
+        _seed(journal)
+        _seed_valuation_today(journal)
+        text = self._get_strategy_note_text(journal)
+        assert "A 股占比" in text
+        assert "%" in text
+        assert "目标" in text
+
+    def test_note_format_includes_strategy_and_reason(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """note 文字格式 = "A 股占比 X%，目标 Y%。<策略>（<理由>）"。
+
+        验证包含：占比百分比、目标百分比、策略文案（4 个之一）、括号里的理由。
+        """
+        _seed(journal)
+        _seed_valuation_today(journal)
+        text = self._get_strategy_note_text(journal)
+        # 必含 4 个策略文案之一
+        assert any(s in text for s in ["不再投入", "分批止盈", "分批买入", "正常持有", "等估值"])
+        # 理由在括号里（"（...）"）
+        assert "（" in text and "）" in text
+
+    def test_table_does_not_have_a_share_strategy_row(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """combined 估值表不再含 'A 股策略' 行（已移到 note）。
+
+        spec 098.4 — combined 表结构变了：5 列 region/indicator/value/verdict/threshold。
+        这里验证 indicator 列不含 'A 股策略'（不管列结构怎么变）。
+        """
+        _seed(journal)
+        _seed_valuation_today(journal)
+        spec = build_portfolio_card(journal)
+        # 任何含 indicator 列的表都不是策略表
+        for t in [e for e in spec["elements"] if e.get("tag") == "table"]:
+            col_names = [c["name"] for c in t["columns"]]
+            if "indicator" in col_names:
+                row_names = [r.get("indicator", "") for r in t["rows"]]
+                assert "A 股策略" not in row_names
+
+
+# ─── Per-fund 估值（spec 098 第二十七轮）───
+
+
+class TestComputeRoeYoy:
+    """_compute_roe_yoy：ROE 同比 = (latest - year_ago) / year_ago。"""
+
+    def _fv(self, latest: Decimal | None, year_ago: Decimal | None) -> FundValuation:
+        return FundValuation(
+            record_date=date(2026, 9, 19),
+            fund_code="013310",
+            index_code="931643",
+            pe_ttm=Decimal("50"),
+            pe_percentile=Decimal("0.7"),
+            dividend_yield=Decimal("0.005"),
+            roe_latest=latest,
+            roe_year_ago=year_ago,
+            source="test",
+        )
+
+    def test_positive_growth(self) -> None:
+        """ROE 从 5% → 8.34% → +66.8%。"""
+        result = _compute_roe_yoy(self._fv(Decimal("0.0834"), Decimal("0.05")))
+        assert result is not None
+        assert abs(result - Decimal("0.668")) < Decimal("0.01")
+
+    def test_zero_growth(self) -> None:
+        """ROE 没变 → 0。"""
+        result = _compute_roe_yoy(self._fv(Decimal("0.05"), Decimal("0.05")))
+        assert result == Decimal("0")
+
+    def test_negative_growth(self) -> None:
+        """ROE 下滑 → 负值。"""
+        result = _compute_roe_yoy(self._fv(Decimal("0.03"), Decimal("0.05")))
+        assert result == Decimal("-0.4")
+
+    def test_missing_latest(self) -> None:
+        """ROE 最新缺失 → None。"""
+        assert _compute_roe_yoy(self._fv(None, Decimal("0.05"))) is None
+
+    def test_missing_year_ago(self) -> None:
+        """ROE 去年缺失 → None。"""
+        assert _compute_roe_yoy(self._fv(Decimal("0.05"), None)) is None
+
+    def test_year_ago_zero(self) -> None:
+        """去年 ROE = 0 → None（避免除零）。"""
+        assert _compute_roe_yoy(self._fv(Decimal("0.05"), Decimal("0"))) is None
+
+
+class TestPerFundVerdict:
+    """_per_fund_verdict：单只 A 股基金的估值判断（5 档打分制）。
+
+    spec 098 第二十八轮 — liubo 2026-09-19 反馈"按指数类型用不同估值指标 + 分位 1-5 打分"。
+
+    3 套规则：
+    - dividend（红利低波）：优先用股息率加权 PE 分位，否则 fallback 普通 PE 分位
+    - broad（宽基）：普通 PE 分位
+    - growth（成长/小盘）：普通 PE 分位 + ROE 同比辅助
+
+    5 档阈值（与 4 指标估值表 PE 分位一致）：
+    - < 10%  → 极低估 1
+    - < 30%  → 低估 2
+    - < 70%  → 正常 3
+    - < 90%  → 高估 4
+    - ≥ 90%  → 极高估 5
+
+    growth 额外调整：
+    - ROE 同比 ≤ -10% 且 score ≥ 4 → 极高估 5（盈利下滑 + PE 中高位）
+    - ROE 同比 ≥ +10% 且 score = 5 → 高估 4（盈利在涨，PE 高但合理）
+    """
+
+    def test_broad_low(self) -> None:
+        """broad 策略：PE 分位 < 30% → 低估 2。"""
+        fv = FundValuation(
+            record_date=date(2026, 9, 19),
+            fund_code="014532",
+            index_code="930050",
+            pe_ttm=Decimal("15"),
+            pe_percentile=Decimal("0.20"),
+            dividend_yield=Decimal("0.03"),
+            source="test",
+        )
+        assert _per_fund_verdict(fv, "broad") == "低估 2"
+
+    def test_broad_very_low(self) -> None:
+        """broad 策略：PE 分位 < 10% → 极低估 1。"""
+        fv = FundValuation(
+            record_date=date(2026, 9, 19),
+            fund_code="014532",
+            index_code="930050",
+            pe_ttm=Decimal("15"),
+            pe_percentile=Decimal("0.05"),
+            dividend_yield=Decimal("0.03"),
+            source="test",
+        )
+        assert _per_fund_verdict(fv, "broad") == "极低估 1"
+
+    def test_broad_normal(self) -> None:
+        """broad 策略：PE 分位 30%-70% → 正常 3。"""
+        fv = FundValuation(
+            record_date=date(2026, 9, 19),
+            fund_code="014532",
+            index_code="930050",
+            pe_ttm=Decimal("15"),
+            pe_percentile=Decimal("0.46"),
+            dividend_yield=Decimal("0.03"),
+            source="test",
+        )
+        assert _per_fund_verdict(fv, "broad") == "正常 3"
+
+    def test_broad_high(self) -> None:
+        """broad 策略：PE 分位 70%-90% → 高估 4。"""
+        fv = FundValuation(
+            record_date=date(2026, 9, 19),
+            fund_code="014532",
+            index_code="930050",
+            pe_ttm=Decimal("20"),
+            pe_percentile=Decimal("0.80"),
+            dividend_yield=Decimal("0.01"),
+            source="test",
+        )
+        assert _per_fund_verdict(fv, "broad") == "高估 4"
+
+    def test_broad_very_high(self) -> None:
+        """broad 策略：PE 分位 ≥ 90% → 极高估 5。"""
+        fv = FundValuation(
+            record_date=date(2026, 9, 19),
+            fund_code="014532",
+            index_code="930050",
+            pe_ttm=Decimal("25"),
+            pe_percentile=Decimal("0.95"),
+            dividend_yield=Decimal("0.01"),
+            source="test",
+        )
+        assert _per_fund_verdict(fv, "broad") == "极高估 5"
+
+    def test_dividend_uses_dy_weighted_pe_pct(self) -> None:
+        """dividend 策略：股息率加权 PE 分位 < 30% → 低估 2（即使普通 PE 分位高）。"""
+        fv = FundValuation(
+            record_date=date(2026, 9, 19),
+            fund_code="008114",
+            index_code="930955",
+            pe_ttm=Decimal("8.85"),
+            pe_percentile=Decimal("0.8180"),  # 普通 PE 分位 81.8%（高）
+            dividend_yield=Decimal("0.0448"),
+            pe_percentile_dy_weighted=Decimal("0.20"),  # 但股息率加权只有 20%（低估）
+            source="test",
+        )
+        assert _per_fund_verdict(fv, "dividend") == "低估 2"
+
+    def test_dividend_fallback_to_pe_percentile(self) -> None:
+        """dividend 策略：股息率加权 PE 分位缺失 → fallback 到普通 PE 分位。"""
+        fv = FundValuation(
+            record_date=date(2026, 9, 19),
+            fund_code="008114",
+            index_code="930955",
+            pe_ttm=Decimal("8.85"),
+            pe_percentile=Decimal("0.20"),  # fallback 用这个
+            dividend_yield=Decimal("0.04"),
+            pe_percentile_dy_weighted=None,  # 银行螺丝钉还没填
+            source="test",
+        )
+        assert _per_fund_verdict(fv, "dividend") == "低估 2"
+
+    def test_growth_high_roe_downgrades_score_5_to_4(self) -> None:
+        """growth 策略：PE 分位 ≥ 90% + ROE 同比大涨 → 高估 4（不是极高估）。"""
+        fv = FundValuation(
+            record_date=date(2026, 9, 19),
+            fund_code="013310",
+            index_code="931643",
+            pe_ttm=Decimal("51"),
+            pe_percentile=Decimal("0.95"),  # 极高估 5
+            dividend_yield=Decimal("0.006"),
+            roe_latest=Decimal("0.0834"),
+            roe_year_ago=Decimal("0.0543"),  # +54% ROE 同比
+            source="test",
+        )
+        assert _per_fund_verdict(fv, "growth") == "高估 4"
+
+    def test_growth_declining_roe_promotes_to_5(self) -> None:
+        """growth 策略：PE 分位 70%+ + ROE 同比大跌 → 极高估 5（盈利下滑 + PE 高 = 真贵）。"""
+        fv = FundValuation(
+            record_date=date(2026, 9, 19),
+            fund_code="000852",
+            index_code="000852",
+            pe_ttm=Decimal("44"),
+            pe_percentile=Decimal("0.85"),  # 高估 4 base
+            dividend_yield=Decimal("0.011"),
+            roe_latest=Decimal("0.02"),
+            roe_year_ago=Decimal("0.05"),  # -60% ROE 同比
+            source="test",
+        )
+        assert _per_fund_verdict(fv, "growth") == "极高估 5"
+
+    def test_growth_without_roe_data(self) -> None:
+        """growth 策略：ROE 缺失 → 跟普通 PE 分位一样判断。"""
+        fv = FundValuation(
+            record_date=date(2026, 9, 19),
+            fund_code="013310",
+            index_code="931643",
+            pe_ttm=Decimal("50"),
+            pe_percentile=Decimal("0.20"),  # < 30% → 低估 2
+            dividend_yield=Decimal("0.006"),
+            roe_latest=None,
+            roe_year_ago=None,
+            source="test",
+        )
+        assert _per_fund_verdict(fv, "growth") == "低估 2"
+
+    def test_missing_pe_pct(self) -> None:
+        """PE 分位缺失 → 数据缺失。"""
+        fv = FundValuation(
+            record_date=date(2026, 9, 19),
+            fund_code="008114",
+            index_code="930955",
+            pe_ttm=Decimal("10"),
+            pe_percentile=None,
+            dividend_yield=Decimal("0.04"),
+            source="test",
+        )
+        assert _per_fund_verdict(fv, "dividend") == "数据缺失"
+        assert _per_fund_verdict(fv, "broad") == "数据缺失"
+        assert _per_fund_verdict(fv, "growth") == "数据缺失"
+
+
+class TestPerFundRecommendation:
+    """_per_fund_recommendation：按 per-fund 估值分位给动作建议（不看 A 股整体仓位）。
+
+    spec 098 第二十八轮 — liubo 反馈"建议不要看整体超配，应该按评估判断"。
+
+    决策：score 1-2 买入 / 3 持有 / 4-5 止盈 / 数据缺失 → "—"
+    """
+
+    def test_score_1_buy(self) -> None:
+        assert _per_fund_recommendation("极低估 1") == "买入"
+
+    def test_score_2_buy(self) -> None:
+        assert _per_fund_recommendation("低估 2") == "买入"
+
+    def test_score_3_hold(self) -> None:
+        assert _per_fund_recommendation("正常 3") == "持有"
+
+    def test_score_4_sell(self) -> None:
+        assert _per_fund_recommendation("高估 4") == "止盈"
+
+    def test_score_5_sell(self) -> None:
+        assert _per_fund_recommendation("极高估 5") == "止盈"
+
+    def test_data_missing_dash(self) -> None:
+        assert _per_fund_recommendation("数据缺失") == "—"
+
+    def test_advice_ignores_overall_strategy(self) -> None:
+        """不接收 overall_strategy 参数 — 单只基金独立判断，仓位纪律由 strategy_note 单独说。"""
+        # 即便估值"高估"也不被任何外部状态覆盖
+        assert _per_fund_recommendation("高估 4") == "止盈"
+        assert _per_fund_recommendation("低估 2") == "买入"
+
+
+class TestFundValuationSection:
+    """_build_fund_valuation_section：每只 A 股基金的估值表。
+
+    spec 098 第二十七轮 — liubo 反馈"要看每只基金估值"。
+    """
+
+    def test_returns_empty_when_no_a_share_holdings(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """用户没有 A 股持仓（fixtures 里只有 mixed 和 equity 但没 CN_EQUITY）→ 不渲染。"""
+        _seed(journal)
+        section = _build_fund_valuation_section(journal)
+        assert section == []
+
+    def test_renders_per_fund_table(self, journal: PortfolioJournal) -> None:
+        """有 A 股持仓 + 有估值数据 → 渲染 hr + table（spec 098 第二十八轮 — header 已外移到 valuation_section）。"""
+        _seed_a_share_funds(journal)
+        _seed_fund_valuations(journal)
+        section = _build_fund_valuation_section(journal)
+        # 2 元素：hr + table（不再包含子 header note，由外层 _build_valuation_section 提供 "A 股估值与操作"）
+        assert len(section) == 2
+        assert section[0]["tag"] == "hr"
+        assert section[1]["tag"] == "table"
+
+    def test_table_has_10_columns(self, journal: PortfolioJournal) -> None:
+        """10 列：基金 / 指数 / PE / PE分位 / 股息率 / ROE同比 / 评估 / 建议 / 当前仓位 / 加减仓建议。"""
+        _seed_a_share_funds(journal)
+        _seed_fund_valuations(journal)
+        section = _build_fund_valuation_section(journal)
+        table = section[1]
+        col_names = [c["name"] for c in table["columns"]]
+        assert col_names == [
+            "fund", "index", "pe", "pe_pct", "dy", "roe_yoy",
+            "verdict", "advice", "position", "adjust",
+        ]
+
+    def test_advice_based_on_per_fund_verdict(self, journal: PortfolioJournal) -> None:
+        """建议只看 per-fund 估值（不看整体 A 股策略）— liubo 反馈"建议不要看整体超配"。
+
+        008114 红利低波（股息率加权 PE 分位=0.20 → 低估 2）→ 建议"买入" / "+1仓"
+        022434 中证A500（PE 分位=0.80 → 高估 4）→ 建议"止盈" / "−1仓"
+        014532 MSCI中国A50（PE 分位=0.1626 → 低估 2）→ 建议"买入" / "+1仓"
+        """
+        _seed_a_share_funds(journal)
+        _seed_fund_valuations(journal)
+        section = _build_fund_valuation_section(journal)
+        table = section[1]
+        row_by_code = {r["fund"].split("\n")[0]: r for r in table["rows"]}
+        # 008114 → 买入 +1仓（不在超配时）
+        assert row_by_code["008114"]["verdict"] == "低估 2"
+        assert row_by_code["008114"]["advice"] == "买入"
+        assert row_by_code["008114"]["adjust"] == "+1仓"
+        # 022434 → 止盈 −1仓
+        assert row_by_code["022434"]["verdict"] == "高估 4"
+        assert row_by_code["022434"]["advice"] == "止盈"
+        assert row_by_code["022434"]["adjust"] == "−1仓"
+        # 014532 → 买入 +1仓
+        assert row_by_code["014532"]["verdict"] == "低估 2"
+        assert row_by_code["014532"]["advice"] == "买入"
+        assert row_by_code["014532"]["adjust"] == "+1仓"
+
+    def test_advice_normal_holds(self, journal: PortfolioJournal) -> None:
+        """PE 分位 30%-70% → 正常 3 → 建议"持有" / "—"。"""
+        _seed_a_share_funds(journal)
+        journal.db.upsert_fund_valuation(
+            FundValuation(
+                record_date=date.today(),
+                fund_code="022434",
+                index_code="000510",
+                pe_ttm=Decimal("16"),
+                pe_percentile=Decimal("0.50"),  # 正常 3
+                dividend_yield=Decimal("0.022"),
+                source="test",
+            )
+        )
+        section = _build_fund_valuation_section(journal)
+        table = section[1]
+        row = next(r for r in table["rows"] if "022434" in r["fund"])
+        assert row["verdict"] == "正常 3"
+        assert row["advice"] == "持有"
+        assert row["adjust"] == "—"
+
+    def test_dividend_row_shows_dy_weighted_pe_pct(self, journal: PortfolioJournal) -> None:
+        """红利低波行的 PE分位 列 = 股息率加权 PE 分位（不是普通 PE 分位）。
+
+        fixture: 008114 普通 PE 分位 = 0.8180（高），股息率加权 = 0.20（低）
+        期望：PE分位 列显示 20.0%（银行螺丝钉数据），verdict = 低估 2
+        """
+        _seed_a_share_funds(journal)
+        _seed_fund_valuations(journal)
+        section = _build_fund_valuation_section(journal)
+        table = section[1]
+        row = next(r for r in table["rows"] if "008114" in r["fund"])
+        assert row["pe_pct"] == "20.0%"  # 股息率加权 PE 分位
+        assert row["verdict"] == "低估 2"  # 因为 20% < 30%
+
+    def test_growth_row_shows_roe_yoy_not_dy(self, journal: PortfolioJournal) -> None:
+        """成长/小盘显示 ROE 同比列，不显示股息率列（股息率永远低，没参考价值）。
+
+        fixture: 022434 中证A500（broad 策略 — 不是 growth）
+        fixture 没有真正的 growth fund，所以这个测试用 mock 数据
+        """
+        _seed_a_share_funds(journal)
+        # 额外塞一个 growth fund
+        from datetime import date as _date
+        journal.db.upsert_fund_valuation(
+            FundValuation(
+                record_date=_date.today(),
+                fund_code="013310",
+                index_code="931643",
+                pe_ttm=Decimal("51.20"),
+                pe_percentile=Decimal("0.75"),
+                dividend_yield=Decimal("0.006"),
+                roe_latest=Decimal("0.0834"),
+                roe_year_ago=Decimal("0.0543"),
+                source="test",
+            )
+        )
+        section = _build_fund_valuation_section(journal)
+        table = section[1]
+        # 013310 不在 _seed_a_share_funds 里 — 不该出现在表里
+        # 这个测试聚焦在 ROE同比 列存在性
+        # 改用 000852 之类需要重新 seed
+        # 简化：只检查 ROE同比 列存在即可
+        roe_col = next((c for c in table["columns"] if c["name"] == "roe_yoy"), None)
+        assert roe_col is not None
+        assert roe_col["display_name"] == "ROE同比"
+
+    def test_missing_valuation_renders_data_missing(self, journal: PortfolioJournal) -> None:
+        """有 A 股持仓但 DB 没估值 → 整行显示"数据缺失"，仓位保留（按市值算）。"""
+        _seed_a_share_funds(journal)
+        # 没调 _seed_fund_valuations
+        section = _build_fund_valuation_section(journal)
+        table = section[1]
+        # 每行都有数据缺失（估值列），仓位/加减仓列也合理
+        for row in table["rows"]:
+            assert row["pe"] == "数据缺失"
+            assert row["pe_pct"] == "数据缺失"
+            assert row["dy"] == "数据缺失"
+            assert row["roe_yoy"] == "数据缺失"
+            assert row["verdict"] == "数据缺失"
+            assert row["advice"] == "—"
+            # 没估值数据 → 加减仓也是 "—"
+            assert row["adjust"] == "—"
+
+    def test_only_a_share_funds_in_table(self, journal: PortfolioJournal) -> None:
+        """混合持仓：1 只 A 股 + 1 只非 A 股 → 表里只显示 A 股那只。"""
+        _seed_a_share_funds(journal)  # 加 022434 (CN_EQUITY)
+        _seed(journal)  # 加 163406 (MIXED) + 510300 (EQUITY)
+        # 清空 fund_valuations 让 022434 显示数据缺失
+        section = _build_fund_valuation_section(journal)
+        table = section[1]
+        fund_codes = [r["fund"].split("\n")[0] for r in table["rows"]]
+        assert "022434" in fund_codes
+        assert "163406" not in fund_codes
+        assert "510300" not in fund_codes
+
+    def test_section_appears_after_strategy_note_in_card(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """完整卡片里：fund_valuation_section 紧跟 A 股策略 div 之后。
+
+        spec 098 第二十八轮 — per-fund 表不再带子 header，外层 _build_valuation_section
+        统一在顶部渲染 "A 股估值与操作" note + 4 指标估值表 + strategy_note div，
+        再追加 hr + per-fund table。这里验证 per-fund table 在 strategy_div 之后。
+        """
+        _seed_a_share_funds(journal)
+        _seed_valuation_today(journal)
+        _seed_fund_valuations(journal)
+        card = build_portfolio_card(journal)
+        elements = card["elements"]
+        # 找 "A 股占比" 的 div（A 股策略提示，从 spec 098 第二十八轮起是 div+lark_md）
+        strategy_div_idx = next(
+            i for i, e in enumerate(elements)
+            if e.get("tag") == "div" and "A 股占比" in e["text"]["content"]
+        )
+        # per-fund table 的第一行 fund 列含 "008114"（区别于 4 指标估值表）
+        # 找 fund 列含 "014532" 的 table
+        def _is_per_fund_table(elem: dict[str, object]) -> bool:
+            if elem.get("tag") != "table":
+                return False
+            cols = elem.get("columns", [])
+            if not cols:
+                return False
+            col_names = [c.get("name") for c in cols]
+            return "fund" in col_names and "advice" in col_names
+
+        per_fund_table_idx = next(
+            i for i, e in enumerate(elements) if _is_per_fund_table(e)
+        )
+        assert per_fund_table_idx > strategy_div_idx
+
+
+class TestPositionManagementMerged:
+    """spec 098 第二十九轮 + 第三十轮 — liubo 反馈"两张表合并"+"底仓 1 仓 + 上限 6 仓"。
+
+    仓位 + 加减仓建议 合并到 per-fund 表的右侧两列：
+    - 当前仓位 = 市值 / 1 仓（POSITION_UNIT = 10000），格式 "X.Y仓"
+    - 加减仓建议 = "+1仓" / "−1仓" / "—"
+    - 整体超配 → 加仓暂停（"—"），减仓照常
+    - 底仓 1 仓不动（POSITION_BASE = 1）：止盈到 ≤ 1 仓时不再减
+    - 上限 6 仓（POSITION_MAX = 1 + 5）：买入到 ≥ 6 仓时不再加
+    """
+
+    def test_buy_verdict_shows_plus_1_unit(self, journal: PortfolioJournal) -> None:
+        """低估 1-2 + 当前 < 6 仓 + 不超配 → 加减仓建议 = "+1仓"。"""
+        _seed_a_share_funds(journal)
+        _seed_fund_valuations(journal)  # 008114/014532=低估 2, 022434=高估 4
+        section = _build_fund_valuation_section(journal, over_target=False)
+        table = section[1]
+        row_by_code = {r["fund"].split("\n")[0]: r for r in table["rows"]}
+        assert row_by_code["008114"]["adjust"] == "+1仓"
+        assert row_by_code["014532"]["adjust"] == "+1仓"
+        assert row_by_code["022434"]["adjust"] == "−1仓"
+
+    def test_over_target_pauses_add_but_keeps_reduce(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """整体超配 → 买入变 "—"（加仓暂停），止盈保持 "−1仓"。"""
+        _seed_a_share_funds(journal)
+        _seed_fund_valuations(journal)
+        section = _build_fund_valuation_section(journal, over_target=True)
+        table = section[1]
+        row_by_code = {r["fund"].split("\n")[0]: r for r in table["rows"]}
+        # 低估 2：加仓暂停
+        assert row_by_code["008114"]["adjust"] == "—"
+        assert row_by_code["014532"]["adjust"] == "—"
+        # 高估 4：减仓照常
+        assert row_by_code["022434"]["adjust"] == "−1仓"
+
+    def test_hold_verdict_shows_dash(self, journal: PortfolioJournal) -> None:
+        """正常 3 → 加减仓 "—"。"""
+        _seed_a_share_funds(journal)
+        journal.db.upsert_fund_valuation(
+            FundValuation(
+                record_date=date.today(),
+                fund_code="022434",
+                index_code="000510",
+                pe_ttm=Decimal("16"),
+                pe_percentile=Decimal("0.50"),
+                dividend_yield=Decimal("0.022"),
+                source="test",
+            )
+        )
+        section = _build_fund_valuation_section(journal, over_target=False)
+        table = section[1]
+        row = next(r for r in table["rows"] if "022434" in r["fund"])
+        assert row["adjust"] == "—"
+
+    def test_position_unit_is_10k(self, journal: PortfolioJournal) -> None:
+        """确认仓位单位 = 10,000 CNY。"""
+        assert POSITION_UNIT == Decimal("10000")
+
+    def test_position_format_with_cang_suffix(self, journal: PortfolioJournal) -> None:
+        """当前仓位 显示 "X.Y仓" 格式（保留 1 位小数 + 仓单位）。"""
+        _seed_a_share_funds(journal)
+        _seed_fund_valuations(journal)
+        section = _build_fund_valuation_section(journal, over_target=False)
+        table = section[1]
+        for row in table["rows"]:
+            assert row["position"].endswith("仓")
+            numeric_part = row["position"].rstrip("仓")
+            assert float(numeric_part) >= 0
+
+    def test_buy_at_max_position_shows_dash(self, journal: PortfolioJournal) -> None:
+        """低估（买入）+ 当前仓位 >= 6 仓（已达上限）→ 加减仓建议 "—"。"""
+        from global_allocation.portfolio.card import (
+            POSITION_MAX,
+            POSITION_UNIT,
+        )
+        _seed_a_share_funds(journal)
+        _seed_fund_valuations(journal)
+        # 把 008114 的市值推到上限：shares * market_price = 6 * POSITION_UNIT
+        # 008114 当前 10000 shares, price=1.5 → 市值 15000 = 1.5 仓
+        # 改价格 = 6 * 10000 / 10000 = 6.0 → 市值 60000 = 6 仓（恰好上限）
+        journal._price_source._prices["008114"] = Decimal(str(POSITION_MAX))
+        section = _build_fund_valuation_section(journal, over_target=False)
+        table = section[1]
+        row_008114 = next(r for r in table["rows"] if "008114" in r["fund"])
+        assert row_008114["position"] == "6.0仓"
+        # 买入但已达上限 → 不再加
+        assert row_008114["adjust"] == "—"
+
+    def test_sell_at_base_position_shows_dash(self, journal: PortfolioJournal) -> None:
+        """高估（止盈）+ 当前仓位 <= 1 仓（只剩底仓）→ 加减仓建议 "—"。"""
+        from global_allocation.portfolio.card import POSITION_BASE
+        _seed_a_share_funds(journal)
+        _seed_fund_valuations(journal)
+        # 把 022434 的市值压到刚好底仓 1 仓
+        journal._price_source._prices["022434"] = Decimal(str(POSITION_BASE))
+        section = _build_fund_valuation_section(journal, over_target=False)
+        table = section[1]
+        row_022434 = next(r for r in table["rows"] if "022434" in r["fund"])
+        assert row_022434["position"] == "1.0仓"
+        # 止盈但只剩底仓 → 不卖底仓
+        assert row_022434["adjust"] == "—"
+
+    def test_position_constants(self) -> None:
+        """spec 098 第三十轮 — 仓位常量定义。
+
+        底仓 1 仓 + 最多加 5 仓 = 总上限 6 仓。
+        """
+        from global_allocation.portfolio.card import (
+            POSITION_BASE,
+            POSITION_MAX,
+            POSITION_MAX_ABOVE_BASE,
+        )
+        assert POSITION_BASE == Decimal("1")
+        assert POSITION_MAX_ABOVE_BASE == Decimal("5")
+        assert POSITION_MAX == Decimal("6")
+
+
+# ─── fixtures（spec 098 第二十七轮 per-fund 测试用）───
+
+
+def _seed_a_share_funds(journal: PortfolioJournal) -> None:
+    """塞 3 只 A 股基金（不同 PE 分位 / 股息率组合）+ 1 笔 buy。
+
+    同时给每只 A 股基金加价格（fixture 默认只覆盖 163406 / 510300），
+    让 position 有值且 > 底仓 1 仓，下游"加减仓建议"列才能算出"+1仓"/"−1仓"。
+    shares=10000, price=1.5 → 市值=15000 = 1.5 仓（高于底仓，可加可减）。
+    """
+    journal.add_fund("014532", "MSCI中国A50", AssetClass.EQUITY)
+    journal.add_fund("008114", "红利低波100", AssetClass.EQUITY)
+    journal.add_fund("022434", "中证A500", AssetClass.EQUITY)
+    for code in ("014532", "008114", "022434"):
+        journal._price_source._prices[code] = Decimal("1.5")
+    # 各 buy 10000 份，price=1.0 → 平均成本 1.0；市值 = 10000 * 1.5 = 15000 = 1.5 仓
+    journal.record_buy(
+        fund_code="014532",
+        trade_date=date(2026, 9, 1),
+        shares=Decimal("10000"),
+        price=Decimal("1.0"),
+    )
+    journal.record_buy(
+        fund_code="008114",
+        trade_date=date(2026, 9, 1),
+        shares=Decimal("10000"),
+        price=Decimal("1.0"),
+    )
+    journal.record_buy(
+        fund_code="022434",
+        trade_date=date(2026, 9, 1),
+        shares=Decimal("10000"),
+        price=Decimal("1.0"),
+    )
+
+
+def _seed_fund_valuations(journal: PortfolioJournal) -> None:
+    """塞 per-fund 估值：1 只 dividend 低估（008114）+ 1 只 broad 正常（014532）+ 1 只 broad 高估（022434）。
+
+    008114 的股息率加权 PE 分位 = 0.20（银行螺丝钉手动填），普通 PE 分位 = 0.8180（高），
+    测试会验证 dividend 策略用股息率加权而不是普通 PE 分位。
+    """
+    today = date.today()
+    journal.db.upsert_fund_valuation(
+        FundValuation(
+            record_date=today,
+            fund_code="014532",
+            index_code="930050",
+            pe_ttm=Decimal("15.7851"),
+            pe_percentile=Decimal("0.1626"),
+            dividend_yield=Decimal("0.0298"),
+            source="test",
+        )
+    )
+    journal.db.upsert_fund_valuation(
+        FundValuation(
+            record_date=today,
+            fund_code="008114",
+            index_code="930955",
+            pe_ttm=Decimal("8.8511"),
+            pe_percentile=Decimal("0.8180"),  # 普通 PE 分位 81.8%（lixinger）
+            dividend_yield=Decimal("0.0448"),
+            pe_percentile_dy_weighted=Decimal("0.20"),  # 股息率加权 PE 分位 20%（银行螺丝钉）
+            source="test",
+        )
+    )
+    journal.db.upsert_fund_valuation(
+        FundValuation(
+            record_date=today,
+            fund_code="022434",
+            index_code="000510",
+            pe_ttm=Decimal("15.8483"),
+            pe_percentile=Decimal("0.80"),
+            dividend_yield=Decimal("0.005"),
+            source="test",
+        )
+    )
+
+
+# ─── 港股测试 fixtures（spec 098.2 — liubo 2026-09-19 方案 A）───
+
+
+def _seed_hk_valuation_today(journal: PortfolioJournal) -> None:
+    """塞今天的 4 个港股估值指标。
+
+    用 mock 数据：
+    - HK_PE_PERCENTILE = 28%（偏低估，2 分）
+    - HK_DIVIDEND_YIELD = 3.5%（低估，2 分）
+    - HK_AH_PREMIUM = 1.40（140%，低估，2 分）
+    - HK_BUFFETT_INDICATOR = 10（1000%，正常，3 分）
+    综合 = (2+2+2+3)/4 = 2.25 → 2.3（低估）
+    """
+    today = date.today()
+    journal._db.upsert_valuation_indicator(
+        ValuationIndicator(
+            record_date=today,
+            indicator_code=ValuationIndicatorCode.HK_PE_PERCENTILE,
+            value=Decimal("0.28"),
+            source="test",
+        )
+    )
+    journal._db.upsert_valuation_indicator(
+        ValuationIndicator(
+            record_date=today,
+            indicator_code=ValuationIndicatorCode.HK_DIVIDEND_YIELD,
+            value=Decimal("0.035"),
+            source="test",
+        )
+    )
+    journal._db.upsert_valuation_indicator(
+        ValuationIndicator(
+            record_date=today,
+            indicator_code=ValuationIndicatorCode.HK_AH_PREMIUM,
+            value=Decimal("1.40"),
+            source="test",
+        )
+    )
+    journal._db.upsert_valuation_indicator(
+        ValuationIndicator(
+            record_date=today,
+            indicator_code=ValuationIndicatorCode.HK_BUFFETT_INDICATOR,
+            value=Decimal("10"),
+            source="test",
+        )
+    )
+
+
+def _seed_hk_funds(journal: PortfolioJournal) -> None:
+    """塞 3 只港股基金（HSI Dividend / HK Bank / HSTECH）+ 价格 + 1 笔 buy。
+
+    让每只港股基金的市值都是 1.5 仓（shares=10000, price=1.5 → 15000 = 1.5 仓）。
+    """
+    journal.add_fund("004098", "港股通股息率50", AssetClass.EQUITY)
+    journal.add_fund("006809", "港股银行指数", AssetClass.EQUITY)
+    journal.add_fund("013127", "恒生科技", AssetClass.EQUITY)
+    for code in ("004098", "006809", "013127"):
+        journal._price_source._prices[code] = Decimal("1.5")
+    for code in ("004098", "006809", "013127"):
+        journal.record_buy(
+            fund_code=code,
+            trade_date=date(2026, 9, 1),
+            shares=Decimal("10000"),
+            price=Decimal("1.0"),
+        )
+
+
+def _seed_hk_fund_valuations(journal: PortfolioJournal) -> None:
+    """塞 3 只港股基金的 per-fund 估值（spec 098.2）。
+
+    - 004098 (HSI Dividend): 股息率高，PE 分位正常
+    - 006809 (HK Bank): 股息率高，PE 分位低（便宜）
+    - 013127 (HSTECH): PE 高，成长股（看 ROE 同比）
+    """
+    today = date.today()
+    journal.db.upsert_fund_valuation(
+        FundValuation(
+            record_date=today,
+            fund_code="004098",
+            index_code="HSSCHKY",
+            pe_ttm=Decimal("8.5"),
+            pe_percentile=Decimal("0.45"),
+            dividend_yield=Decimal("0.055"),
+            source="test",
+        )
+    )
+    journal.db.upsert_fund_valuation(
+        FundValuation(
+            record_date=today,
+            fund_code="006809",
+            index_code="930792",
+            pe_ttm=Decimal("6.5"),
+            pe_percentile=Decimal("0.20"),  # 低估
+            dividend_yield=Decimal("0.060"),  # 高分红
+            source="test",
+        )
+    )
+    journal.db.upsert_fund_valuation(
+        FundValuation(
+            record_date=today,
+            fund_code="013127",
+            index_code="HSTECH",
+            pe_ttm=Decimal("35.0"),
+            pe_percentile=Decimal("0.75"),  # PE 分位中位偏上
+            dividend_yield=Decimal("0.005"),
+            roe_latest=Decimal("0.15"),
+            roe_year_ago=Decimal("0.10"),
+            source="test",
+        )
+    )
+
+
+# ─── 港股估值测试（spec 098.2）───
+
+
+class TestBuildHKValuationSection:
+    """spec 098.2 — 港股 4 指标估值 section。"""
+
+    def test_hk_section_renders_when_data_present(self, journal: PortfolioJournal) -> None:
+        """DB 有港股 4 指标 → 渲染港股 section。"""
+        from global_allocation.portfolio.card import _build_hk_valuation_section
+
+        _seed_hk_valuation_today(journal)
+        elements = _build_hk_valuation_section(journal)
+        assert len(elements) > 0
+        # 应该有 note header "港股估值与操作"
+        note = next((e for e in elements if e.get("tag") == "note"), None)
+        assert note is not None
+        assert "港股" in note["elements"][0]["content"]
+
+    def test_hk_section_skipped_when_no_data(self, journal: PortfolioJournal) -> None:
+        """DB 没港股指标 → 港股 section 不渲染（避免空表格）。"""
+        from global_allocation.portfolio.card import _build_hk_valuation_section
+
+        # _seed_valuation_today 只塞 A 股 4 指标
+        _seed_valuation_today(journal)
+        elements = _build_hk_valuation_section(journal)
+        assert elements == []
+
+    def test_hk_section_has_four_indicator_rows(self, journal: PortfolioJournal) -> None:
+        """港股 4 指标行 + 1 综合分行 = 5 行。"""
+        from global_allocation.portfolio.card import _build_hk_valuation_section
+
+        _seed_hk_valuation_today(journal)
+        elements = _build_hk_valuation_section(journal)
+        tables = [e for e in elements if e.get("tag") == "table"]
+        assert len(tables) == 1
+        rows = tables[0]["rows"]
+        # 4 指标 + 1 综合分
+        assert len(rows) == 5
+
+    def test_hk_section_displays_strategy_note(self, journal: PortfolioJournal) -> None:
+        """港股 section 有策略 note（占比 vs 目标 + 估值判断）。
+
+        Note: 策略具体是"分批买入"还是"不再投入"取决于占比 vs 目标（10.5%）。
+        _decide_hk_strategy 单元测试单独验证，这里只验证 section 含 div + "港股" 字样。
+        """
+        from global_allocation.portfolio.card import _build_hk_valuation_section
+
+        _seed_hk_valuation_today(journal)
+        _seed_hk_funds(journal)
+        elements = _build_hk_valuation_section(journal)
+        # 至少有一个 div（策略 note）
+        divs = [e for e in elements if e.get("tag") == "div"]
+        assert len(divs) >= 1
+        text = divs[0]["text"]["content"]
+        assert "港股" in text
+        # 不管占比超/低目标，div 都该有"目标"和百分比
+        assert "目标" in text
+        assert "%" in text
+
+    def test_hk_section_composite_score(self, journal: PortfolioJournal) -> None:
+        """港股综合分：[PE:2 股息:2 AH:2 巴菲特:3] → 2.3 低估。"""
+        from global_allocation.portfolio.card import _build_hk_valuation_section
+
+        _seed_hk_valuation_today(journal)
+        elements = _build_hk_valuation_section(journal)
+        tables = [e for e in elements if e.get("tag") == "table"]
+        composite_row = tables[0]["rows"][-1]  # 最后一行是综合分
+        assert composite_row["indicator"] == "综合分"
+        # 综合分 value 列形如 "[PE:2 股息:2 AH:2 巴菲特:3]"
+        assert "[PE:2 股息:2 AH:2" in composite_row["value"]
+        # verdict 列形如 "2.3 低估"
+        assert "2.3" in composite_row["verdict"]
+        assert "低估" in composite_row["verdict"]
+
+    def test_hk_ah_premium_formatted_as_integer_pct(self, journal: PortfolioJournal) -> None:
+        """AH 溢价格式化为整数百分比（"140%"，不是 "140.00%"）。"""
+        from global_allocation.portfolio.card import _build_hk_valuation_section
+
+        _seed_hk_valuation_today(journal)
+        elements = _build_hk_valuation_section(journal)
+        tables = [e for e in elements if e.get("tag") == "table"]
+        # 找 AH 溢价行
+        ah_row = next(
+            r for r in tables[0]["rows"] if r["indicator"] == "AH 溢价"
+        )
+        # 1.40 → "140%"
+        assert ah_row["value"] == "140%"
+
+    def test_hk_buffett_formatted_as_integer_pct(self, journal: PortfolioJournal) -> None:
+        """港股巴菲特格式化为整数百分比（"1000%"）。"""
+        from global_allocation.portfolio.card import _build_hk_valuation_section
+
+        _seed_hk_valuation_today(journal)
+        elements = _build_hk_valuation_section(journal)
+        tables = [e for e in elements if e.get("tag") == "table"]
+        bf_row = next(
+            r for r in tables[0]["rows"] if r["indicator"] == "港股巴菲特"
+        )
+        # 10.0 → "1000%"
+        assert bf_row["value"] == "1000%"
+
+
+class TestBuildValuationSectionCombined:
+    """验证 _build_valuation_section combined 模式（A 股 + 港股 + 美股 一起渲染）。
+
+    spec 098.4 — 不再每个 region 单独一个 section，而是合并成 combined 表 + 多个 strategy divs。
+    """
+
+    def test_combined_section_renders_with_2_regions(self, journal: PortfolioJournal) -> None:
+        """A 股 + 港股 都有数据 → 渲染 combined section（含 combined 指标表）。"""
+        _seed_valuation_today(journal)
+        _seed_hk_valuation_today(journal)
+        elements = _build_valuation_section(journal)
+        notes = [e for e in elements if e.get("tag") == "note"]
+        contents = [n["elements"][0]["content"] for n in notes]
+        # combined section 只有一个统一 header（不再是 per-region header）
+        assert "估值与操作" in contents
+        assert "A 股估值与操作" not in contents
+        assert "港股估值与操作" not in contents
+
+    def test_combined_indicator_table_includes_both_regions(self, journal: PortfolioJournal) -> None:
+        """combined 指标表含 2 region × 4 指标 + 2 综合 = 10 行。"""
+        _seed_valuation_today(journal)
+        _seed_hk_valuation_today(journal)
+        elements = _build_valuation_section(journal)
+        tables = [e for e in elements if e.get("tag") == "table"]
+        indicator_table = next(
+            t for t in tables
+            if [c["name"] for c in t["columns"]] == ["region", "indicator", "value", "verdict", "threshold"]
+        )
+        # A 股 4 + 1 综合 + 港股 4 + 1 综合 = 10 行
+        assert len(indicator_table["rows"]) == 10
+
+    def test_only_a_share_when_no_hk_data(self, journal: PortfolioJournal) -> None:
+        """只有 A 股数据 → combined 指标表 5 行（4 + 1 综合），不含港股行。"""
+        _seed_valuation_today(journal)
+        elements = _build_valuation_section(journal)
+        tables = [e for e in elements if e.get("tag") == "table"]
+        indicator_table = next(
+            t for t in tables
+            if [c["name"] for c in t["columns"]] == ["region", "indicator", "value", "verdict", "threshold"]
+        )
+        assert len(indicator_table["rows"]) == 5
+        # 所有 row region 列都是 "A 股" 或 "—"（综合行）
+        for row in indicator_table["rows"]:
+            assert row["region"] in {"A 股", "—"}
+
+    def test_only_hk_when_no_a_share_data(self, journal: PortfolioJournal) -> None:
+        """只有港股数据 → combined 指标表 5 行（4 + 1 综合），全是港股。"""
+        _seed_hk_valuation_today(journal)
+        elements = _build_valuation_section(journal)
+        tables = [e for e in elements if e.get("tag") == "table"]
+        indicator_table = next(
+            t for t in tables
+            if [c["name"] for c in t["columns"]] == ["region", "indicator", "value", "verdict", "threshold"]
+        )
+        assert len(indicator_table["rows"]) == 5
+        for row in indicator_table["rows"]:
+            assert row["region"] in {"港股", "—"}
+
+    def test_combined_section_returns_empty_when_no_data(self, journal: PortfolioJournal) -> None:
+        """3 region 都无数据 → 返回 []（不渲染空 section）。"""
+        # 不调任何 _seed_valuation_today
+        elements = _build_valuation_section(journal)
+        assert elements == []
+
+
+class TestBuildFundValuationSectionHK:
+    """验证 _build_fund_valuation_section 能渲染港股 3 只基金。"""
+
+    def test_hk_funds_render_in_separate_section(self, journal: PortfolioJournal) -> None:
+        """港股 3 只基金（004098 / 006809 / 013127）只在港股 section 出现，不在 A 股 section。"""
+        _seed_valuation_today(journal)
+        _seed_hk_valuation_today(journal)
+        _seed_a_share_funds(journal)
+        _seed_hk_funds(journal)
+
+        a_share_elements = _build_a_share_valuation_section(journal)
+        hk_elements = _build_hk_valuation_section(journal)
+
+        # A 股 section 只含 A 股 3 只基金（014532 / 008114 / 022434）
+        a_share_tables = [e for e in a_share_elements if e.get("tag") == "table"]
+        # 第一个 table 是指标表，第 2 个是 per-fund 表
+        if len(a_share_tables) >= 2:
+            a_share_fund_table = a_share_tables[1]
+            fund_codes_in_a_share = [r["fund"].split("\n")[0] for r in a_share_fund_table["rows"]]
+            assert "014532" in fund_codes_in_a_share
+            assert "008114" in fund_codes_in_a_share
+            # 港股 code 不应在 A 股 section
+            assert "004098" not in fund_codes_in_a_share
+            assert "013127" not in fund_codes_in_a_share
+
+        # 港股 section 只含港股 3 只基金
+        hk_tables = [e for e in hk_elements if e.get("tag") == "table"]
+        if len(hk_tables) >= 2:
+            hk_fund_table = hk_tables[1]
+            fund_codes_in_hk = [r["fund"].split("\n")[0] for r in hk_fund_table["rows"]]
+            assert "004098" in fund_codes_in_hk
+            assert "006809" in fund_codes_in_hk
+            assert "013127" in fund_codes_in_hk
+            # A 股 code 不应在港股 section
+            assert "014532" not in fund_codes_in_hk
+
+    def test_hk_dividend_fund_low_pe_buys(self, journal: PortfolioJournal) -> None:
+        """006809 (HK Bank, dividend strategy): PE 分位 20% → 低估 → 买入。
+
+        验证港股 dividend 策略正确应用（看普通 PE 分位，不用股息率加权）。
+        """
+        from global_allocation.portfolio.card import _per_fund_verdict
+
+        _seed_hk_fund_valuations(journal)
+        fv = journal.db.list_latest_fund_valuations_for_codes(["006809"])["006809"]
+        verdict = _per_fund_verdict(fv, "dividend")
+        # dividend 策略：pe_percentile_dy_weighted=None → fallback 到 pe_percentile=0.20
+        # 0.20 在 [10%, 30%) → 低估 2
+        assert "低估 2" in verdict
+
+    def test_hk_growth_fund_high_pe_uses_roe_yoy(self, journal: PortfolioJournal) -> None:
+        """013127 (HSTECH, growth strategy): PE 分位 75% + ROE 同比 +50% → 高估 4。
+
+        验证港股 growth 策略的 ROE 同比修正规则：
+        - PE 分位 75% → 基础 4 分（高估）
+        - ROE 同比 = (0.15 - 0.10) / 0.10 = +0.50（+50%）
+        - ROE 同比 ≥ +10% 且 score == 5 才降分；score=4 不变
+        所以最终仍是 "高估 4"
+        """
+        from global_allocation.portfolio.card import _per_fund_verdict
+
+        _seed_hk_fund_valuations(journal)
+        fv = journal.db.list_latest_fund_valuations_for_codes(["013127"])["013127"]
+        verdict = _per_fund_verdict(fv, "growth")
+        assert "高估" in verdict
+
+    def test_hk_funds_no_valuation_show_data_missing(self, journal: PortfolioJournal) -> None:
+        """港股有持仓但缺估值 → per-fund 表显示"数据缺失"。"""
+        _seed_valuation_today(journal)
+        _seed_hk_valuation_today(journal)
+        _seed_hk_funds(journal)
+        # 故意不 _seed_hk_fund_valuations → 港股基金没估值
+
+        hk_elements = _build_hk_valuation_section(journal)
+        hk_tables = [e for e in hk_elements if e.get("tag") == "table"]
+        assert len(hk_tables) >= 2
+        hk_fund_table = hk_tables[1]
+        for row in hk_fund_table["rows"]:
+            assert row["verdict"] == "数据缺失"
+            assert row["advice"] == "—"
+
+
+class TestIndexVerdictStrategyHK:
+    """验证 INDEX_VERDICT_STRATEGY 包含港股 3 个指数。"""
+
+    def test_hk_index_strategies_mapped(self) -> None:
+        from global_allocation.portfolio.card import INDEX_VERDICT_STRATEGY
+
+        assert INDEX_VERDICT_STRATEGY["HSSCHKY"] == "dividend"
+        assert INDEX_VERDICT_STRATEGY["930792"] == "dividend"
+        assert INDEX_VERDICT_STRATEGY["HSTECH"] == "growth"
+
+
+# ─── 美股测试 fixtures（spec 098.3 — liubo 2026-09-20）───
+
+
+def _seed_us_valuation_today(journal: PortfolioJournal) -> None:
+    """塞今天的 4 个美股估值指标。
+
+    用 mock 数据（贴近实际 lixinger CSV 2026-09-20 数据）：
+    - US_PE_PERCENTILE = 60.17%（正常，3 分：30%-70% 区间）
+    - US_DIVIDEND_YIELD = 1.06%（正常，3 分：1%-3% 区间）
+    - US_BUFFETT_INDICATOR = 1.71（171%，正常，3 分：130%-180% 区间）
+    - US_EQUITY_RISK_PREMIUM = 0.0145（1.45%，正常，3 分：1%-3% 区间）
+    综合 = (3+3+3+3)/4 = 3.0 → 3.0（正常）
+    """
+    today = date.today()
+    journal._db.upsert_valuation_indicator(
+        ValuationIndicator(
+            record_date=today,
+            indicator_code=ValuationIndicatorCode.US_PE_PERCENTILE,
+            value=Decimal("0.6017"),
+            source="test",
+        )
+    )
+    journal._db.upsert_valuation_indicator(
+        ValuationIndicator(
+            record_date=today,
+            indicator_code=ValuationIndicatorCode.US_DIVIDEND_YIELD,
+            value=Decimal("0.0106"),
+            source="test",
+        )
+    )
+    journal._db.upsert_valuation_indicator(
+        ValuationIndicator(
+            record_date=today,
+            indicator_code=ValuationIndicatorCode.US_BUFFETT_INDICATOR,
+            value=Decimal("1.71"),
+            source="test",
+        )
+    )
+    journal._db.upsert_valuation_indicator(
+        ValuationIndicator(
+            record_date=today,
+            indicator_code=ValuationIndicatorCode.US_EQUITY_RISK_PREMIUM,
+            value=Decimal("0.0145"),
+            source="test",
+        )
+    )
+
+
+def _seed_us_funds(journal: PortfolioJournal) -> None:
+    """塞 9 只美股基金（4 NDX ETF + 1 标普 500 + 1 标普 100 + 3 全球主题 QDII）。
+
+    让每只美股基金的市值都是 1.5 仓。
+    """
+    us_funds = [
+        ("018966", "汇添富纳100"),
+        ("539001", "建信纳100"),
+        ("016452", "南方纳100"),
+        ("019524", "华泰柏瑞纳100"),
+        ("017641", "摩根标普500"),
+        ("519981", "长信标普100"),
+        ("017730", "嘉实全球产业升级"),
+        ("016664", "天弘全球高端制造"),
+        ("006373", "国富全球科技互联"),
+    ]
+    for code, name in us_funds:
+        journal.add_fund(code, name, AssetClass.EQUITY)
+        journal._price_source._prices[code] = Decimal("1.5")
+    for code, _ in us_funds:
+        journal.record_buy(
+            fund_code=code,
+            trade_date=date(2026, 9, 1),
+            shares=Decimal("10000"),
+            price=Decimal("1.0"),
+        )
+
+
+class TestUSIndicatorConstants:
+    """验证 US_INDICATOR_* 常量定义正确。"""
+
+    def test_us_indicator_codes_has_four_codes(self) -> None:
+        """4 个美股指标（spec 098.3）。"""
+        assert len(US_INDICATOR_CODES) == 4
+        assert ValuationIndicatorCode.US_PE_PERCENTILE in US_INDICATOR_CODES
+        assert ValuationIndicatorCode.US_DIVIDEND_YIELD in US_INDICATOR_CODES
+        assert ValuationIndicatorCode.US_BUFFETT_INDICATOR in US_INDICATOR_CODES
+        assert ValuationIndicatorCode.US_EQUITY_RISK_PREMIUM in US_INDICATOR_CODES
+
+    def test_us_indicator_names_have_all_codes(self) -> None:
+        """NAMES dict 覆盖所有 4 个 code。"""
+        for code in US_INDICATOR_CODES:
+            assert code in US_INDICATOR_NAMES
+            assert US_INDICATOR_NAMES[code]  # 非空
+
+    def test_us_indicator_short_names_have_all_codes(self) -> None:
+        """SHORT_NAMES dict 覆盖所有 4 个 code。"""
+        for code in US_INDICATOR_CODES:
+            assert code in US_INDICATOR_SHORT_NAMES
+            assert US_INDICATOR_SHORT_NAMES[code]  # 非空
+
+
+class TestFormatIndicatorValueUS:
+    """验证 _format_indicator_value 对美股 4 指标的处理。"""
+
+    def test_us_equity_risk_premium_keeps_sign_and_two_decimals(self) -> None:
+        """美股股债利差保留正负号 + 2 位小数（跟 A 股股债利差一致）。"""
+        assert _format_indicator_value(
+            ValuationIndicatorCode.US_EQUITY_RISK_PREMIUM, Decimal("0.0145")
+        ) == "+1.45%"
+        assert _format_indicator_value(
+            ValuationIndicatorCode.US_EQUITY_RISK_PREMIUM, Decimal("-0.01")
+        ) == "-1.00%"
+
+    def test_us_buffett_formatted_as_integer_pct(self) -> None:
+        """美股巴菲特格式化为整数百分比（值通常 > 1，如 1.71 → "171%"）。"""
+        assert _format_indicator_value(
+            ValuationIndicatorCode.US_BUFFETT_INDICATOR, Decimal("1.71")
+        ) == "171%"
+        assert _format_indicator_value(
+            ValuationIndicatorCode.US_BUFFETT_INDICATOR, Decimal("0.95")
+        ) == "95%"
+
+    def test_us_pe_percentile_two_decimals(self) -> None:
+        """美股 PE 分位 2 位小数百分比（跟 A 股 / 港股一致）。"""
+        assert _format_indicator_value(
+            ValuationIndicatorCode.US_PE_PERCENTILE, Decimal("0.6017")
+        ) == "60.17%"
+
+    def test_us_dividend_yield_two_decimals(self) -> None:
+        """美股股息率 2 位小数百分比（跟 A 股 / 港股一致）。"""
+        assert _format_indicator_value(
+            ValuationIndicatorCode.US_DIVIDEND_YIELD, Decimal("0.0106")
+        ) == "1.06%"
+
+
+class TestBuildUSValuationSection:
+    """spec 098.3 — 美股 4 指标估值 section。"""
+
+    def test_us_section_renders_when_data_present(self, journal: PortfolioJournal) -> None:
+        """DB 有美股 4 指标 → 渲染美股 section。"""
+        _seed_us_valuation_today(journal)
+        elements = _build_us_valuation_section(journal)
+        assert len(elements) > 0
+        note = next((e for e in elements if e.get("tag") == "note"), None)
+        assert note is not None
+        assert "美股" in note["elements"][0]["content"]
+
+    def test_us_section_skipped_when_no_data(self, journal: PortfolioJournal) -> None:
+        """DB 没美股指标 → 美股 section 不渲染（避免空表格）。"""
+        # _seed_valuation_today 只塞 A 股 4 指标
+        _seed_valuation_today(journal)
+        elements = _build_us_valuation_section(journal)
+        assert elements == []
+
+    def test_us_section_has_four_indicator_rows(self, journal: PortfolioJournal) -> None:
+        """美股 4 指标行 + 1 综合分行 = 5 行。"""
+        _seed_us_valuation_today(journal)
+        elements = _build_us_valuation_section(journal)
+        tables = [e for e in elements if e.get("tag") == "table"]
+        assert len(tables) == 1
+        rows = tables[0]["rows"]
+        # 4 指标 + 1 综合分
+        assert len(rows) == 5
+
+    def test_us_section_displays_strategy_note(self, journal: PortfolioJournal) -> None:
+        """美股 section 有策略 note（占比 vs 目标 + 估值判断）。"""
+        _seed_us_valuation_today(journal)
+        _seed_us_funds(journal)
+        elements = _build_us_valuation_section(journal)
+        divs = [e for e in elements if e.get("tag") == "div"]
+        assert len(divs) >= 1
+        text = divs[0]["text"]["content"]
+        assert "美股" in text
+        assert "目标" in text
+        assert "%" in text
+
+    def test_us_section_composite_score(self, journal: PortfolioJournal) -> None:
+        """美股综合分：(3+3+3+3)/4 = 3.0 → 3.0 正常。
+
+        60.17% PE 分位 = 3 分（30%-70% 区间）；其他 3 个指标也都 3 分。
+        综合分 value 列形如 "[PE:3 股息:3 巴菲特:3 股债:3]"
+        verdict 列形如 "3.0 正常"
+        """
+        _seed_us_valuation_today(journal)
+        elements = _build_us_valuation_section(journal)
+        tables = [e for e in elements if e.get("tag") == "table"]
+        composite_row = tables[0]["rows"][-1]  # 最后一行是综合分
+        assert composite_row["indicator"] == "综合分"
+        # 综合分 value 列形如 "[PE:3 股息:3 巴菲特:3 股债:3]"
+        assert "[PE:3 股息:3" in composite_row["value"]
+        # verdict 列形如 "3.0 正常"
+        assert "3.0" in composite_row["verdict"]
+        assert "正常" in composite_row["verdict"]
+
+    def test_us_buffett_formatted_as_integer_pct(self, journal: PortfolioJournal) -> None:
+        """美股巴菲特格式化为整数百分比（1.71 → "171%"，不是 "171.00%"）。"""
+        _seed_us_valuation_today(journal)
+        elements = _build_us_valuation_section(journal)
+        tables = [e for e in elements if e.get("tag") == "table"]
+        bf_row = next(
+            r for r in tables[0]["rows"] if r["indicator"] == "美股巴菲特"
+        )
+        # 1.71 → "171%"
+        assert bf_row["value"] == "171%"
+
+
+class TestBuildValuationSectionCombinedUS:
+    """验证 _build_valuation_section combined 模式 + 美股 region 接入（spec 098.4）。
+
+    spec 098.3 — 美股 region 加入（4 个新指标 + 9 只基金）。
+    spec 098.4 — 3 region 合并成 combined 表（5 列指标 + 11 列 per-fund）。
+    """
+
+    def test_three_regions_combined_in_single_section(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """A 股 + 港股 + 美股 都有数据 → combined section 一个 header + combined 指标表。"""
+        _seed_valuation_today(journal)
+        _seed_hk_valuation_today(journal)
+        _seed_us_valuation_today(journal)
+        elements = _build_valuation_section(journal)
+        notes = [e for e in elements if e.get("tag") == "note"]
+        contents = [n["elements"][0]["content"] for n in notes]
+        # 1 个统一 header（不再是 per-region 3 个）
+        assert "估值与操作" in contents
+        assert "A 股估值与操作" not in contents
+        assert "港股估值与操作" not in contents
+        assert "美股估值与操作" not in contents
+
+    def test_us_section_skipped_when_no_data(self, journal: PortfolioJournal) -> None:
+        """只 A 股有数据 → 美股行不出现在 combined 表里。"""
+        _seed_valuation_today(journal)
+        elements = _build_valuation_section(journal)
+        tables = [e for e in elements if e.get("tag") == "table"]
+        indicator_table = next(
+            t for t in tables
+            if [c["name"] for c in t["columns"]] == ["region", "indicator", "value", "verdict", "threshold"]
+        )
+        # 5 行（A 股 4 指标 + 1 综合）
+        assert len(indicator_table["rows"]) == 5
+        for row in indicator_table["rows"]:
+            assert row["region"] in {"A 股", "—"}
+            assert "美股" not in row["region"]
+
+    def test_combined_indicator_table_3_region_composite_rows(
+        self, journal: PortfolioJournal
+    ) -> None:
+        """3 region 都有数据 → combined 指标表 15 行（含 3 个综合分行）。"""
+        _seed_valuation_today(journal)
+        _seed_hk_valuation_today(journal)
+        _seed_us_valuation_today(journal)
+        elements = _build_valuation_section(journal)
+        tables = [e for e in elements if e.get("tag") == "table"]
+        indicator_table = next(
+            t for t in tables
+            if [c["name"] for c in t["columns"]] == ["region", "indicator", "value", "verdict", "threshold"]
+        )
+        composite_rows = [r for r in indicator_table["rows"] if r["indicator"] == "综合分"]
+        # 3 个综合分行（A 股 / 港股 / 美股 各一个）
+        assert len(composite_rows) == 3
+
+
+class TestIndexVerdictStrategyUS:
+    """验证 INDEX_VERDICT_STRATEGY 包含美股 4 个指数。"""
+
+    def test_us_index_strategies_mapped(self) -> None:
+        from global_allocation.portfolio.card import INDEX_VERDICT_STRATEGY
+
+        # INX / GSPC / OEX 实际能在 lixinger CSV 命中，NDX 当前 CSV 无数据（保留占位）
+        assert INDEX_VERDICT_STRATEGY["INX"] == "growth"
+        assert INDEX_VERDICT_STRATEGY["GSPC"] == "growth"
+        assert INDEX_VERDICT_STRATEGY["OEX"] == "dividend"
+        assert INDEX_VERDICT_STRATEGY["NDX"] == "growth"

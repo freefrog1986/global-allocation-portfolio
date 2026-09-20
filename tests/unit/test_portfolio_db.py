@@ -12,6 +12,7 @@ from global_allocation.models import AssetClass, Currency, DataSource
 from global_allocation.portfolio.db import PortfolioDB
 from global_allocation.portfolio.models import (
     Fund,
+    FundValuation,
     Transaction,
     TransactionSide,
     ValuationIndicator,
@@ -35,6 +36,8 @@ class TestSchema:
         assert "weekly_snapshots" in tables
         # spec 098：估值指标表
         assert "valuation_indicators" in tables
+        # spec 098 第二十七轮：每只基金估值表
+        assert "fund_valuations" in tables
 
     def test_idempotent_init(self, tmp_path) -> None:
         path = tmp_path / "test.db"
@@ -326,13 +329,17 @@ class TestValuationIndicators:
         assert cur.fetchone()[0] == 1
 
     def test_different_codes_coexist(self, db: PortfolioDB) -> None:
-        """同一天 4 个不同指标 → 4 条独立记录（不互相覆盖）。"""
+        """同一天 12 个不同指标（4 A 股 + 4 港股 + 4 美股）→ 12 条独立记录（不互相覆盖）。
+
+        spec 098.2：港股加 4 个 indicator_code 后总数从 4 变 8。
+        spec 098.3：美股再加 4 个 indicator_code 后总数从 8 变 12。
+        """
         for code in ValuationIndicatorCode:
             db.upsert_valuation_indicator(
                 self._ind(code=code, value=Decimal("0.05"))
             )
         day_indicators = db.list_valuation_indicators_for_date(date(2026, 9, 19))
-        assert len(day_indicators) == 4
+        assert len(day_indicators) == 12
         assert {i.indicator_code for i in day_indicators} == set(ValuationIndicatorCode)
 
     def test_different_days_coexist(self, db: PortfolioDB) -> None:
@@ -411,3 +418,102 @@ class TestValuationIndicators:
         )
         assert loaded is not None
         assert loaded.value == precise  # 不会变成 0.05273849382716001 之类的浮点近似
+
+
+class TestFundValuations:
+    """fund_valuations 表（spec 098 第二十七轮 — liubo 反馈"要看每只基金估值"）。
+
+    每只 A 股基金一个 record，按 (record_date, fund_code) 去重覆盖。
+    """
+
+    def _fv(
+        self,
+        fund_code: str = "014532",
+        index_code: str = "930050",
+        pe_ttm: Decimal | None = Decimal("15.7851"),
+        pe_pct: Decimal | None = Decimal("0.1626"),
+        dy: Decimal | None = Decimal("0.0298"),
+        record_date: date = date(2026, 9, 19),
+        source: str = "lixinger_csv:test.csv",
+    ) -> FundValuation:
+        return FundValuation(
+            record_date=record_date,
+            fund_code=fund_code,
+            index_code=index_code,
+            pe_ttm=pe_ttm,
+            pe_percentile=pe_pct,
+            dividend_yield=dy,
+            source=source,
+        )
+
+    def test_upsert_and_get(self, db: PortfolioDB) -> None:
+        db.upsert_fund_valuation(self._fv())
+        loaded = db.get_fund_valuation(date(2026, 9, 19), "014532")
+        assert loaded is not None
+        assert loaded.fund_code == "014532"
+        assert loaded.index_code == "930050"
+        assert loaded.pe_ttm == Decimal("15.7851")
+        assert loaded.pe_percentile == Decimal("0.1626")
+        assert loaded.dividend_yield == Decimal("0.0298")
+        assert loaded.source == "lixinger_csv:test.csv"
+
+    def test_upsert_overwrites_same_day_fund(self, db: PortfolioDB) -> None:
+        """同一天同一只基金 → 覆盖（UNIQUE constraint）。"""
+        db.upsert_fund_valuation(self._fv(pe_ttm=Decimal("15")))
+        db.upsert_fund_valuation(self._fv(pe_ttm=Decimal("16")))
+        loaded = db.get_fund_valuation(date(2026, 9, 19), "014532")
+        assert loaded is not None
+        assert loaded.pe_ttm == Decimal("16")
+
+    def test_different_funds_coexist(self, db: PortfolioDB) -> None:
+        """同一日期不同基金 → 各自独立记录。"""
+        db.upsert_fund_valuation(self._fv(fund_code="014532", index_code="930050"))
+        db.upsert_fund_valuation(self._fv(fund_code="008114", index_code="930955", pe_ttm=Decimal("8.85")))
+        loaded = db.list_fund_valuations_for_date(date(2026, 9, 19))
+        assert len(loaded) == 2
+        codes = {fv.fund_code for fv in loaded}
+        assert codes == {"014532", "008114"}
+
+    def test_get_missing_returns_none(self, db: PortfolioDB) -> None:
+        assert db.get_fund_valuation(date(2026, 9, 19), "nope") is None
+
+    def test_optional_fields_can_be_none(self, db: PortfolioDB) -> None:
+        """PE / PE分位 / 股息率任意字段缺失（CSV 里 n/a）→ 入库存 NULL。"""
+        db.upsert_fund_valuation(self._fv(pe_ttm=None, pe_pct=None, dy=None))
+        loaded = db.get_fund_valuation(date(2026, 9, 19), "014532")
+        assert loaded is not None
+        assert loaded.pe_ttm is None
+        assert loaded.pe_percentile is None
+        assert loaded.dividend_yield is None
+
+    def test_list_for_date_returns_empty_when_no_data(self, db: PortfolioDB) -> None:
+        assert db.list_fund_valuations_for_date(date(2026, 9, 19)) == []
+
+    def test_list_latest_for_codes_returns_each_funds_most_recent(self, db: PortfolioDB) -> None:
+        """每只基金取最新一天（不是全局最新一天）。
+
+        场景：基金 A 在 9/18 有数据，基金 B 在 9/19 有数据。应该两个都返回，
+        而不是只返回 9/19 的 B。
+        """
+        db.upsert_fund_valuation(
+            self._fv(fund_code="014532", index_code="930050", record_date=date(2026, 9, 18))
+        )
+        db.upsert_fund_valuation(
+            self._fv(fund_code="008114", index_code="930955", record_date=date(2026, 9, 19))
+        )
+        result = db.list_latest_fund_valuations_for_codes(["014532", "008114"])
+        assert "014532" in result
+        assert "008114" in result
+        assert result["014532"].record_date == date(2026, 9, 18)
+        assert result["008114"].record_date == date(2026, 9, 19)
+
+    def test_list_latest_for_codes_missing_fund_excluded(self, db: PortfolioDB) -> None:
+        """DB 里有 A 没 B → result 里只有 A，没 B。"""
+        db.upsert_fund_valuation(self._fv(fund_code="014532"))
+        result = db.list_latest_fund_valuations_for_codes(["014532", "008114"])
+        assert "014532" in result
+        assert "008114" not in result
+
+    def test_list_latest_for_codes_empty_input(self, db: PortfolioDB) -> None:
+        """空 list 输入 → 返回空 dict（不查 DB）。"""
+        assert db.list_latest_fund_valuations_for_codes([]) == {}

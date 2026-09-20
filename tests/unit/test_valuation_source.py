@@ -31,12 +31,14 @@ def mock_akshare() -> Any:
     """统一 mock 所有 akshare 接口（每个测试用 monkeypatch.setattr 自己覆盖）。"""
     with patch("akshare.stock_zh_index_value_csindex") as mock_csindex, \
          patch("akshare.stock_a_ttm_lyr") as mock_ttm, \
-         patch("akshare.bond_china_yield") as mock_yield, \
+         patch("akshare.bond_zh_us_rate") as mock_yield, \
          patch("akshare.stock_zh_a_spot_em") as mock_spot, \
          patch("akshare.stock_sse_summary") as mock_sse, \
          patch("akshare.stock_szse_summary") as mock_szse, \
          patch("akshare.macro_china_stock_market_cap") as mock_cap, \
-         patch("akshare.macro_china_gdp") as mock_gdp:
+         patch("akshare.macro_china_gdp") as mock_gdp, \
+         patch("akshare.stock_hk_index_daily_sina") as mock_hsi, \
+         patch("akshare.macro_china_hk_gbp") as mock_hk_gbp:
         yield {
             "csindex": mock_csindex,
             "ttm": mock_ttm,
@@ -46,6 +48,8 @@ def mock_akshare() -> Any:
             "szse": mock_szse,
             "cap": mock_cap,
             "gdp": mock_gdp,
+            "hsi": mock_hsi,
+            "hk_gbp": mock_hk_gbp,
         }
 
 
@@ -171,23 +175,39 @@ class TestGetDividendYield:
 
 
 class TestGet10YTreasuryYield:
-    def test_filters_to_gov_curve(self, mock_akshare: dict[str, Any]) -> None:
-        """只取"中债国债收益率曲线"，跳过信用债 / 商业银行债曲线。"""
+    def test_returns_10y_china_gov_yield(self, mock_akshare: dict[str, Any]) -> None:
+        """数据源 = ak.bond_zh_us_rate()，列 = "中国国债收益率10年"。
+
+        早期用 ak.bond_china_yield()（"中债国债收益率曲线"）但其数据卡在 2021。
+        换 bond_zh_us_rate 后每天都有新数据。
+        """
         mock_akshare["yield"].return_value = _make_df([
-            {"曲线名称": "中债中短期票据收益率曲线(AAA)", "日期": "2026-09-17", "10年": 3.5},
-            {"曲线名称": "中债国债收益率曲线", "日期": "2026-09-17", "10年": 2.85},
-            {"曲线名称": "中债商业银行普通债收益率曲线(AAA)", "日期": "2026-09-17", "10年": 3.2},
+            {"日期": "2026-09-17", "中国国债收益率10年": 1.68},
         ])
         src = AkshareValuationSource()
         y = src.get_10y_treasury_yield(date(2026, 9, 17))
-        # 应该取国债 2.85 → 0.0285
-        assert y == Decimal("0.0285")
+        # 1.68% → 0.0168
+        assert y == Decimal("0.0168")
 
-    def test_returns_none_when_no_gov_curve(
+    def test_returns_latest_when_no_exact_match(
         self, mock_akshare: dict[str, Any]
     ) -> None:
+        """节假日 / 周末 akshare 不更新时取最新一条。"""
         mock_akshare["yield"].return_value = _make_df([
-            {"曲线名称": "中债中短期票据收益率曲线(AAA)", "日期": "2026-09-17", "10年": 3.5},
+            {"日期": "2026-09-17", "中国国债收益率10年": 1.68},
+            {"日期": "2026-09-18", "中国国债收益率10年": 1.70},
+        ])
+        src = AkshareValuationSource()
+        # on=9/19（周六，没数据）→ fallback 到 9/18 最新
+        y = src.get_10y_treasury_yield(date(2026, 9, 19))
+        assert y == Decimal("0.0170")
+
+    def test_returns_none_when_10y_column_missing(
+        self, mock_akshare: dict[str, Any]
+    ) -> None:
+        """中国国债收益率10年列缺失 → None（不是要查其他列）。"""
+        mock_akshare["yield"].return_value = _make_df([
+            {"日期": "2026-09-17", "中国国债收益率2年": 1.5},
         ])
         src = AkshareValuationSource()
         assert src.get_10y_treasury_yield(date(2026, 9, 17)) is None
@@ -280,6 +300,107 @@ class TestGetChinaGdp:
         assert src.get_china_gdp(date(2026, 9, 17)) is None
 
 
+class TestGetHkAhPremium:
+    """spec 098.2 — AH 溢价（恒生沪深港通 AH 溢价指数 HSAHP / 100）。"""
+
+    def test_returns_ratio_from_hsahp(self, mock_akshare: dict[str, Any]) -> None:
+        """HSAHP=124.01 → ratio=1.2401（值大=H便宜=低估）。"""
+        mock_akshare["hsi"].return_value = _make_df(
+            [
+                {"date": date(2026, 9, 17), "open": 124.0, "high": 125.0,
+                 "low": 123.5, "close": 124.5, "volume": 0, "amount": 0},
+                {"date": date(2026, 9, 18), "open": 124.5, "high": 124.7,
+                 "low": 123.6, "close": 124.01, "volume": 0, "amount": 0},
+            ]
+        )
+        src = AkshareValuationSource()
+        ah = src.get_hk_ah_premium(date(2026, 9, 18))
+        assert ah == Decimal("1.2401")
+
+    def test_returns_latest_when_target_after_last(
+        self, mock_akshare: dict[str, Any]
+    ) -> None:
+        """目标日期在数据最后一行之后 → 返回最后一行（容错）。"""
+        mock_akshare["hsi"].return_value = _make_df(
+            [{"date": date(2026, 9, 18), "open": 0, "high": 0,
+              "low": 0, "close": 120.0, "volume": 0, "amount": 0}]
+        )
+        src = AkshareValuationSource()
+        ah = src.get_hk_ah_premium(date(2030, 1, 1))
+        assert ah == Decimal("1.20")
+
+    def test_returns_none_on_empty(self, mock_akshare: dict[str, Any]) -> None:
+        mock_akshare["hsi"].return_value = _make_df([])
+        src = AkshareValuationSource()
+        assert src.get_hk_ah_premium(date(2026, 9, 18)) is None
+
+    def test_returns_none_on_exception(self, mock_akshare: dict[str, Any]) -> None:
+        mock_akshare["hsi"].side_effect = RuntimeError("network error")
+        src = AkshareValuationSource()
+        assert src.get_hk_ah_premium(date(2026, 9, 18)) is None
+
+
+class TestGetHkTotalMarketCap:
+    """spec 098.2 — 港股总市值（硬编码 fallback，HKEX 月度统计）。
+
+    注：akshare 没有直接接口拉 HKEX 总市值，先用硬编码值。
+    TODO: 接 HKEX 官网 https://www.hkex.com.hk 改用自动抓取。
+    """
+
+    def test_returns_fallback_value_for_recent(self) -> None:
+        """2025-12 之后 → fallback 硬编码 38.5 万亿 HKD。"""
+        src = AkshareValuationSource()
+        mcap = src.get_hk_total_market_cap(date(2026, 9, 18))
+        assert mcap == Decimal("38500000000000")
+
+    def test_returns_fallback_for_any_date(self) -> None:
+        """当前实现不依赖外部 API → 任何日期都返回 fallback。"""
+        src = AkshareValuationSource()
+        assert src.get_hk_total_market_cap(date(2024, 1, 1)) == Decimal("38500000000000")
+
+
+class TestGetHkGdp:
+    """spec 098.2 — 香港 GDP（ak.macro_china_hk_gbp，季度累加 = 年度）。"""
+
+    def test_returns_annual_sum_from_4_quarters(
+        self, mock_akshare: dict[str, Any]
+    ) -> None:
+        """4 个季度现值累加 → 年度 GDP（HKD）。"""
+        mock_akshare["hk_gbp"].return_value = _make_df(
+            [
+                {"时间": "2026第3季度", "前值": 800000, "现值": 820000.0,
+                 "发布日期": "2026-11-15"},
+                {"时间": "2026第2季度", "前值": 780000, "现值": 790000.0,
+                 "发布日期": "2026-08-15"},
+                {"时间": "2026第1季度", "前值": 760000, "现值": 770000.0,
+                 "发布日期": "2026-05-15"},
+                {"时间": "2025第4季度", "前值": 850000, "现值": 860000.0,
+                 "发布日期": "2026-02-15"},
+                {"时间": "2025第3季度", "前值": 830000, "现值": 840000.0,
+                 "发布日期": "2025-11-15"},
+                {"时间": "2025第2季度", "前值": 810000, "现值": 820000.0,
+                 "发布日期": "2025-08-15"},
+                {"时间": "2025第1季度", "前值": 790000, "现值": 800000.0,
+                 "发布日期": "2025-05-15"},
+            ]
+        )
+        src = AkshareValuationSource()
+        gdp = src.get_hk_gdp(date(2026, 9, 18))
+        # 2025 年 4 季度累加：860000+840000+820000+800000 = 3,320,000（百万 HKD）
+        # 转 HKD：× 1,000,000 = 3,320,000,000,000
+        assert gdp == Decimal("3320000000000")
+
+    def test_returns_none_on_empty(self, mock_akshare: dict[str, Any]) -> None:
+        mock_akshare["hk_gbp"].return_value = _make_df([])
+        src = AkshareValuationSource()
+        assert src.get_hk_gdp(date(2026, 9, 18)) is None
+
+    def test_returns_none_on_failure(self, mock_akshare: dict[str, Any]) -> None:
+        mock_akshare["hk_gbp"].side_effect = RuntimeError("error")
+        src = AkshareValuationSource()
+        assert src.get_hk_gdp(date(2026, 9, 18)) is None
+
+
 class TestResilience:
     """akshare 失败时所有方法都应静默返回 None / []，不抛异常。"""
 
@@ -293,3 +414,7 @@ class TestResilience:
             assert src.get_10y_treasury_yield(date(2026, 9, 17)) is None
             assert src.get_a_share_total_market_cap(date(2026, 9, 17)) is None
             assert src.get_china_gdp(date(2026, 9, 17)) is None
+            assert src.get_hk_ah_premium(date(2026, 9, 17)) is None
+            # HK 总市值和 GDP fallback 不依赖 akshare → 不在 not-installed 范围
+            assert src.get_hk_total_market_cap(date(2026, 9, 17)) is not None
+            assert src.get_hk_gdp(date(2026, 9, 17)) is None  # akshare required
