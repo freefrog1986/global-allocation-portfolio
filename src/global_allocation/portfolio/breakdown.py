@@ -93,10 +93,11 @@ SUBCLASS_BY_CODE: dict[str, SwensenClass] = {
     "017644": SwensenClass.CN_EQUITY,  # 博道中证1000指数增强
     "022424": SwensenClass.CN_EQUITY,  # 广发中证A500
     "014532": SwensenClass.CN_EQUITY,  # 易方达MSCI中国A50
-    # 港股 (3)
+    # 港股 (4)
     "004098": SwensenClass.HK_EQUITY,  # 前海开源港股通股息率50强
     "013127": SwensenClass.HK_EQUITY,  # 汇添富恒生科技
     "006809": SwensenClass.HK_EQUITY,  # 泰康香港银行指数
+    "014673": SwensenClass.HK_EQUITY,  # 富国中证港股通互联网ETF发起式联接A（liubo 2026-09-20 补加）
     # 美股股票 (9) - 纯纳100/标普 + 原全球主题 3 只
     "519981": SwensenClass.US_EQUITY,  # 长信标普100
     "018966": SwensenClass.US_EQUITY,  # 汇添富纳100
