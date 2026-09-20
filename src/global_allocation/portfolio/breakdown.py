@@ -108,9 +108,9 @@ SUBCLASS_BY_CODE: dict[str, SwensenClass] = {
     "016664": SwensenClass.US_EQUITY,  # 天弘全球高端制造（第十七轮：并入美股）
     "006373": SwensenClass.US_EQUITY,  # 国富全球科技互联（第十七轮：并入美股）
     # 国外发达市场股票 (1) - 原亚洲发达市场，欧洲+日台韩合并
-    "457001": SwensenClass.FOREIGN_DM_EQUITY,  # 国富亚洲机会
+    "457001": SwensenClass.FOREIGN_DM_EQUITY,  # 国富亚洲机会（业绩比较基准：MSCI AC Asia ex Japan 净总收益）
     # 新兴市场股票 (1)
-    "378006": SwensenClass.EM_EQUITY,  # 摩根全球新兴市场
+    "378006": SwensenClass.EM_EQUITY,  # 摩根全球新兴市场（业绩比较基准：MSCI Emerging Markets 总回报）
     # REITs (2)
     "028277": SwensenClass.CN_REIT,  # 华夏中证REITs全收益
     "160140": SwensenClass.US_REIT,  # 南方道琼斯美国精选REIT
