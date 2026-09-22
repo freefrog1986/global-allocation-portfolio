@@ -1,6 +1,7 @@
 """测试 src/global_allocation/portfolio/cost_basis.py。
 
 参照 spec 097（liubo 2026-09-21 手工录入的成本数据）。
+2026-09-22 砍非宽基股权 11 只后只算大类资产配置组合（47 → 36）。
 """
 
 from __future__ import annotations
@@ -17,43 +18,47 @@ from global_allocation.portfolio.cost_basis import (
 
 
 class TestCostBasisByCode:
-    def test_has_forty_seven_funds(self) -> None:
-        """47 只基金有成本数字（liubo 2026-09-22 截图扩到 47 只）。"""
-        assert len(COST_BASIS_BY_CODE) == 47
+    def test_has_thirty_six_funds(self) -> None:
+        """36 只大类资产配置基金有成本数字（砍 11 只非宽基股权后剩 36）。"""
+        assert len(COST_BASIS_BY_CODE) == 36
 
     def test_total_matches_sum(self) -> None:
-        """总和等于 liubo 录入时手算的 704928。"""
+        """总和等于 liubo 算出的 464310（704928 - 240618 砍 11 只非宽基）。"""
         total = sum(COST_BASIS_BY_CODE.values())
         assert total == TOTAL_COST_CNY
-        assert TOTAL_COST_CNY == Decimal("704928")
+        assert TOTAL_COST_CNY == Decimal("464310")
 
     def test_specific_a_share_amounts(self) -> None:
-        """spec 097：6 只 A 股的成本数字。"""
+        """5 只 A 股宽基（砍了红利低波 008114 后剩 5）。"""
         assert COST_BASIS_BY_CODE["013310"] == Decimal("20000")  # 华夏科创创业50
         assert COST_BASIS_BY_CODE["022434"] == Decimal("10500")  # 南方中证A500
-        assert COST_BASIS_BY_CODE["008114"] == Decimal("50000")  # 天弘中证红利低波动100
         assert COST_BASIS_BY_CODE["017644"] == Decimal("5000")   # 博道中证1000指数增强
         assert COST_BASIS_BY_CODE["022424"] == Decimal("5000")   # 广发中证A500
         assert COST_BASIS_BY_CODE["014532"] == Decimal("2000")   # 易方达MSCI中国A50
 
-    def test_specific_hk_amounts(self) -> None:
-        """4 只港股的成本数字（014673 是 liubo 2026-09-20 补加的港股）。"""
-        assert COST_BASIS_BY_CODE["004098"] == Decimal("50000")  # 前海开源港股通股息率50强
-        assert COST_BASIS_BY_CODE["013127"] == Decimal("25000")  # 汇添富恒生科技
-        assert COST_BASIS_BY_CODE["006809"] == Decimal("1010")   # 泰康香港银行指数
-        assert COST_BASIS_BY_CODE["014673"] == Decimal("22000")  # 富国中证港股通互联网ETF联接A
-
     def test_specific_us_amounts(self) -> None:
-        """9 只美股的成本数字。"""
+        """6 只美股宽基（标普500/标普100 + 4 只纳100）。"""
         assert COST_BASIS_BY_CODE["519981"] == Decimal("3620")   # 长信标普100
         assert COST_BASIS_BY_CODE["018966"] == Decimal("2020")   # 汇添富纳100
         assert COST_BASIS_BY_CODE["539001"] == Decimal("1000")   # 建信纳100
         assert COST_BASIS_BY_CODE["017641"] == Decimal("50")     # 摩根标普500
         assert COST_BASIS_BY_CODE["016452"] == Decimal("20")     # 南方纳100
         assert COST_BASIS_BY_CODE["019524"] == Decimal("20")     # 华泰柏瑞纳100
-        assert COST_BASIS_BY_CODE["017730"] == Decimal("5300")   # 嘉实全球产业升级
-        assert COST_BASIS_BY_CODE["016664"] == Decimal("2370")   # 天弘全球高端制造
-        assert COST_BASIS_BY_CODE["006373"] == Decimal("100")    # 国富全球科技互联
+
+    def test_hk_amounts_removed(self) -> None:
+        """港股 5 只都砍了，不在 cost_basis。"""
+        for code in ("004098", "013127", "006809", "014673", "016495"):
+            assert code not in COST_BASIS_BY_CODE, f"{code} 已砍"
+
+    def test_themed_us_amounts_removed(self) -> None:
+        """美股 3 只 QDII 主题都砍了。"""
+        for code in ("017730", "016664", "006373"):
+            assert code not in COST_BASIS_BY_CODE, f"{code} 已砍"
+
+    def test_dividend_lowvol_removed(self) -> None:
+        """A 股 3 只红利低波都砍了。"""
+        for code in ("005561", "007605", "008114"):
+            assert code not in COST_BASIS_BY_CODE, f"{code} 已砍"
 
     def test_other_subclass_amounts(self) -> None:
         """国外发达 / 新兴市场 / REITs / 国内利率债 / 美债 / 商品。"""
@@ -86,12 +91,18 @@ class TestCashLikeCodes:
 class TestGetCostBasis:
     def test_known_fund(self) -> None:
         assert get_cost_basis("013310") == Decimal("20000")
-        assert get_cost_basis("014673") == Decimal("22000")
+        assert get_cost_basis("457001") == Decimal("4640")  # 国外发达 liubo 保留
 
     def test_unknown_fund_returns_none(self) -> None:
         """未知基金返回 None，不抛错。"""
         assert get_cost_basis("999999") is None
         assert get_cost_basis("") is None
+
+    def test_cut_fund_returns_none(self) -> None:
+        """砍掉的 11 只非宽基返回 None（已不在 cost_basis）。"""
+        assert get_cost_basis("004098") is None  # 港股
+        assert get_cost_basis("017730") is None  # QDII 主题
+        assert get_cost_basis("008114") is None  # A 股红利低波
 
     def test_cash_like_returns_none(self) -> None:
         """现金/类现金返回 None（不进成本表）。"""
@@ -109,7 +120,7 @@ class TestIsCashLike:
     def test_false_for_cost_basis_fund(self) -> None:
         """在成本表里的基金不算 cash_like。"""
         assert is_cash_like("013310") is False
-        assert is_cash_like("004098") is False
+        assert is_cash_like("457001") is False
 
     def test_false_for_unknown(self) -> None:
         """未知基金返回 False（不是现金/类现金，是未知）。"""

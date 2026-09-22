@@ -1,6 +1,6 @@
 """测试 src/global_allocation/portfolio/breakdown.py。
 
-按 Swensen 框架把持仓归到 11 个子类（spec 097 第十七轮：删全球主题 + 合并欧美亚达）。
+按 Swensen 框架把持仓归到 11 个子类（spec 097 第十八轮：47 → 36，只留宽基 ETF）。
 """
 
 from __future__ import annotations
@@ -68,15 +68,26 @@ class TestSubclassByCode:
             assert isinstance(sub, SwensenClass), f"{code} → {sub}"
 
     def test_known_funds_mapped_correctly(self) -> None:
-        # 抽样几个关键分类（第十七轮：4 只原信用债基金 → CN_GOV_BOND）
-        assert get_subclass("013310") == SwensenClass.CN_EQUITY  # A 股
-        assert get_subclass("004098") == SwensenClass.HK_EQUITY  # 港股
-        assert get_subclass("519981") == SwensenClass.US_EQUITY  # 美股
-        assert get_subclass("457001") == SwensenClass.FOREIGN_DM_EQUITY  # 国外发达（原亚洲发达）
-        assert get_subclass("378006") == SwensenClass.EM_EQUITY  # 新兴市场
-        assert get_subclass("160140") == SwensenClass.US_REIT  # 美国 REITs
-        assert get_subclass("028277") == SwensenClass.CN_REIT  # 国内 REITs
-        assert get_subclass("100050") == SwensenClass.US_BOND  # 美债
+        # A 股宽基 5
+        assert get_subclass("013310") == SwensenClass.CN_EQUITY  # 科创创业50
+        assert get_subclass("022434") == SwensenClass.CN_EQUITY  # A500
+        assert get_subclass("022424") == SwensenClass.CN_EQUITY  # A500
+        assert get_subclass("017644") == SwensenClass.CN_EQUITY  # 1000 增强
+        assert get_subclass("014532") == SwensenClass.CN_EQUITY  # A50
+        # 美股宽基 6
+        assert get_subclass("519981") == SwensenClass.US_EQUITY  # 标普100
+        assert get_subclass("017641") == SwensenClass.US_EQUITY  # 标普500
+        assert get_subclass("018966") == SwensenClass.US_EQUITY  # 纳100
+        assert get_subclass("539001") == SwensenClass.US_EQUITY  # 纳100
+        assert get_subclass("016452") == SwensenClass.US_EQUITY  # 纳100
+        assert get_subclass("019524") == SwensenClass.US_EQUITY  # 纳100
+        # 国外发达 + 新兴（liubo 确认这俩都算宽基，保留）
+        assert get_subclass("457001") == SwensenClass.FOREIGN_DM_EQUITY  # MSCI AC Asia ex Japan
+        assert get_subclass("378006") == SwensenClass.EM_EQUITY  # MSCI Emerging Markets
+        # REITs / 债 / 商品 / 现金
+        assert get_subclass("028277") == SwensenClass.CN_REIT
+        assert get_subclass("160140") == SwensenClass.US_REIT
+        assert get_subclass("100050") == SwensenClass.US_BOND
         # 原国内信用债基金 → CN_GOV_BOND（第十七轮：斯文森说信用债没阿尔法，并入利率债）
         assert get_subclass("008505") == SwensenClass.CN_GOV_BOND
         assert get_subclass("004827") == SwensenClass.CN_GOV_BOND
@@ -85,14 +96,32 @@ class TestSubclassByCode:
         assert get_subclass("000216") == SwensenClass.COMMODITY  # 商品
         assert get_subclass("004137") == SwensenClass.CASH  # 现金
 
-    def test_global_themed_funds_reclassified_to_us(self) -> None:
-        """第十七轮：原全球主题 3 只基金并入 US_EQUITY。
+    def test_eleven_non_broad_funds_removed(self) -> None:
+        """第十八轮砍 11 只非宽基股权：港股 5 + 美股 3 QDII 主题 + A 股 3 红利低波。
 
-        理由：全球主题基金大头是美股，没必要单独一类。
+        这些基金不在 SUBCLASS_BY_CODE 里了（不再属于大类资产配置组合）。
         """
-        assert get_subclass("017730") == SwensenClass.US_EQUITY
-        assert get_subclass("016664") == SwensenClass.US_EQUITY
-        assert get_subclass("006373") == SwensenClass.US_EQUITY
+        # 港股 5
+        for code in ("004098", "013127", "006809", "014673", "016495"):
+            assert code not in SUBCLASS_BY_CODE, f"{code} 已砍"
+            assert get_subclass(code) is None
+        # 美股 QDII 主题 3
+        for code in ("017730", "016664", "006373"):
+            assert code not in SUBCLASS_BY_CODE, f"{code} 已砍"
+            assert get_subclass(code) is None
+        # A 股红利低波 3
+        for code in ("005561", "007605", "008114"):
+            assert code not in SUBCLASS_BY_CODE, f"{code} 已砍"
+            assert get_subclass(code) is None
+
+    def test_no_more_hk_equity_in_mapping(self) -> None:
+        """第十八轮：港股全部砍完，SUBCLASS_BY_CODE 里没有 HK_EQUITY 基金。
+        （HK_EQUITY 枚举值保留，但当前 0 只基金映射过去。）"""
+        hk_funds = [
+            code for code, sub in SUBCLASS_BY_CODE.items()
+            if sub == SwensenClass.HK_EQUITY
+        ]
+        assert hk_funds == []
 
     def test_unknown_code_returns_none(self) -> None:
         assert get_subclass("999999") is None
@@ -124,29 +153,31 @@ class TestComputeBreakdown:
     def test_groups_by_subclass(
         self, tmp_path: Path
     ) -> None:
+        # 第十八轮：港股全砍，改用 国外发达 457001 当第二子类代表
         journal = self._make_journal(
             tmp_path,
             [
                 ("013310", "A 股 1", AssetClass.EQUITY, Decimal("1000"), Decimal("2")),
-                ("004098", "港股 1", AssetClass.EQUITY, Decimal("500"), Decimal("3")),
-                ("004098", "港股 2", AssetClass.EQUITY, Decimal("500"), Decimal("3")),
+                ("457001", "国外发达 1", AssetClass.EQUITY, Decimal("500"), Decimal("3")),
+                ("457001", "国外发达 2", AssetClass.EQUITY, Decimal("500"), Decimal("3")),
             ],
         )
         rows = {r["subclass"]: r for r in compute_breakdown(journal)}
-        # 1 只 A 股 + 2 笔港股（同一只基金）= 港股 1 只基金、市值 3000
+        # 1 只 A 股 + 2 笔国外发达（同一只基金）= 国外发达 1 只基金、市值 3000
         assert rows[SwensenClass.CN_EQUITY]["count"] == 1
         assert rows[SwensenClass.CN_EQUITY]["value"] == Decimal("2000")
-        assert rows[SwensenClass.HK_EQUITY]["count"] == 1
-        assert rows[SwensenClass.HK_EQUITY]["value"] == Decimal("3000")
+        assert rows[SwensenClass.FOREIGN_DM_EQUITY]["count"] == 1
+        assert rows[SwensenClass.FOREIGN_DM_EQUITY]["value"] == Decimal("3000")
 
     def test_weight_sums_to_one_when_total_positive(
         self, tmp_path: Path
     ) -> None:
+        # 港股砍了，改用 国外发达
         journal = self._make_journal(
             tmp_path,
             [
                 ("013310", "A 股", AssetClass.EQUITY, Decimal("1000"), Decimal("2")),
-                ("004098", "港股", AssetClass.EQUITY, Decimal("500"), Decimal("3")),
+                ("457001", "国外发达", AssetClass.EQUITY, Decimal("500"), Decimal("3")),
             ],
         )
         rows = compute_breakdown(journal)

@@ -1,17 +1,24 @@
-"""持仓按 Swensen 大类资产分类（spec 097 第十七轮：11 子类）。
+"""持仓按 Swensen 大类资产分类（spec 097 第十八轮：股权只留宽基，47→36）。
 
 参照大卫·史文森《Unconventional Success》的"独立回报来源"框架：
 - 不按"股票/债券/现金"二分，而是按真正的 risk premium 拆开
 - 中国投资者适配版：港股从「国外发达市场」里单独拆出来
 - 第十七轮精简到 11 个子类（删了欧洲发达/亚洲发达/全球主题/国内信用债，
   合并出「国外发达市场股票」，把国内信用债的基金并到国内利率债）
+- **第十八轮（2026-09-22 liubo 拍板）砍 11 只非宽基股权类**：
+  - 港股 5（004098/013127/006809/014673/016495）— 不投港股
+  - 美股 3 QDII 主题（017730/016664/006373）— 全球产业升级 / 全球高端制造 /
+    全球科技互联都是行业/主题基金，不算宽基
+  - A 股 3 红利低波（005561/007605/008114）— 红利低波不算宽基指数
+  - 保留国外发达 1（457001 跟 MSCI AC Asia ex Japan）+ 新兴市场 1（378006 跟
+    MSCI Emerging Markets），liubo 确认这俩是宽基
 
-  A 股 / 港股 / 美股 / 国外发达 / 新兴市场  ← 股票 5 子类
-  国内 REITs / 美国 REITs                    ← REITs 2 子类
-  国内利率债 / 美债                          ← 债券 2 子类
-  商品 / 现金                                ← 商品 + 现金 各 1 子类
+  A 股 / 美股 / 国外发达 / 新兴市场              ← 股票 4 子类（砍了港股）
+  国内 REITs / 美国 REITs                        ← REITs 2 子类
+  国内利率债 / 美债                              ← 债券 2 子类
+  商品 / 现金                                    ← 商品 + 现金 各 1 子类
 
-MVP 用 hardcoded mapping 标 31 只已知基金；后续 spec 092 标的库可以把子类存到 fund_universe。
+MVP 用 hardcoded mapping 标 36 只已知基金；后续 spec 092 标的库可以把子类存到 fund_universe。
 """
 
 from __future__ import annotations
@@ -84,39 +91,32 @@ DISPLAY_NAME: dict[SwensenClass, str] = {
 }
 
 
-# 已知 47 只基金的 mapping（MVP hardcode；后续 spec 092 移到 fund_universe 表）
-# liubo 2026-09-22 截图新增 16 只（005561/007605/016495/007520/006829/008333/
-# 015736/017837/001512/485119/010653/202103/519753/002490/010742/002286/000290/501300）
+# 已知 36 只基金的 mapping（MVP hardcode；后续 spec 092 移到 fund_universe 表）
+# 2026-09-22 liubo 拍板股权类只用宽基 ETF（spec 098 第十八轮）：
+# - A 股宽基 5：A500 / 科创创业50 / A50 / 1000增强
+# - 美股宽基 6：标普500 / 标普100 / 纳100（4 只跟踪同一指数）
+# - 国外发达 1：MSCI AC Asia ex Japan
+# - 新兴市场 1：MSCI Emerging Markets
+# 砍 11 只非宽基（详见 breakdown 47→36 docstring）
 SUBCLASS_BY_CODE: dict[str, SwensenClass] = {
-    # A 股股票 (8) — liubo 2026-09-22 截图新增 005561 / 007605 两红利低波
+    # A 股股票 (5 宽基)
     "013310": SwensenClass.CN_EQUITY,  # 华夏科创创业50
     "022434": SwensenClass.CN_EQUITY,  # 南方中证A500
-    "008114": SwensenClass.CN_EQUITY,  # 天弘中证红利低波动100
     "017644": SwensenClass.CN_EQUITY,  # 博道中证1000指数增强
     "022424": SwensenClass.CN_EQUITY,  # 广发中证A500
     "014532": SwensenClass.CN_EQUITY,  # 易方达MSCI中国A50
-    "005561": SwensenClass.CN_EQUITY,  # 创金合信中证红利低波指数（liubo 2026-09-22）
-    "007605": SwensenClass.CN_EQUITY,  # 嘉实沪深300红利低波ETF联接（liubo 2026-09-22）
-    # 港股 (5)
-    "004098": SwensenClass.HK_EQUITY,  # 前海开源港股通股息率50强
-    "013127": SwensenClass.HK_EQUITY,  # 汇添富恒生科技
-    "006809": SwensenClass.HK_EQUITY,  # 泰康香港银行指数
-    "014673": SwensenClass.HK_EQUITY,  # 富国中证港股通互联网ETF发起式联接A（liubo 2026-09-20 补加）
-    "016495": SwensenClass.HK_EQUITY,  # 景顺长城中证港股通科技ETF发起联接A（liubo 2026-09-22）
-    # 美股股票 (9) - 纯纳100/标普 + 原全球主题 3 只
+    # 港股 (0) - liubo 2026-09-22 砍：不投港股
+    # 美股股票 (6 宽基) - 51781 标普100 + 017641 标普500 + 4 只纳100
     "519981": SwensenClass.US_EQUITY,  # 长信标普100
     "018966": SwensenClass.US_EQUITY,  # 汇添富纳100
     "539001": SwensenClass.US_EQUITY,  # 建信纳100
     "017641": SwensenClass.US_EQUITY,  # 摩根标普500
     "016452": SwensenClass.US_EQUITY,  # 南方纳100
     "019524": SwensenClass.US_EQUITY,  # 华泰柏瑞纳100
-    "017730": SwensenClass.US_EQUITY,  # 嘉实全球产业升级（第十七轮：并入美股）
-    "016664": SwensenClass.US_EQUITY,  # 天弘全球高端制造（第十七轮：并入美股）
-    "006373": SwensenClass.US_EQUITY,  # 国富全球科技互联（第十七轮：并入美股）
-    # 国外发达市场股票 (1) - 原亚洲发达市场，欧洲+日台韩合并
-    "457001": SwensenClass.FOREIGN_DM_EQUITY,  # 国富亚洲机会（业绩比较基准：MSCI AC Asia ex Japan 净总收益）
-    # 新兴市场股票 (1)
-    "378006": SwensenClass.EM_EQUITY,  # 摩根全球新兴市场（业绩比较基准：MSCI Emerging Markets 总回报）
+    # 国外发达市场股票 (1) - MSCI AC Asia ex Japan 净总收益
+    "457001": SwensenClass.FOREIGN_DM_EQUITY,  # 国富亚洲机会
+    # 新兴市场股票 (1) - MSCI Emerging Markets 总回报
+    "378006": SwensenClass.EM_EQUITY,  # 摩根全球新兴市场
     # REITs (2) — lixinger 无指数估值数据，per-fund 表显示"数据缺失"
     "028277": SwensenClass.CN_REIT,  # 华夏中证REITs全收益
     "160140": SwensenClass.US_REIT,  # 南方道琼斯美国精选REIT
@@ -138,7 +138,7 @@ SUBCLASS_BY_CODE: dict[str, SwensenClass] = {
     "519753": SwensenClass.CN_GOV_BOND,  # 交银安心收益债券A（liubo 2026-09-22）
     "002490": SwensenClass.CN_GOV_BOND,  # 金鹰元祺债券A（liubo 2026-09-22）
     "010742": SwensenClass.CN_GOV_BOND,  # 南方宁悦一年持有期混合A（liubo 2026-09-22 确认归利率债）
-    # 美债 (5) - 全 USD 计价 + liubo 2026-09-22 截图新增 2 只 QDII 全球债
+    # 美债 (6) - 全 USD 计价 + liubo 2026-09-22 截图新增 3 只 QDII 全球债
     "100050": SwensenClass.US_BOND,  # 富国全球债券（实际 100% 美国国债）
     "007360": SwensenClass.US_BOND,  # 易方达中短期美元债
     "003385": SwensenClass.US_BOND,  # 工银全球美元债

@@ -63,9 +63,12 @@ class TestSeparateFromGlobalAllocation:
         for code in DIVIDEND_STRATEGY_BY_CODE:
             assert code not in SUBCLASS_BY_CODE, f"{code} 不应该同时属于两个组合"
 
-    def test_014673_still_in_global(self) -> None:
-        """014673 在大类资产配置的港股里（liubo 2026-09-20 加的），不在红利策略里。"""
-        from global_allocation.portfolio.breakdown import SUBCLASS_BY_CODE, SwensenClass
+    def test_014673_also_not_in_global(self) -> None:
+        """014673 港股（liubo 2026-09-20 加过，2026-09-22 又砍掉）现在不在两个组合里。
 
-        assert SUBCLASS_BY_CODE["014673"] == SwensenClass.HK_EQUITY
+        第十八轮港股全砍，014673 从 SUBCLASS_BY_CODE 移除；它也不在红利策略里。
+        """
+        from global_allocation.portfolio.breakdown import SUBCLASS_BY_CODE
+
+        assert "014673" not in SUBCLASS_BY_CODE
         assert get_strategy("014673") is None
