@@ -17,15 +17,15 @@ from global_allocation.portfolio.cost_basis import (
 
 
 class TestCostBasisByCode:
-    def test_has_twenty_nine_funds(self) -> None:
-        """29 只基金有成本数字（32 - 3 只现金/类现金跳过）。"""
-        assert len(COST_BASIS_BY_CODE) == 29
+    def test_has_forty_seven_funds(self) -> None:
+        """47 只基金有成本数字（liubo 2026-09-22 截图扩到 47 只）。"""
+        assert len(COST_BASIS_BY_CODE) == 47
 
     def test_total_matches_sum(self) -> None:
-        """总和等于 liubo 录入时手算的 307570。"""
+        """总和等于 liubo 录入时手算的 704928。"""
         total = sum(COST_BASIS_BY_CODE.values())
         assert total == TOTAL_COST_CNY
-        assert TOTAL_COST_CNY == Decimal("307570")
+        assert TOTAL_COST_CNY == Decimal("704928")
 
     def test_specific_a_share_amounts(self) -> None:
         """spec 097：6 只 A 股的成本数字。"""
