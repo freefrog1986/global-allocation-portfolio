@@ -1,13 +1,12 @@
 """测试 src/global_allocation/portfolio/strategy.py。
 
-spec 097 第十七轮：策略四层结构（内部权重模型 + 子类内部权重）
-- Layer 1：11 个 SwensenClass 子类上限
-- Layer 2a：4 个投资类超类内部权重（不含现金，合计 = 1.0）
-- Layer 2b：现金区间策略（"子弹"区间 [15%, 50%]）
-- Layer 3（第十七轮新增）：子类在所属超类内的内部权重（同一超类合计 = 1.0）
+spec 097 第二十一轮（liubo 2026-09-24）：整数仓位模型替代 Layer 1/2/3 权重模型。
+- 11 个 SwensenClass 子类（含 CASH）各持整数份仓位
+- 1 份 = 1 万 CNY
+- bounds = 单边浮动份数（默认 2）
+- cash_range = (min, max) 现金仓位区间（绝对份数）
 
-实际超类目标 = 超类内部权重 × (1 − 现金占比)，由 compute_actual_target() 计算。
-实际子类目标 = 子类内部权重 × 超类内部权重 × (1 − 现金占比)，由 compute_subclass_actual_target() 计算。
+target_weight(sub) = positions[sub] / sum(positions.values()) — 不再动态缩放。
 """
 
 from __future__ import annotations
@@ -18,645 +17,377 @@ import pytest
 
 from global_allocation.portfolio.breakdown import SwensenClass
 from global_allocation.portfolio.strategy import (
-    DEFAULT_STRATEGY,
-    INVESTMENT_CATEGORIES,
-    SUBCLASS_TO_SUPER,
-    SUPER_CATEGORY_DISPLAY_NAME,
-    CashRange,
-    SubclassInternalWeight,
-    SubclassLimit,
-    SuperCategory,
-    compute_actual_target,
-    compute_subclass_actual_target,
-    compute_super_category_breakdown,
+    DEFAULT_POSITION_ALLOCATION,
+    PositionAllocation,
 )
 
 
-class TestSubclassLimit:
-    def test_upper_is_decimal_between_0_and_1(self) -> None:
-        limit = SubclassLimit(SwensenClass.CN_EQUITY, Decimal("0.40"))
-        assert isinstance(limit.upper, Decimal)
-        assert Decimal("0") <= limit.upper <= Decimal("1")
+# ─── 构造测试 ────────────────────────────────────────────────────────────
 
 
-class TestSubclassInternalWeight:
-    """SubclassInternalWeight 测试（spec 097 第十七轮新增 — Layer 3）。"""
+class TestPositionAllocationConstruction:
+    """PositionAllocation 构造时的字段验证。"""
 
-    def test_weight_is_decimal_between_0_and_1(self) -> None:
-        """子类内部权重是 0~1 的小数（在所属超类内）。"""
-        w = SubclassInternalWeight(
-            SwensenClass.CN_EQUITY, SuperCategory.EQUITY, Decimal("0.40")
+    def _make_valid(self, **overrides: object) -> PositionAllocation:
+        """构造一个合法默认 PositionAllocation（方便覆盖单个字段测试）。"""
+        defaults: dict[str, object] = {
+            "positions": {
+                SwensenClass.CN_EQUITY: 11,
+                SwensenClass.US_EQUITY: 6,
+                SwensenClass.HK_EQUITY: 4,
+                SwensenClass.FOREIGN_DM_EQUITY: 4,
+                SwensenClass.EM_EQUITY: 3,
+                SwensenClass.CN_REIT: 4,
+                SwensenClass.US_REIT: 2,
+                SwensenClass.CN_GOV_BOND: 3,
+                SwensenClass.US_BOND: 1,
+                SwensenClass.COMMODITY: 2,
+                SwensenClass.CASH: 20,
+            },
+            "bounds": {
+                SwensenClass.CN_EQUITY: 2,
+                SwensenClass.US_EQUITY: 2,
+                SwensenClass.HK_EQUITY: 2,
+                SwensenClass.FOREIGN_DM_EQUITY: 2,
+                SwensenClass.EM_EQUITY: 2,
+                SwensenClass.CN_REIT: 2,
+                SwensenClass.US_REIT: 2,
+                SwensenClass.CN_GOV_BOND: 2,
+                SwensenClass.US_BOND: 2,
+                SwensenClass.COMMODITY: 2,
+            },
+            "cash_range": (10, 30),
+            "unit_size": Decimal("10000"),
+        }
+        defaults.update(overrides)
+        return PositionAllocation(**defaults)  # type: ignore[arg-type]
+
+    def test_valid_construction_succeeds(self) -> None:
+        """合法参数 → 构造成功。"""
+        pa = self._make_valid()
+        assert isinstance(pa, PositionAllocation)
+
+    def test_missing_cash_in_positions_raises(self) -> None:
+        """positions 必须包含 CASH（整数仓位模型：现金也是仓）。"""
+        positions_no_cash = {
+            SwensenClass.CN_EQUITY: 11,
+            SwensenClass.US_EQUITY: 6,
+        }
+        with pytest.raises(ValueError, match="positions 必须包含 CASH"):
+            self._make_valid(positions=positions_no_cash)
+
+    def test_cash_in_bounds_raises(self) -> None:
+        """CASH 不能在 bounds 里（cash_range 单独管）。"""
+        bounds_with_cash = {SwensenClass.CASH: 2}
+        with pytest.raises(ValueError, match="CASH 不能在 bounds 里"):
+            self._make_valid(bounds=bounds_with_cash)
+
+    def test_negative_position_raises(self) -> None:
+        """positions 不能为负。"""
+        positions = self._make_valid().positions.copy()
+        positions[SwensenClass.CN_EQUITY] = -1
+        with pytest.raises(ValueError, match="不能为负"):
+            self._make_valid(positions=positions)
+
+    def test_negative_bound_raises(self) -> None:
+        """bounds 不能为负。"""
+        bounds = self._make_valid().bounds.copy()
+        bounds[SwensenClass.CN_EQUITY] = -2
+        with pytest.raises(ValueError, match="不能为负"):
+            self._make_valid(bounds=bounds)
+
+    def test_negative_cash_min_raises(self) -> None:
+        """cash_range[0] 不能为负。"""
+        with pytest.raises(ValueError, match="不能为负"):
+            self._make_valid(cash_range=(-1, 30))
+
+    def test_cash_range_min_greater_than_max_raises(self) -> None:
+        """cash_range[0] 不能 > cash_range[1]。"""
+        with pytest.raises(ValueError, match="不能小于"):
+            self._make_valid(cash_range=(30, 10))
+
+    def test_zero_unit_size_raises(self) -> None:
+        """unit_size 必须 > 0。"""
+        with pytest.raises(ValueError, match="必须 > 0"):
+            self._make_valid(unit_size=Decimal("0"))
+
+    def test_negative_unit_size_raises(self) -> None:
+        """unit_size 必须 > 0。"""
+        with pytest.raises(ValueError, match="必须 > 0"):
+            self._make_valid(unit_size=Decimal("-100"))
+
+    def test_is_frozen(self) -> None:
+        """PositionAllocation frozen — 不能修改字段。"""
+        from dataclasses import FrozenInstanceError
+
+        pa = self._make_valid()
+        with pytest.raises(FrozenInstanceError):
+            pa.positions = {}  # type: ignore[misc]
+
+
+# ─── 属性测试 ──────────────────────────────────────────────────────────────
+
+
+class TestPositionAllocationProperties:
+    """PositionAllocation 派生属性。"""
+
+    def test_total_positions_sums_all(self) -> None:
+        """total_positions = sum(positions.values())。"""
+        assert DEFAULT_POSITION_ALLOCATION.total_positions == 60
+
+    def test_total_capital_is_total_times_unit_size(self) -> None:
+        """total_capital = total_positions × unit_size。"""
+        assert DEFAULT_POSITION_ALLOCATION.total_capital == Decimal("600000")
+
+    def test_investment_capital_excludes_cash(self) -> None:
+        """investment_capital = (total - cash_count) × unit_size。"""
+        # 60 - 20 = 40 → 400000
+        assert DEFAULT_POSITION_ALLOCATION.investment_capital == Decimal("400000")
+
+    def test_cash_position_count_returns_cash_subclass(self) -> None:
+        """cash_position_count = positions[CASH]。"""
+        assert DEFAULT_POSITION_ALLOCATION.cash_position_count == 20
+
+    def test_cash_weight_is_cash_over_total(self) -> None:
+        """cash_weight = cash_count / total_positions。"""
+        # 20 / 60 ≈ 0.3333
+        assert DEFAULT_POSITION_ALLOCATION.cash_weight == Decimal("20") / Decimal("60")
+
+
+# ─── 查询方法测试 ──────────────────────────────────────────────────────────
+
+
+class TestTargetPosition:
+    """target_position(sub) — 返回子类的目标份数。"""
+
+    def test_investment_subclass_returns_position(self) -> None:
+        """投资子类 → positions[sub]。"""
+        assert DEFAULT_POSITION_ALLOCATION.target_position(SwensenClass.CN_EQUITY) == 11
+        assert DEFAULT_POSITION_ALLOCATION.target_position(SwensenClass.US_EQUITY) == 6
+        assert DEFAULT_POSITION_ALLOCATION.target_position(SwensenClass.HK_EQUITY) == 4
+        assert DEFAULT_POSITION_ALLOCATION.target_position(SwensenClass.COMMODITY) == 2
+
+    def test_cash_returns_cash_position(self) -> None:
+        """CASH → positions[CASH]。"""
+        assert DEFAULT_POSITION_ALLOCATION.target_position(SwensenClass.CASH) == 20
+
+
+class TestMinMaxPosition:
+    """min_position(sub) / max_position(sub) — 区间边界。"""
+
+    def test_investment_subclass_min_uses_bound(self) -> None:
+        """投资子类 min = max(0, target - bound)。"""
+        # CN_EQUITY 11, bound 2 → min = 9
+        assert DEFAULT_POSITION_ALLOCATION.min_position(SwensenClass.CN_EQUITY) == 9
+        # US_BOND 1, bound 2 → min = max(0, -1) = 0（允许清仓）
+        assert DEFAULT_POSITION_ALLOCATION.min_position(SwensenClass.US_BOND) == 0
+
+    def test_investment_subclass_max_uses_bound(self) -> None:
+        """投资子类 max = target + bound。"""
+        assert DEFAULT_POSITION_ALLOCATION.max_position(SwensenClass.CN_EQUITY) == 13
+        assert DEFAULT_POSITION_ALLOCATION.max_position(SwensenClass.US_EQUITY) == 8
+
+    def test_cash_min_returns_cash_range_low(self) -> None:
+        """CASH min = cash_range[0]。"""
+        assert DEFAULT_POSITION_ALLOCATION.min_position(SwensenClass.CASH) == 10
+
+    def test_cash_max_returns_cash_range_high(self) -> None:
+        """CASH max = cash_range[1]。"""
+        assert DEFAULT_POSITION_ALLOCATION.max_position(SwensenClass.CASH) == 30
+
+
+class TestTargetWeight:
+    """target_weight(sub) — 子类目标权重（0~1，固定整数比，不动态缩放）。"""
+
+    def test_cn_equity_target_weight(self) -> None:
+        """A 股权重 = 11 / 60 ≈ 0.1833。"""
+        expected = Decimal("11") / Decimal("60")
+        assert DEFAULT_POSITION_ALLOCATION.target_weight(SwensenClass.CN_EQUITY) == expected
+
+    def test_cash_target_weight(self) -> None:
+        """现金权重 = 20 / 60 ≈ 0.3333。"""
+        expected = Decimal("20") / Decimal("60")
+        assert DEFAULT_POSITION_ALLOCATION.target_weight(SwensenClass.CASH) == expected
+
+    def test_all_11_weights_sum_to_one(self) -> None:
+        """11 子类权重和 = 1.0（保证 PositionAllocation 是完备的份额模型）。"""
+        total = sum(
+            DEFAULT_POSITION_ALLOCATION.target_weight(s) for s in SwensenClass
         )
-        assert isinstance(w.weight, Decimal)
-        assert Decimal("0") <= w.weight <= Decimal("1")
-
-    def test_subclass_and_super_category_match(self) -> None:
-        """subclass 所属的超类必须跟 super_category 一致（自检属性）。"""
-        # CN_EQUITY 在 EQUITY 超类下
-        w = SubclassInternalWeight(
-            SwensenClass.CN_EQUITY, SuperCategory.EQUITY, Decimal("0.40")
-        )
-        assert SUBCLASS_TO_SUPER[w.subclass] == w.super_category
-
-
-class TestAllocationStrategy:
-    def test_default_strategy_has_all_11_subclass_limits(self) -> None:
-        """默认策略覆盖全部 11 个子类（第十七轮：从 14 精简到 11）。"""
-        subclasses_in_strategy = {limit.subclass for limit in DEFAULT_STRATEGY.subclass_limits}
-        assert subclasses_in_strategy == set(SwensenClass)
-        assert len(DEFAULT_STRATEGY.subclass_limits) == 11
-
-    def test_default_strategy_has_4_investment_weights(self) -> None:
-        """默认策略有 4 个投资类超类内部权重（股票/REITs/债券/商品，不含现金）。
-
-        第十六轮变更：内部权重（不是绝对目标），4 类合计 = 1.0。
-        """
-        assert len(DEFAULT_STRATEGY.investment_weights) == 4
-        categories = {w.category for w in DEFAULT_STRATEGY.investment_weights}
-        assert categories == set(INVESTMENT_CATEGORIES)
-        assert SuperCategory.CASH not in categories
-
-    def test_default_strategy_has_subclass_weights(self) -> None:
-        """默认策略有子类内部权重（第十七轮新增 — Layer 3）。
-
-        10 个子类权重（5 股票 + 2 REITs + 2 债券 + 1 商品；现金不在内）。
-        """
-        assert len(DEFAULT_STRATEGY.subclass_weights) == 10
-        # 不含现金
-        cash_entries = [w for w in DEFAULT_STRATEGY.subclass_weights if w.subclass == SwensenClass.CASH]
-        assert len(cash_entries) == 0
-
-    def test_default_strategy_has_cash_range(self) -> None:
-        """默认策略有 cash_range（第十五轮新增，第十六轮改为 [15%, 50%]）。"""
-        assert isinstance(DEFAULT_STRATEGY.cash_range, CashRange)
-        # 默认区间 [15%, 50%]（第十六轮：下限从 20% 放宽到 15%）
-        assert DEFAULT_STRATEGY.cash_range.min_weight == Decimal("0.15")
-        assert DEFAULT_STRATEGY.cash_range.max_weight == Decimal("0.50")
-
-    def test_investment_weights_sum_to_one(self) -> None:
-        """4 个投资类内部权重之和 = 1.0（精确等于，相对权重）。
-
-        第十六轮变更：之前是 < 1.0（绝对目标和 = 97%），现在必须 = 1.0（相对权重和）。
-        """
-        total = DEFAULT_STRATEGY.total_investment_weight
         assert total == Decimal("1")
 
-    def test_subclass_weights_sum_to_one_per_super_category(self) -> None:
-        """子类内部权重在每个超类内合计 = 1.0（保证 Layer 3 的相对权重语义）。"""
-        for cat in INVESTMENT_CATEGORIES:
-            total = DEFAULT_STRATEGY.total_subclass_weight(cat)
-            assert total == Decimal("1"), f"{cat.name} 子类权重和 = {total}，应 = 1.0"
 
-    def test_cash_subclass_weight_total_is_zero(self) -> None:
-        """现金超类的子类权重和 = 0（现金不在 subclass_weights 里，走 cash_range）。"""
-        assert DEFAULT_STRATEGY.total_subclass_weight(SuperCategory.CASH) == Decimal("0")
+class TestTargetAmount:
+    """target_amount(sub) — 子类目标金额（CNY）。"""
 
-    def test_default_investment_weights_match_ranking(self) -> None:
-        """默认权重按"收益率排序"：股票 > REITs > 债券 > 商品（第十六轮确认）。"""
-        assert DEFAULT_STRATEGY.investment_weight(SuperCategory.EQUITY) == Decimal("0.70")
-        assert DEFAULT_STRATEGY.investment_weight(SuperCategory.REIT) == Decimal("0.15")
-        assert DEFAULT_STRATEGY.investment_weight(SuperCategory.BOND) == Decimal("0.10")
-        assert DEFAULT_STRATEGY.investment_weight(SuperCategory.COMMODITY) == Decimal("0.05")
+    def test_investment_subclass_amount(self) -> None:
+        """投资子类 = positions[sub] × unit_size。"""
+        # CN_EQUITY 11 × 10000 = 110000
+        assert DEFAULT_POSITION_ALLOCATION.target_amount(SwensenClass.CN_EQUITY) == Decimal("110000")
+        # US_BOND 1 × 10000 = 10000
+        assert DEFAULT_POSITION_ALLOCATION.target_amount(SwensenClass.US_BOND) == Decimal("10000")
 
-    def test_default_subclass_weights_equity(self) -> None:
-        """股票超类子类权重（第十七轮：A股 40% / 美股 20% / 港股 15% / 国外发达 15% / 新兴市场 10%）。"""
-        assert DEFAULT_STRATEGY.subclass_weight(SwensenClass.CN_EQUITY) == (SuperCategory.EQUITY, Decimal("0.40"))
-        assert DEFAULT_STRATEGY.subclass_weight(SwensenClass.US_EQUITY) == (SuperCategory.EQUITY, Decimal("0.20"))
-        assert DEFAULT_STRATEGY.subclass_weight(SwensenClass.HK_EQUITY) == (SuperCategory.EQUITY, Decimal("0.15"))
-        assert DEFAULT_STRATEGY.subclass_weight(SwensenClass.FOREIGN_DM_EQUITY) == (SuperCategory.EQUITY, Decimal("0.15"))
-        assert DEFAULT_STRATEGY.subclass_weight(SwensenClass.EM_EQUITY) == (SuperCategory.EQUITY, Decimal("0.10"))
-
-    def test_default_subclass_weights_reit(self) -> None:
-        """REITs 超类子类权重（第十七轮：国内 70% / 美国 30%）。"""
-        assert DEFAULT_STRATEGY.subclass_weight(SwensenClass.CN_REIT) == (SuperCategory.REIT, Decimal("0.70"))
-        assert DEFAULT_STRATEGY.subclass_weight(SwensenClass.US_REIT) == (SuperCategory.REIT, Decimal("0.30"))
-
-    def test_default_subclass_weights_bond(self) -> None:
-        """债券超类子类权重（第十七轮：国内利率债 70% / 美债 30%；信用债砍掉）。"""
-        assert DEFAULT_STRATEGY.subclass_weight(SwensenClass.CN_GOV_BOND) == (SuperCategory.BOND, Decimal("0.70"))
-        assert DEFAULT_STRATEGY.subclass_weight(SwensenClass.US_BOND) == (SuperCategory.BOND, Decimal("0.30"))
-
-    def test_default_subclass_weight_commodity(self) -> None:
-        """商品超类子类权重（100%，只有一个子类）。"""
-        assert DEFAULT_STRATEGY.subclass_weight(SwensenClass.COMMODITY) == (SuperCategory.COMMODITY, Decimal("1.00"))
-
-    def test_subclass_weight_returns_none_for_cash(self) -> None:
-        """subclass_weight 对现金返回 None（现金走 cash_range，不走权重）。"""
-        assert DEFAULT_STRATEGY.subclass_weight(SwensenClass.CASH) is None
-
-    def test_subclass_upper_lookup(self) -> None:
-        """subclass_upper 能查到具体子类的上限。"""
-        upper = DEFAULT_STRATEGY.subclass_upper(SwensenClass.CN_EQUITY)
-        assert upper == Decimal("0.40")
-
-    def test_investment_weight_lookup(self) -> None:
-        """investment_weight 能查到具体超类的内部权重。"""
-        weight = DEFAULT_STRATEGY.investment_weight(SuperCategory.EQUITY)
-        assert weight == Decimal("0.70")
-
-    def test_investment_weight_returns_none_for_cash(self) -> None:
-        """investment_weight 对现金返回 None（现金不在投资权重里，走 cash_range）。"""
-        weight = DEFAULT_STRATEGY.investment_weight(SuperCategory.CASH)
-        assert weight is None
-
-    def test_strategy_is_frozen(self) -> None:
-        """frozen — 不能修改字段（保证不可变性）。"""
-        from dataclasses import FrozenInstanceError
-
-        with pytest.raises(FrozenInstanceError):
-            DEFAULT_STRATEGY.investment_weights = ()  # type: ignore[misc]
+    def test_cash_amount(self) -> None:
+        """现金 = 20 × 10000 = 200000。"""
+        assert DEFAULT_POSITION_ALLOCATION.target_amount(SwensenClass.CASH) == Decimal("200000")
 
 
-class TestInvestmentCategories:
-    def test_investment_categories_count(self) -> None:
-        """INVESTMENT_CATEGORIES 含 4 个超类。"""
-        assert len(INVESTMENT_CATEGORIES) == 4
+# ─── 现金状态测试 ──────────────────────────────────────────────────────────
 
-    def test_investment_categories_excludes_cash(self) -> None:
-        """INVESTMENT_CATEGORIES 不含现金（现金走区间策略）。"""
-        assert SuperCategory.CASH not in INVESTMENT_CATEGORIES
-        assert set(INVESTMENT_CATEGORIES) == {
-            SuperCategory.EQUITY,
-            SuperCategory.REIT,
-            SuperCategory.BOND,
-            SuperCategory.COMMODITY,
+
+class TestCashStatus:
+    """cash_status(current_cash_weight) — 现金区间状态判断。"""
+
+    def test_in_range_returns_区间内(self) -> None:
+        """现金占比在区间内 → "区间内"。"""
+        # 默认 cash_range = (10, 30), total = 60 → 区间权重 [0.1667, 0.5]
+        mid_weight = Decimal("20") / Decimal("60")  # = 0.3333 — 区间正中
+        assert DEFAULT_POSITION_ALLOCATION.cash_status(mid_weight) == "区间内"
+
+    def test_below_min_returns_低于下限(self) -> None:
+        """现金占比 < cash_range[0]/total → "低于下限"。"""
+        low_weight = Decimal("5") / Decimal("60")  # = 0.0833 — 低于下限 0.1667
+        assert DEFAULT_POSITION_ALLOCATION.cash_status(low_weight) == "低于下限"
+
+    def test_above_max_returns_高于上限(self) -> None:
+        """现金占比 > cash_range[1]/total → "高于上限"。"""
+        high_weight = Decimal("40") / Decimal("60")  # = 0.6667 — 高于上限 0.5
+        assert DEFAULT_POSITION_ALLOCATION.cash_status(high_weight) == "高于上限"
+
+    def test_at_min_boundary_is_区间内(self) -> None:
+        """等于下限 → "区间内"（闭区间）。"""
+        min_weight = Decimal("10") / Decimal("60")
+        assert DEFAULT_POSITION_ALLOCATION.cash_status(min_weight) == "区间内"
+
+    def test_at_max_boundary_is_区间内(self) -> None:
+        """等于上限 → "区间内"（闭区间）。"""
+        max_weight = Decimal("30") / Decimal("60")
+        assert DEFAULT_POSITION_ALLOCATION.cash_status(max_weight) == "区间内"
+
+
+# ─── 默认值测试 ────────────────────────────────────────────────────────────
+
+
+class TestDefaultPositionAllocation:
+    """DEFAULT_POSITION_ALLOCATION 的具体数字（spec 097 第二十一轮 liubo 2026-09-24 给值）。"""
+
+    def test_default_has_11_positions(self) -> None:
+        """默认有 11 个 positions（10 投资子类 + CASH）。"""
+        assert len(DEFAULT_POSITION_ALLOCATION.positions) == 11
+        assert set(DEFAULT_POSITION_ALLOCATION.positions.keys()) == set(SwensenClass)
+
+    def test_default_has_10_bounds(self) -> None:
+        """默认有 10 个 bounds（10 投资子类，不含 CASH）。"""
+        assert len(DEFAULT_POSITION_ALLOCATION.bounds) == 10
+        assert SwensenClass.CASH not in DEFAULT_POSITION_ALLOCATION.bounds
+
+    def test_default_cash_range(self) -> None:
+        """默认 cash_range = (10, 30)。"""
+        assert DEFAULT_POSITION_ALLOCATION.cash_range == (10, 30)
+
+    def test_default_unit_size(self) -> None:
+        """默认 unit_size = 10000（1 仓 = 1 万 CNY）。"""
+        assert DEFAULT_POSITION_ALLOCATION.unit_size == Decimal("10000")
+
+    def test_default_total_positions_is_60(self) -> None:
+        """默认总仓位 60 仓（11 + 6 + 4 + 4 + 3 + 4 + 2 + 3 + 1 + 2 + 20 = 60）。"""
+        assert DEFAULT_POSITION_ALLOCATION.total_positions == 60
+
+    def test_default_investment_capital_is_40_wan(self) -> None:
+        """默认投资部分 = 40 仓 × 1 万 = 40 万 CNY。"""
+        assert DEFAULT_POSITION_ALLOCATION.investment_capital == Decimal("400000")
+
+    def test_default_specific_positions(self) -> None:
+        """默认各子类份数（spec 097 第二十一轮 liubo 2026-09-24 给值）。"""
+        expected = {
+            SwensenClass.CN_EQUITY: 11,
+            SwensenClass.US_EQUITY: 6,
+            SwensenClass.HK_EQUITY: 4,
+            SwensenClass.FOREIGN_DM_EQUITY: 4,
+            SwensenClass.EM_EQUITY: 3,
+            SwensenClass.CN_REIT: 4,
+            SwensenClass.US_REIT: 2,
+            SwensenClass.CN_GOV_BOND: 3,
+            SwensenClass.US_BOND: 1,
+            SwensenClass.COMMODITY: 2,
+            SwensenClass.CASH: 20,
         }
-
-    def test_investment_categories_follows_return_ranking(self) -> None:
-        """INVESTMENT_CATEGORIES 按收益率排序（spec 097 第十六轮）：股票 > REITs > 债券 > 商品。
-
-        跟 SuperCategory 枚举顺序（EQUITY/BOND/REIT/COMMODITY）不同，
-        这是策略上的排序：股票 #1，REITs #2，债券 #3，商品 #4。
-        """
-        expected = (
-            SuperCategory.EQUITY,    # 收益最高，"占大头"
-            SuperCategory.REIT,      # 介于股债之间
-            SuperCategory.BOND,      # 中等收益
-            SuperCategory.COMMODITY, # 长期没那么值钱
-        )
-        assert INVESTMENT_CATEGORIES == expected
-
-
-class TestSubclassToSuperMapping:
-    def test_all_11_subclasses_mapped(self) -> None:
-        """11 个 SwensenClass 全部映射到超类（第十七轮：从 14 精简到 11）。"""
-        assert set(SUBCLASS_TO_SUPER.keys()) == set(SwensenClass)
-        assert len(SUBCLASS_TO_SUPER) == 11
-
-    def test_equity_super_category_has_5_subclasses(self) -> None:
-        """股票超类聚合 5 个子类（CN/HK/US/FOREIGN_DM/EM；第十七轮：合并 EU+ASIA_DM=国外发达，删全球主题）。"""
-        equity_count = sum(
-            1 for cat in SUBCLASS_TO_SUPER.values() if cat == SuperCategory.EQUITY
-        )
-        assert equity_count == 5
-
-    def test_bond_super_category_has_2_subclasses(self) -> None:
-        """债券超类聚合 2 个子类（CN_GOV/US_BOND；第十七轮：删 CN_CREDIT）。"""
-        bond_count = sum(
-            1 for cat in SUBCLASS_TO_SUPER.values() if cat == SuperCategory.BOND
-        )
-        assert bond_count == 2
-
-    def test_reit_super_category_has_2_subclasses(self) -> None:
-        """REITs 超类聚合 2 个子类（CN_REIT/US_REIT）。"""
-        reit_count = sum(
-            1 for cat in SUBCLASS_TO_SUPER.values() if cat == SuperCategory.REIT
-        )
-        assert reit_count == 2
-
-    def test_cash_subclass_maps_to_cash_super(self) -> None:
-        """CASH 子类映射到 CASH 超类（投资类不含现金，但子类映射仍然有效）。"""
-        assert SUBCLASS_TO_SUPER[SwensenClass.CASH] == SuperCategory.CASH
-
-    def test_removed_subclasses_no_longer_in_mapping(self) -> None:
-        """第十七轮：被砍掉的子类不在 SUBCLASS_TO_SUPER 里。
-
-        通过 value 字符串判断（enum member 已被物理删除，不能直接引用类属性）。
-        """
-        removed_values = {
-            "global_themed_equity",  # 并入 US_EQUITY
-            "eu_equity",             # 合并进 FOREIGN_DM_EQUITY
-            "asia_dm_equity",        # 合并进 FOREIGN_DM_EQUITY
-            "cn_credit_bond",        # 砍掉（斯文森说没阿尔法），基金并入 CN_GOV_BOND
-        }
-        actual_values = {m.value for m in SUBCLASS_TO_SUPER.keys()}
-        assert removed_values.isdisjoint(actual_values)
-
-    def test_new_subclass_mapped_to_equity(self) -> None:
-        """第十七轮新增 FOREIGN_DM_EQUITY → EQUITY。"""
-        assert SUBCLASS_TO_SUPER[SwensenClass.FOREIGN_DM_EQUITY] == SuperCategory.EQUITY
-
-
-class TestCashRange:
-    """现金区间策略测试（spec 097 第十五轮新增，第十六轮 [15%, 50%]）。
-
-    CashRange 表示"子弹"区间 [min_weight, max_weight]：
-    - 当前 < min → 子弹打光了
-    - 当前 > max → 子弹囤太多
-    - min ≤ 当前 ≤ max → 区间内
-    """
-
-    def test_is_in_range_returns_true_when_in_range(self) -> None:
-        """当前值在区间内 → True。"""
-        cr = CashRange(min_weight=Decimal("0.15"), max_weight=Decimal("0.50"))
-        assert cr.is_in_range(Decimal("0.15")) is True  # 等于下限
-        assert cr.is_in_range(Decimal("0.50")) is True  # 等于上限
-        assert cr.is_in_range(Decimal("0.30")) is True  # 区间正中
-
-    def test_is_in_range_returns_false_when_below_min(self) -> None:
-        """当前值低于下限 → False。"""
-        cr = CashRange(min_weight=Decimal("0.15"), max_weight=Decimal("0.50"))
-        assert cr.is_in_range(Decimal("0.10")) is False
-        assert cr.is_in_range(Decimal("0.149")) is False
-
-    def test_is_in_range_returns_false_when_above_max(self) -> None:
-        """当前值高于上限 → False。"""
-        cr = CashRange(min_weight=Decimal("0.15"), max_weight=Decimal("0.50"))
-        assert cr.is_in_range(Decimal("0.60")) is False
-        assert cr.is_in_range(Decimal("0.501")) is False
-
-    def test_status_in_range(self) -> None:
-        """区间内 → "区间内"。"""
-        cr = CashRange(min_weight=Decimal("0.15"), max_weight=Decimal("0.50"))
-        assert cr.status(Decimal("0.30")) == "区间内"
-        assert cr.status(Decimal("0.15")) == "区间内"
-        assert cr.status(Decimal("0.50")) == "区间内"
-
-    def test_status_below_min(self) -> None:
-        """低于下限 → "低于下限"。"""
-        cr = CashRange(min_weight=Decimal("0.15"), max_weight=Decimal("0.50"))
-        assert cr.status(Decimal("0.10")) == "低于下限"
-        assert cr.status(Decimal("0.149")) == "低于下限"
-
-    def test_status_above_max(self) -> None:
-        """高于上限 → "高于上限"。"""
-        cr = CashRange(min_weight=Decimal("0.15"), max_weight=Decimal("0.50"))
-        assert cr.status(Decimal("0.60")) == "高于上限"
-        assert cr.status(Decimal("0.501")) == "高于上限"
-
-    def test_display_range(self) -> None:
-        """display_range 输出 "[min%, max%]" 字符串（卡片展示用）。"""
-        cr = CashRange(min_weight=Decimal("0.15"), max_weight=Decimal("0.50"))
-        assert cr.display_range == "[15%, 50%]"
-
-    def test_cash_range_is_frozen(self) -> None:
-        """CashRange frozen — 不能修改字段。"""
-        from dataclasses import FrozenInstanceError
-
-        cr = CashRange(min_weight=Decimal("0.15"), max_weight=Decimal("0.50"))
-        with pytest.raises(FrozenInstanceError):
-            cr.min_weight = Decimal("0.30")  # type: ignore[misc]
-
-    def test_default_cash_range_uses_correct_numbers(self) -> None:
-        """默认策略的现金区间是 [15%, 50%]（liubo 第十六轮明确）。"""
-        cr = DEFAULT_STRATEGY.cash_range
-        # 0.15 * 100 = 15, 0.50 * 100 = 50
-        assert int(cr.min_weight * 100) == 15
-        assert int(cr.max_weight * 100) == 50
-
-
-class TestComputeActualTarget:
-    """compute_actual_target() 测试（spec 097 第十六轮新增）。
-
-    公式：actual_target = internal_weight × (1 − current_cash_weight)
-
-    例（默认策略）：
-    - 现金 30% → 投资 70% → 股票目标 = 70% × 70% = 49%
-    - 现金 50% → 投资 50% → 股票目标 = 70% × 50% = 35%
-    - 现金 15% → 投资 85% → 股票目标 = 70% × 85% = 59.5%
-    """
-
-    def test_returns_none_for_cash(self) -> None:
-        """现金类返回 None（现金不走权重公式，走 cash_range）。"""
-        actual = compute_actual_target(
-            DEFAULT_STRATEGY,
-            SuperCategory.CASH,
-            Decimal("0.30"),
-        )
-        assert actual is None
-
-    def test_equity_at_30pct_cash(self) -> None:
-        """现金 30% 时股票实际目标 = 70% × 70% = 49%。"""
-        actual = compute_actual_target(
-            DEFAULT_STRATEGY,
-            SuperCategory.EQUITY,
-            Decimal("0.30"),
-        )
-        assert actual == Decimal("0.70") * Decimal("0.70")  # = 0.49
-
-    def test_equity_at_50pct_cash(self) -> None:
-        """现金 50% 时股票实际目标 = 70% × 50% = 35%。"""
-        actual = compute_actual_target(
-            DEFAULT_STRATEGY,
-            SuperCategory.EQUITY,
-            Decimal("0.50"),
-        )
-        assert actual == Decimal("0.70") * Decimal("0.50")  # = 0.35
-
-    def test_equity_at_15pct_cash(self) -> None:
-        """现金 15% 时股票实际目标 = 70% × 85% = 59.5%（子弹下限的最大仓位）。"""
-        actual = compute_actual_target(
-            DEFAULT_STRATEGY,
-            SuperCategory.EQUITY,
-            Decimal("0.15"),
-        )
-        assert actual == Decimal("0.70") * Decimal("0.85")  # = 0.595
-
-    def test_reit_at_30pct_cash(self) -> None:
-        """现金 30% 时 REITs 实际目标 = 15% × 70% = 10.5%。"""
-        actual = compute_actual_target(
-            DEFAULT_STRATEGY,
-            SuperCategory.REIT,
-            Decimal("0.30"),
-        )
-        assert actual == Decimal("0.15") * Decimal("0.70")  # = 0.105
-
-    def test_bond_at_30pct_cash(self) -> None:
-        """现金 30% 时债券实际目标 = 10% × 70% = 7%。"""
-        actual = compute_actual_target(
-            DEFAULT_STRATEGY,
-            SuperCategory.BOND,
-            Decimal("0.30"),
-        )
-        assert actual == Decimal("0.10") * Decimal("0.70")  # = 0.07
-
-    def test_commodity_at_30pct_cash(self) -> None:
-        """现金 30% 时商品实际目标 = 5% × 70% = 3.5%。"""
-        actual = compute_actual_target(
-            DEFAULT_STRATEGY,
-            SuperCategory.COMMODITY,
-            Decimal("0.30"),
-        )
-        assert actual == Decimal("0.05") * Decimal("0.70")  # = 0.035
-
-    def test_total_actual_targets_equal_investment_part(self) -> None:
-        """4 个投资类实际目标之和 = 1 − 当前现金占比（内部权重和 = 1.0 的保证）。"""
-        current_cash = Decimal("0.30")
-        investment_total = Decimal("1") - current_cash
-        for cat in INVESTMENT_CATEGORIES:
-            actual = compute_actual_target(DEFAULT_STRATEGY, cat, current_cash)
-            assert actual is not None
-        # 所有投资类加总
-        total = sum(
-            compute_actual_target(DEFAULT_STRATEGY, cat, current_cash)  # type: ignore[misc]
-            for cat in INVESTMENT_CATEGORIES
-        )
-        # 因为 内部权重和 = 1，所以 实际目标和 = (1 − cash) × 1 = (1 − cash)
-        assert total == investment_total
-
-    def test_zero_cash_doubles_weights(self) -> None:
-        """现金 0% 时（极端情况），投资类实际目标 = 内部权重 × 100%。"""
-        for cat in INVESTMENT_CATEGORIES:
-            actual = compute_actual_target(DEFAULT_STRATEGY, cat, Decimal("0"))
-            assert actual is not None
-            assert actual == DEFAULT_STRATEGY.investment_weight(cat)
-
-
-class TestComputeSuperCategoryBreakdown:
-    def test_empty_breakdown_returns_zeros(self) -> None:
-        """空 breakdown → 所有超类权重都是 0。"""
-        result = compute_super_category_breakdown([])
-        assert all(v == Decimal("0") for v in result.values())
-        assert set(result.keys()) == set(SuperCategory)
-
-    def test_aggregates_subclass_weights_by_super_category(self) -> None:
-        """聚合各子类权重到超类。"""
-        # 3 个子类分到股票超类，每个 0.1（0.3 总和）
-        breakdown = [
-            {
-                "subclass": SwensenClass.CN_EQUITY,
-                "display_name": "A 股股票",
-                "count": 1,
-                "value": Decimal("100"),
-                "weight": Decimal("0.1"),
-            },
-            {
-                "subclass": SwensenClass.US_EQUITY,
-                "display_name": "美股股票",
-                "count": 1,
-                "value": Decimal("100"),
-                "weight": Decimal("0.1"),
-            },
-            {
-                "subclass": SwensenClass.HK_EQUITY,
-                "display_name": "港股",
-                "count": 1,
-                "value": Decimal("100"),
-                "weight": Decimal("0.1"),
-            },
-            {
-                "subclass": SwensenClass.CN_REIT,
-                "display_name": "国内 REITs",
-                "count": 1,
-                "value": Decimal("100"),
-                "weight": Decimal("0.1"),
-            },
-        ]
-        result = compute_super_category_breakdown(breakdown)
-        # 股票超类 = CN + US + HK = 0.3
-        assert result[SuperCategory.EQUITY] == Decimal("0.3")
-        # REITs 超类 = 0.1
-        assert result[SuperCategory.REIT] == Decimal("0.1")
-        # 其他超类都是 0
-        assert result[SuperCategory.BOND] == Decimal("0")
-        assert result[SuperCategory.COMMODITY] == Decimal("0")
-        assert result[SuperCategory.CASH] == Decimal("0")
-
-
-class TestSuperCategoryDisplayName:
-    def test_all_super_categories_have_display_name(self) -> None:
-        """5 个超类都有显示名（飞书卡片用）。
-
-        4 个用中文（股票/债券/商品/现金），1 个用英文缩写 REITs（金融惯用）。
-        """
-        assert set(SUPER_CATEGORY_DISPLAY_NAME.keys()) == set(SuperCategory)
-        # 4 个超类用中文（不是纯 ASCII）
-        chinese_names = [
-            SUPER_CATEGORY_DISPLAY_NAME[SuperCategory.EQUITY],
-            SUPER_CATEGORY_DISPLAY_NAME[SuperCategory.BOND],
-            SUPER_CATEGORY_DISPLAY_NAME[SuperCategory.COMMODITY],
-            SUPER_CATEGORY_DISPLAY_NAME[SuperCategory.CASH],
-        ]
-        for name in chinese_names:
-            assert not name.isascii()
-        # REITs 是金融惯用英文缩写
-        assert SUPER_CATEGORY_DISPLAY_NAME[SuperCategory.REIT] == "REITs"
-
-
-class TestComputeSubclassActualTarget:
-    """compute_subclass_actual_target() 测试（spec 097 第十七轮新增 — Layer 3）。
-
-    公式：actual_target = subclass_internal_weight × super_investment_weight × (1 − current_cash_weight)
-
-    例（默认策略，现金 30%）：
-    - 投资部分 = 70%
-    - 股票超类目标 = 70% × 70% = 49%
-    - A 股目标 = 49% × 40% = 19.6%
-    - 美股目标 = 49% × 20% = 9.8%
-    - 港股目标 = 49% × 15% = 7.35%
-    - 国外发达目标 = 49% × 15% = 7.35%
-    - 新兴市场目标 = 49% × 10% = 4.9%
-    """
-
-    def test_returns_none_for_cash(self) -> None:
-        """现金类返回 None（现金不走权重公式，走 cash_range）。"""
-        actual = compute_subclass_actual_target(
-            DEFAULT_STRATEGY,
-            SwensenClass.CASH,
-            Decimal("0.30"),
-        )
-        assert actual is None
-
-    def test_cn_equity_at_30pct_cash(self) -> None:
-        """现金 30% 时 A 股目标 = 40% × 70% × 70% = 19.6%。"""
-        actual = compute_subclass_actual_target(
-            DEFAULT_STRATEGY,
-            SwensenClass.CN_EQUITY,
-            Decimal("0.30"),
-        )
-        # 0.40 (A股) × 0.70 (股票) × 0.70 (1 - 现金 30%) = 0.196
-        assert actual == Decimal("0.40") * Decimal("0.70") * Decimal("0.70")
-
-    def test_us_equity_at_30pct_cash(self) -> None:
-        """现金 30% 时美股目标 = 20% × 70% × 70% = 9.8%。"""
-        actual = compute_subclass_actual_target(
-            DEFAULT_STRATEGY,
-            SwensenClass.US_EQUITY,
-            Decimal("0.30"),
-        )
-        assert actual == Decimal("0.20") * Decimal("0.70") * Decimal("0.70")
-
-    def test_hk_equity_at_30pct_cash(self) -> None:
-        """现金 30% 时港股目标 = 15% × 70% × 70% = 7.35%。"""
-        actual = compute_subclass_actual_target(
-            DEFAULT_STRATEGY,
-            SwensenClass.HK_EQUITY,
-            Decimal("0.30"),
-        )
-        assert actual == Decimal("0.15") * Decimal("0.70") * Decimal("0.70")
-
-    def test_foreign_dm_equity_at_30pct_cash(self) -> None:
-        """现金 30% 时国外发达市场目标 = 15% × 70% × 70% = 7.35%。"""
-        actual = compute_subclass_actual_target(
-            DEFAULT_STRATEGY,
-            SwensenClass.FOREIGN_DM_EQUITY,
-            Decimal("0.30"),
-        )
-        assert actual == Decimal("0.15") * Decimal("0.70") * Decimal("0.70")
-
-    def test_em_equity_at_30pct_cash(self) -> None:
-        """现金 30% 时新兴市场目标 = 10% × 70% × 70% = 4.9%。"""
-        actual = compute_subclass_actual_target(
-            DEFAULT_STRATEGY,
-            SwensenClass.EM_EQUITY,
-            Decimal("0.30"),
-        )
-        assert actual == Decimal("0.10") * Decimal("0.70") * Decimal("0.70")
-
-    def test_cn_reit_at_30pct_cash(self) -> None:
-        """现金 30% 时国内 REITs 目标 = 70% × 15% × 70% = 7.35%。"""
-        actual = compute_subclass_actual_target(
-            DEFAULT_STRATEGY,
-            SwensenClass.CN_REIT,
-            Decimal("0.30"),
-        )
-        assert actual == Decimal("0.70") * Decimal("0.15") * Decimal("0.70")
-
-    def test_us_reit_at_30pct_cash(self) -> None:
-        """现金 30% 时美国 REITs 目标 = 30% × 15% × 70% = 3.15%。"""
-        actual = compute_subclass_actual_target(
-            DEFAULT_STRATEGY,
-            SwensenClass.US_REIT,
-            Decimal("0.30"),
-        )
-        assert actual == Decimal("0.30") * Decimal("0.15") * Decimal("0.70")
-
-    def test_cn_gov_bond_at_30pct_cash(self) -> None:
-        """现金 30% 时国内利率债目标 = 70% × 10% × 70% = 4.9%。"""
-        actual = compute_subclass_actual_target(
-            DEFAULT_STRATEGY,
-            SwensenClass.CN_GOV_BOND,
-            Decimal("0.30"),
-        )
-        assert actual == Decimal("0.70") * Decimal("0.10") * Decimal("0.70")
-
-    def test_us_bond_at_30pct_cash(self) -> None:
-        """现金 30% 时美债目标 = 30% × 10% × 70% = 2.1%。"""
-        actual = compute_subclass_actual_target(
-            DEFAULT_STRATEGY,
-            SwensenClass.US_BOND,
-            Decimal("0.30"),
-        )
-        assert actual == Decimal("0.30") * Decimal("0.10") * Decimal("0.70")
-
-    def test_commodity_at_30pct_cash(self) -> None:
-        """现金 30% 时商品目标 = 100% × 5% × 70% = 3.5%（只有一个商品子类）。"""
-        actual = compute_subclass_actual_target(
-            DEFAULT_STRATEGY,
-            SwensenClass.COMMODITY,
-            Decimal("0.30"),
-        )
-        assert actual == Decimal("1.00") * Decimal("0.05") * Decimal("0.70")
-
-    def test_equity_subclass_targets_sum_to_equity_super_target(self) -> None:
-        """股票超类下 5 子类目标之和 = 股票超类目标（Layer 3 权重和 = 1 的保证）。
-
-        投资类子目标和 = 超类目标 × Layer3权重和 = 超类目标（因为 Layer3 = 1.0）
-        """
-        current_cash = Decimal("0.30")
-        equity_subclasses = [
-            SwensenClass.CN_EQUITY,
-            SwensenClass.US_EQUITY,
-            SwensenClass.HK_EQUITY,
-            SwensenClass.FOREIGN_DM_EQUITY,
-            SwensenClass.EM_EQUITY,
-        ]
-        total = sum(
-            compute_subclass_actual_target(DEFAULT_STRATEGY, sub, current_cash)  # type: ignore[misc]
-            for sub in equity_subclasses
-        )
-        # 股票超类目标 = 70% × 70% = 49%
-        expected_equity_super = compute_actual_target(
-            DEFAULT_STRATEGY, SuperCategory.EQUITY, current_cash
-        )
-        assert total == expected_equity_super
-
-    def test_all_subclass_targets_sum_to_investment_part(self) -> None:
-        """所有子类（10 个，不含现金）目标之和 = 1 − 当前现金占比。
-
-        验证四层公式一致：sum(子类 × 超类 × (1-cash)) = sum(超类 × (1-cash)) = 1 - cash
-        """
-        current_cash = Decimal("0.30")
-        investment_total = Decimal("1") - current_cash
-        subclass_total = sum(
-            compute_subclass_actual_target(DEFAULT_STRATEGY, sub, current_cash)  # type: ignore[misc]
-            for sub in SwensenClass
-            if sub != SwensenClass.CASH
-        )
-        assert subclass_total == investment_total
-
-    def test_zero_cash_uses_full_subclass_and_super_weights(self) -> None:
-        """现金 0% 时（极端），子类目标 = 子类内部权重 × 超类内部权重。
-
-        例：A 股 = 40% × 70% = 28%（无现金缩放）
-        """
-        for sub in SwensenClass:
-            if sub == SwensenClass.CASH:
-                continue
-            actual = compute_subclass_actual_target(DEFAULT_STRATEGY, sub, Decimal("0"))
-            info = DEFAULT_STRATEGY.subclass_weight(sub)
-            assert info is not None
-            super_cat, sub_weight = info
-            super_weight = DEFAULT_STRATEGY.investment_weight(super_cat)
-            assert super_weight is not None
-            assert actual == sub_weight * super_weight
-
-    def test_cash_50pct_doubles_subclass_targets(self) -> None:
-        """现金 50% 时（子弹上限），子类目标 = 子类权重 × 超类权重 × 50%。"""
-        for sub in SwensenClass:
-            if sub == SwensenClass.CASH:
-                continue
-            actual = compute_subclass_actual_target(DEFAULT_STRATEGY, sub, Decimal("0.50"))
-            assert actual is not None
-            # 因为现金 50% 时 投资部分 = 50%
-            assert actual * 2 == actual / Decimal("0.5")  # 等价于乘以 1/0.5 = 2
+        actual = dict(DEFAULT_POSITION_ALLOCATION.positions)
+        assert actual == expected
+
+    def test_default_all_bounds_are_two(self) -> None:
+        """默认 bounds 都是 2（投资子类单边浮动 2 仓）。"""
+        for sub, bound in DEFAULT_POSITION_ALLOCATION.bounds.items():
+            assert bound == 2, f"{sub} bound = {bound}, 应 = 2"
+
+
+# ─── 向后兼容移除测试 ──────────────────────────────────────────────────────
+
+
+class TestBackwardCompatibilityRemoved:
+    """spec 097 第二十一轮：旧 Layer 1/2/3 API 应该全部不可导入。"""
+
+    def test_subclass_limit_not_importable(self) -> None:
+        """SubclassLimit 已删除。"""
+        with pytest.raises(ImportError):
+            from global_allocation.portfolio.strategy import SubclassLimit  # noqa: F401
+
+    def test_allocation_strategy_not_importable(self) -> None:
+        """AllocationStrategy 已删除。"""
+        with pytest.raises(ImportError):
+            from global_allocation.portfolio.strategy import AllocationStrategy  # noqa: F401
+
+    def test_default_strategy_not_importable(self) -> None:
+        """DEFAULT_STRATEGY 已删除（被 DEFAULT_POSITION_ALLOCATION 替代）。"""
+        with pytest.raises(ImportError):
+            from global_allocation.portfolio.strategy import DEFAULT_STRATEGY  # noqa: F401
+
+    def test_compute_actual_target_not_importable(self) -> None:
+        """compute_actual_target 已删除（不需要动态缩放了）。"""
+        with pytest.raises(ImportError):
+            from global_allocation.portfolio.strategy import compute_actual_target  # noqa: F401
+
+    def test_compute_subclass_actual_target_not_importable(self) -> None:
+        """compute_subclass_actual_target 已删除。"""
+        with pytest.raises(ImportError):
+            from global_allocation.portfolio.strategy import compute_subclass_actual_target  # noqa: F401
+
+    def test_super_category_not_importable(self) -> None:
+        """SuperCategory 已删除（整数仓位模型不需要超类聚合）。"""
+        with pytest.raises(ImportError):
+            from global_allocation.portfolio.strategy import SuperCategory  # noqa: F401
+
+    def test_super_category_display_name_not_importable(self) -> None:
+        """SUPER_CATEGORY_DISPLAY_NAME 已删除。"""
+        with pytest.raises(ImportError):
+            from global_allocation.portfolio.strategy import SUPER_CATEGORY_DISPLAY_NAME  # noqa: F401
+
+    def test_compute_super_category_breakdown_not_importable(self) -> None:
+        """compute_super_category_breakdown 已删除。"""
+        with pytest.raises(ImportError):
+            from global_allocation.portfolio.strategy import compute_super_category_breakdown  # noqa: F401
+
+    def test_cash_range_not_importable(self) -> None:
+        """CashRange 已删除（被 cash_range tuple 替代）。"""
+        with pytest.raises(ImportError):
+            from global_allocation.portfolio.strategy import CashRange  # noqa: F401
+
+    def test_investment_weight_not_importable(self) -> None:
+        """InvestmentWeight 已删除。"""
+        with pytest.raises(ImportError):
+            from global_allocation.portfolio.strategy import InvestmentWeight  # noqa: F401
+
+    def test_subclass_internal_weight_not_importable(self) -> None:
+        """SubclassInternalWeight 已删除。"""
+        with pytest.raises(ImportError):
+            from global_allocation.portfolio.strategy import SubclassInternalWeight  # noqa: F401
+
+    def test_investment_categories_not_importable(self) -> None:
+        """INVESTMENT_CATEGORIES 已删除。"""
+        with pytest.raises(ImportError):
+            from global_allocation.portfolio.strategy import INVESTMENT_CATEGORIES  # noqa: F401
+
+    def test_subclass_to_super_not_importable(self) -> None:
+        """SUBCLASS_TO_SUPER 已删除。"""
+        with pytest.raises(ImportError):
+            from global_allocation.portfolio.strategy import SUBCLASS_TO_SUPER  # noqa: F401

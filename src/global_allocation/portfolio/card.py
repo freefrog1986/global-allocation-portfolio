@@ -3,17 +3,14 @@
 参照 specs/090-portfolio-journal.md + specs/096-portfolio-card-redesign.md
 + specs/097-strategy-spike.md + specs/098-valuation-section.md。
 
-设计原则（spec 097 第十九轮 — 单 section 整合）：
-- 只回答用户三个问题：现在整体怎么样 / 大类资产怎么分布 / 每个大类具体占多少
-- 1 段元素：summary div + 大类资产柱状图 + 5 列聚合持仓表（含 target/delta）
-- 柱状图带顶部数值标签（label.visible + position="top"）— 第十九轮加
-- 表不再下钻到单只基金，只到"分类 / 市值 / 占比 / 目标 / 偏离"
-- 11 个子类全部展示（含 count=0 的——这样能看出框架里哪些没覆盖到）
-- 不再包含 pie / line chart / 单只基金明细 / 交易流水表
-- 不再包含独立的"大类资产策略"和"大类资产明细" section（合并到持仓表）
+设计原则（spec 097 第二十一轮 — 整数仓位模型）：
+- 整数仓位 = 每个子类持 N 仓（1 仓 = 1 万 CNY），不再用 Layer 1/2/3 权重小数
+- 持仓表（Section 1）的 target/delta 列改用整数份数："{N} 份 ({X.X}%)"
+- 不再有独立的"大类资产策略" Section 2（持仓表的 target/delta 已包含超类信息，
+  Section 2 冗余；第二十一轮 liubo 拍板删除）
+- Section 3 仍是大类资产估值（A 股 / 港股 / 美股 combined 模式）
 
-第二十轮：恢复 Section 2（大类资产策略），保留 Section 3 删除状态。
-第二十一轮（spec 098）：新增 Section 3 — 大类资产估值（A 股 4 个指标）。
+第二十一轮（spec 098）：Section 3 — 大类资产估值（A 股 + 港股 + 美股 combined）。
 """
 
 from __future__ import annotations
@@ -31,13 +28,8 @@ from global_allocation.portfolio.models import (
     ValuationIndicatorCode,
 )
 from global_allocation.portfolio.strategy import (
-    DEFAULT_STRATEGY,
-    SUPER_CATEGORY_DISPLAY_NAME,
-    AllocationStrategy,
-    SuperCategory,
-    compute_actual_target,
-    compute_subclass_actual_target,
-    compute_super_category_breakdown,
+    DEFAULT_POSITION_ALLOCATION,
+    PositionAllocation,
 )
 from global_allocation.portfolio.valuation_indicators import (
     DEFAULT_SCORE_BANDS,
@@ -94,92 +86,6 @@ def _build_summary(journal: PortfolioJournal, title: str) -> str:
     )
 
 
-def _build_strategy_section(
-    journal: PortfolioJournal,
-    strategy: AllocationStrategy = DEFAULT_STRATEGY,
-) -> list[dict[str, object]]:
-    """Section 2: 大类资产策略 — 5 行 × 4 列超类对比表（股票/REITs/债券/商品/现金）。
-
-    spec 097 第二十轮（liubo 2026-09-19）：第十九轮删了 Section 2/3 后用户反馈
-    "我还是要看一下超类的，因为我担心没控制好这个超类的比例了" — 重新加回来。
-
-    跟第十九轮之前对比：
-    - 之前 Section 2 + Section 3 都展示 target/current/delta
-    - 第十九轮合并 Section 2 + 3 到 Section 1（持仓表加 target/delta 列）
-    - 第二十轮恢复 Section 2（但 Section 3 仍然删除 — 子类粒度的 target/delta 已在持仓表）
-
-    跟持仓表的"区别"在哪（不重复在哪）：
-    - 持仓表（Section 1）：子类粒度，11 行（A股/港股/.../现金）
-      target = subclass × super × (1 - 现金%)
-    - Section 2：超类粒度，5 行（股票/REITs/债券/商品/现金）
-      target = super 内部权重 × (1 - 现金%)
-    - 两者的 target 不严格相等（持仓表按子类累加 vs Section 2 直接按超类公式）
-      但都在 1% 误差内，反映同一意图
-    - 用户担心的"超类比例失控"主要看 Section 2（一眼看出股票 49%、REITs 10.5%）
-
-    表格 5 行 × 4 列：
-    - 4 投资类（股票/REITs/债券/商品）：target = internal_weight × (1 − 当前现金占比)
-      delta = current − target（pp 后缀）
-    - 1 现金：target = "[15%, 50]%"，delta = "区间内/低于下限/高于上限"
-
-    为什么 target 是动态计算：
-    - 现金区间 [15%, 50%] 不固定 → 投资部分 = 100% − 现金%（变量）
-    - 投资部分按内部权重分配（股票 70% / REITs 15% / 债券 10% / 商品 5%）
-    - 现金越多，投资部分越少 → 各投资类实际目标越小
-    - 现金越少，投资部分越多 → 各投资类实际目标越大
-    """
-    breakdown = compute_breakdown(journal)
-    current_by_super = compute_super_category_breakdown(breakdown)
-    cash_range = strategy.cash_range
-    current_cash = current_by_super[SuperCategory.CASH]
-
-    rows: list[dict[str, object]] = []
-    # 按 SuperCategory 枚举顺序遍历（EQUITY → BOND → REIT → COMMODITY → CASH）
-    for cat in SuperCategory:
-        current_pct = float(current_by_super[cat]) * 100
-        current_str = f"{current_pct:.1f}%"
-
-        if cat == SuperCategory.CASH:
-            # 现金走区间策略：target 列显示区间，delta 列显示状态文本
-            target_str = cash_range.display_range
-            delta_str = cash_range.status(current_by_super[cat])
-        else:
-            # 投资类走内部权重：target = 内部权重 × (1 − 当前现金占比)
-            # 动态公式 — 现金变时目标自动缩放
-            actual_target = compute_actual_target(strategy, cat, current_cash)
-            assert actual_target is not None  # 4 投资类都有权重
-            target_pct = float(actual_target) * 100
-            target_str = f"{target_pct:.0f}%"
-            delta_pct = current_pct - target_pct
-            sign = "+" if delta_pct >= 0 else ""
-            delta_str = f"{sign}{delta_pct:.1f}pp"
-
-        rows.append(
-            {
-                "category": SUPER_CATEGORY_DISPLAY_NAME[cat],
-                "target": target_str,
-                "current": current_str,
-                "delta": delta_str,
-            }
-        )
-
-    table: dict[str, object] = {
-        "columns": [
-            {"name": "category", "display_name": "超类", "data_type": "text", "width": "auto"},
-            {"name": "target", "display_name": "目标", "data_type": "text", "width": "auto"},
-            {"name": "current", "display_name": "当前", "data_type": "text", "width": "auto"},
-            {"name": "delta", "display_name": "偏离", "data_type": "text", "width": "auto"},
-        ],
-        "rows": rows,
-    }
-
-    return [
-        {"tag": "note", "elements": [{"tag": "plain_text", "content": "大类资产策略"}]},
-        {"tag": "hr"},
-        {"tag": "table", **table},
-    ]
-
-
 def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
     """各大类资产占比柱状图（vertical bar，X 轴 = 类名，Y 轴 = 占比 %）。
 
@@ -231,35 +137,30 @@ def _build_breakdown_bar(journal: PortfolioJournal) -> dict[str, object]:
 
 def _build_holdings_table(
     journal: PortfolioJournal,
-    strategy: AllocationStrategy = DEFAULT_STRATEGY,
+    position: PositionAllocation = DEFAULT_POSITION_ALLOCATION,
 ) -> dict[str, object]:
     """11 子类聚合表：分类 / 市值 / 占比 / 目标 / 偏离。
 
-    spec 097 第十九轮（liubo 2026-09-19）：合并 Section 2 + Section 3 到这张表。
+    spec 097 第二十一轮（liubo 2026-09-24）：target/delta 列改用整数仓位模型。
 
-    历史（第十四~第十八轮）：卡片分 3 个 section
-    - Section 1（实盘持仓）：本表（3 列 — 分类/市值/占比）
-    - Section 2（大类资产策略）：超类对比表（5 行 × 4 列 — category/target/current/delta）
-    - Section 3（大类资产明细）：子类对比表（10 行 × 4 列 — subclass/target/current/delta）
-
-    liubo 第十九轮反馈：
-    > "第一部分持仓里边其实每一个大类的占比都有，干脆就把策略里边的目标和偏离
-    > 放在这张表里了，然后那上边后边就不用再重复"
-
-    解读：Section 1 表里已经有每个子类的占比，那把目标/偏离也放到同一张表，下面的
-    Section 2/3 就不用重复展示了。本函数把表从 3 列扩到 5 列（加 target + delta），
-    build_portfolio_card 同时删掉 Section 2/3 的引用。
+    历史：
+    - 第十四~第十八轮：3 个 section（持仓 + 策略 + 估值）
+    - 第十九轮：合并 Section 2 + 3 到持仓表（加 target/delta 列）
+    - 第二十轮：恢复 Section 2（用户要监控超类比例）
+    - 第二十一轮（当前）：删除 Section 2，改用整数仓位模型（target = 固定份数，不动态缩放）
+      - target 列：投资子类显示 "{N} 份 ({X.X}%)"，现金显示 "[{min}, {max}] 份"
+      - delta 列：投资子类显示 "{+/-N} 份"（份数差），现金显示状态文本
 
     5 列含义：
     - 分类（含 #. 前缀，例 "1. A 股股票"）：子类中文名
     - 市值(¥)：当前市值（CNY，千分位逗号）
     - 占比：当前权重（%，2 位小数）
-    - 目标：动态目标
-      - 投资子类（10 个）：subclass_internal_weight × super_investment_weight × (1 − 当前现金%)
-      - 现金（1 个）："[15%, 50%]"，区间字符串（不是百分比）
-    - 偏离：当前 − 目标（pp 后缀）
-      - 投资子类（10 个）："±X.Xpp"（正 = 超配，负 = 低配）
-      - 现金（1 个）："区间内" / "低于下限" / "高于上限"（状态文本，跟 Section 2 风格一致）
+    - 目标：固定整数份数 + 百分比（不再动态缩放）
+      - 投资子类（10 个）："{target_position} 份 ({target_weight:.1f}%)"
+      - 现金（1 个）："[{cash_min}, {cash_max}] 份"
+    - 偏离：份数差（不是 pp 后缀）
+      - 投资子类（10 个）："{+/-N} 份"（当前份 - 目标份，正 = 超配，负 = 低配）
+      - 现金（1 个）："区间内" / "低于下限" / "高于上限"
 
     spec 096：
     - 第二轮反馈：用户不要"细致到具体基金"，表只回答"我每个大类持了多少"
@@ -276,29 +177,31 @@ def _build_holdings_table(
     都是预格式化的字符串）。
     """
     breakdown = compute_breakdown(journal)  # 已经是 SwensenClass 枚举顺序
-    current_by_super = compute_super_category_breakdown(breakdown)
-    current_cash = current_by_super[SuperCategory.CASH]
-    cash_range = strategy.cash_range
 
     rows: list[dict[str, object]] = []
     for idx, b in enumerate(breakdown, start=1):
         sub = b["subclass"]
         weight_pct = float(b["weight"]) * 100
+        target_position = position.target_position(sub)
+        target_weight_pct = float(position.target_weight(sub)) * 100
 
         if sub == SwensenClass.CASH:
-            # 现金行：target 是区间字符串，delta 是状态文本（区间内/低于下限/高于上限）
-            target_str = cash_range.display_range
-            delta_str = cash_range.status(b["weight"])
+            # 现金行：target 是区间份数，delta 是状态文本
+            cash_min, cash_max = position.cash_range
+            target_str = f"[{cash_min}, {cash_max}] 份"
+            delta_str = position.cash_status(b["weight"])
         else:
-            # 投资子类：target = subclass × super × (1 − 现金%)（动态公式）
-            actual_target = compute_subclass_actual_target(strategy, sub, current_cash)
-            assert actual_target is not None  # 10 个非现金子类都有权重
-            target_pct = float(actual_target) * 100
-            target_str = f"{target_pct:.1f}%"
-            # delta = 当前 - 目标（pp 后缀，正 = 超配，负 = 低配）
-            delta_pct = weight_pct - target_pct
-            sign = "+" if delta_pct >= 0 else ""
-            delta_str = f"{sign}{delta_pct:.1f}pp"
+            # 投资子类：target = "{N} 份 ({X.X}%)"，delta = 当前份 - 目标份
+            target_str = f"{target_position} 份 ({target_weight_pct:.1f}%)"
+            # 当前份数 = round(current_value / unit_size)（用市值 / 1 仓近似）
+            current_value = b["value"]
+            current_position = (
+                round(float(current_value) / float(position.unit_size))
+                if current_value > 0 else 0
+            )
+            position_delta = current_position - target_position
+            sign = "+" if position_delta >= 0 else ""
+            delta_str = f"{sign}{position_delta} 份"
 
         rows.append(
             {
@@ -1173,6 +1076,9 @@ def _build_region_strategy_note(
     - 占比 > 目标 → "不再投入"（仓位纪律优先）
     - 占比 ≤ 目标 + 有估值 → 偏低估/正常/偏高估三档
     - 占比 ≤ 目标 + 无估值 → "占比 ≤ 目标（等估值）"
+
+    spec 097 第二十一轮（liubo 2026-09-24）：region_target 改用
+    DEFAULT_POSITION_ALLOCATION.target_weight(subclass)，不再走动态缩放公式。
     """
     breakdown = compute_breakdown(journal)
     region_row = next((b for b in breakdown if b["subclass"] == subclass), None)
@@ -1180,11 +1086,7 @@ def _build_region_strategy_note(
         return None, False
 
     region_weight = float(region_row["weight"]) * 100
-    current_by_super = compute_super_category_breakdown(breakdown)
-    current_cash = current_by_super[SuperCategory.CASH]
-    region_target = compute_subclass_actual_target(DEFAULT_STRATEGY, subclass, current_cash)
-    assert region_target is not None
-    region_target_pct = float(region_target) * 100
+    region_target_pct = float(DEFAULT_POSITION_ALLOCATION.target_weight(subclass)) * 100
     over_target = region_weight > region_target_pct
 
     if scores:
@@ -1324,44 +1226,34 @@ def build_portfolio_card(
 ) -> dict[str, object]:
     """构造实盘账本的飞书交互卡片。
 
-    卡片结构（spec 098 第二十一轮 — 3 个 section：持仓 + 超类策略 + 估值）：
+    卡片结构（spec 098 第二十一轮 — 2 个 section：持仓 + 估值）：
     - header.title: "实盘周报"
-    - Section 1（实盘持仓）：
+    - Section 1（实盘持仓 — spec 097 第二十一轮整数仓位模型）：
       - note header "实盘持仓"
       - summary div（生成时间 / 总市值 / 总成本 / 浮动盈亏 / 周涨跌 / 累计涨跌）
       - hr 分隔
       - 大类资产柱状图（vertical bar，11 个子类，柱子顶部带数值标签 — 第十九轮加）
       - hr 分隔
-      - 持仓聚合表（11 行 × 5 列：分类 / 市值 / 占比 / 目标 / 偏离 — 第十九轮扩列）
-    - Section 2（大类资产策略 — spec 097 第二十轮恢复）：
+      - 持仓聚合表（11 行 × 5 列：分类 / 市值 / 占比 / 目标 / 偏离）
+        - target 列：投资子类 "{N} 份 ({X.X}%)"；现金 "[{min}, {max}] 份"
+        - delta 列：投资子类 "{+/-N} 份"（份数差）；现金 "区间内/低于下限/高于上限"
+    - Section 2（估值与操作 — spec 098 combined 模式）：
       - hr 分隔（跨 section）
-      - note header "大类资产策略"
+      - note header "估值与操作"
       - hr 分隔
-      - 策略对比表（5 行 × 4 列：超类 / 目标 / 当前 / 偏离）
-        - 4 投资类：target = 内部权重 × (1 − 当前现金占比)（动态）
-        - 现金：target = "[15%, 50%]"，delta = "区间内/低于下限/高于上限"
-    - Section 3（A 股资产估值 — spec 098 第二十一轮新增，第二十二轮加综合分）：
-      - hr 分隔（跨 section）
-      - note header "A 股资产估值"
-      - hr 分隔
-      - 估值表（5 行 × 4 列：指标 / 当前 / 评估 / 阈值）
-        - 4 个 A 股指标：股债利差 / PE 分位 / 巴菲特指标 / 股息率
-        - 1 个综合分行：value = "[PE:4 股债:2 巴菲特:3 股息:3]"，
-          verdict = "3.0 正常"，threshold = "1=极低估 5=极高估"
-        - 数据缺失显示"数据缺失"（akshare 接口失败时）
-        - DB 完全空时整段不渲染（publish 时 CLI 已自动 update）
+      - combined 指标表（5 列：区域 / 指标 / 当前 / 评估 / 阈值）— 3 region × (4 指标 + 1 综合)
+      - 3 个 strategy_note div（每个 region 一个）
+      - combined per-fund 表（11 列 × N 行）
 
     第十九轮（liubo 2026-09-19）：合并 Section 2 + 3 到 Section 1 持仓表（加 target/delta）
     第二十轮（liubo 2026-09-19）：恢复 Section 2，保留 Section 3 删除状态
-    第二十一轮（spec 098）：新增 Section 3（A 股估值）— 跟持仓/Section 2 完全不同维度
-    第二十二轮（liubo 2026-09-19）：改标题 "大类资产估值" → "A 股资产估值"（明确只覆盖 A 股）；
-        加 1-5 分综合分行（4 票简单平均，不加权）
-    - Section 1/2 是用户持仓的"账面"信息（"我有什么 / 偏离目标多少"）
-    - Section 3 是"市场给当前大类的报价"（"现在加仓合不合适"）
-    - 用户场景：看完持仓 → 想知道"现在该不该加仓" → 看 Section 3 评估
+    第二十一轮（spec 097 + spec 098）：
+      - 删除 Section 2（大类资产策略）— 持仓表的 target/delta 列已包含超类信息
+      - Section 3 改名 "估值与操作" — combined 模式（A 股 + 港股 + 美股）
+      - 持仓表 target/delta 列改用整数仓位模型
 
-    元素总数（无估值）：2 note + 1 div + 3 hr + 1 chart + 2 table = 9 + footer。
-    元素总数（有估值）：3 note + 1 div + 4 hr + 1 chart + 3 table = 12 + footer。
+    元素总数（无估值）：1 note + 1 div + 3 hr + 1 chart + 1 table = 7 + footer。
+    元素总数（有估值）：2 note + 1 div + 4 hr + 1 chart + 3 table = 11 + footer。
     """
     actual_title = title or "实盘周报"
     holdings = journal.compute_holdings()
@@ -1385,9 +1277,6 @@ def build_portfolio_card(
         {"tag": "chart", "chart_spec": _build_breakdown_bar(journal)},
         {"tag": "hr"},
         {"tag": "table", **_build_holdings_table(journal)},
-        # Section 2: 大类资产策略（spec 097 第二十轮恢复）
-        {"tag": "hr"},
-        *_build_strategy_section(journal),
     ]
 
     # Section 3: 大类资产估值（spec 098 第二十一轮新增）

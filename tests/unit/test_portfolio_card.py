@@ -133,12 +133,15 @@ def _seed_valuation_today(journal: PortfolioJournal) -> None:
 
 class TestBuildPortfolioCard:
     def test_basic_structure(self, journal: PortfolioJournal) -> None:
-        """卡片 = header + 2 个 section（实盘持仓 + 大类资产策略 — 第二十轮恢复 Section 2）。
+        """卡片 = header + 1 个 section（实盘持仓 — 第二十一轮删除 Section 2 大类资产策略）。
 
         spec 097 演进：
         - 第十九轮：把 Section 2 + 3 合并到 Section 1 持仓表（加 target/delta 列）
         - 第二十轮：恢复 Section 2（liubo 反馈："我担心没控制好超类的比例了"）
-          Section 3 不恢复（子类粒度 target/delta 已在持仓表）
+        - 第二十一轮（当前）：删除 Section 2，改用整数仓位模型
+          - 持仓表的 target/delta 列已经包含超类信息
+          - Section 2 冗余，liubo 拍板删除
+          - 持仓表 target 列改用整数份数 "{N} 份 ({X.X}%)"
 
         现在的元素：
         - Section 1（实盘持仓）：
@@ -148,13 +151,10 @@ class TestBuildPortfolioCard:
           - chart（柱状图，带顶部数值标签）
           - hr
           - table（11 行 × 5 列：分类 / 市值 / 占比 / 目标 / 偏离）
-        - Section 2（大类资产策略）：
-          - hr（跨 section 分隔）
-          - note header "大类资产策略"
-          - hr
-          - table（5 行 × 4 列：超类 / 目标 / 当前 / 偏离）
+            - target：投资子类 "{N} 份 ({X.X}%)"；现金 "[{min}, {max}] 份"
+            - delta：投资子类 "{+/-N} 份"；现金 "区间内/低于下限/高于上限"
 
-        合计：2 note + 1 div + 4 hr + 1 chart + 2 table = 10 个元素 + footer
+        合计：1 note + 1 div + 2 hr + 1 chart + 1 table = 6 个元素 + footer
         """
         _seed(journal)
         card = build_portfolio_card(journal, title="我的实盘")
@@ -167,10 +167,10 @@ class TestBuildPortfolioCard:
         notes = [e for e in card["elements"] if e.get("tag") == "note"]
         hrs = [e for e in card["elements"] if e.get("tag") == "hr"]
         assert len(charts) == 1
-        assert len(tables) == 2
+        assert len(tables) == 1
         assert len(divs) == 1
-        assert len(notes) == 2
-        assert len(hrs) == 4
+        assert len(notes) == 1
+        assert len(hrs) == 2
 
     def test_summary_includes_total_and_return(self, journal: PortfolioJournal) -> None:
         _seed(journal)
@@ -301,13 +301,12 @@ class TestHoldingsTable:
 
     spec 097 第十九轮：从 3 列扩展到 5 列 — 把"目标"和"偏离"也放进同一张表，
     避免跟下面的 Section 2/3 重复（liubo 反馈）。
+    spec 097 第二十一轮：target/delta 列改用整数仓位模型
+    - 投资子类 target = "{N} 份 ({X.X}%)"，delta = "{+/-N} 份"（份数差，不再 pp）
+    - 现金 target = "[{min}, {max}] 份"，delta = "区间内/低于下限/高于上限" 状态文本
 
     5 列：分类（含 "#. " 前缀）/ 市值 / 占比 / 目标 / 偏离。按 SwensenClass 枚举顺序
     展示全部 11 个子类（含 count=0 的——空子类显示 0 元 / 0.00%）。
-
-    目标/偏离规则：
-    - 投资子类（10 个）：target = subclass × super × (1 − 现金%)，delta = 当前 − 目标（pp）
-    - 现金（1 个）：target = "[15%, 50]%" 区间字符串，delta = "区间内/低于下限/高于上限" 状态文本
 
     Feishu table column width 只接受 "auto"（其它值 short/medium/long/数字都拒），
     所以 # 信息嵌进分类名前缀（"1. A 股股票"），干掉单独 # 列。
@@ -316,17 +315,16 @@ class TestHoldingsTable:
     def _get_table(self, journal: PortfolioJournal) -> dict[str, object]:
         """Section 1 持仓表 — 5 列（class / value / weight / target / delta）。
 
-        第二十轮：卡片有 2 张表（持仓表 + Section 2 策略表），用列名区分。
+        第二十一轮：卡片只有 1 张表（持仓表，Section 2 已删除）。
         """
         _seed(journal)
         card = build_portfolio_card(journal)
         tables = [e for e in card["elements"] if e.get("tag") == "table"]
-        assert len(tables) == 2  # Section 1 持仓表 + Section 2 策略表
-        for t in tables:
-            col_names = [c["name"] for c in t["columns"]]
-            if col_names == ["class", "value", "weight", "target", "delta"]:
-                return t
-        raise AssertionError("Section 1 持仓表未找到（5 列 class/value/weight/target/delta）")
+        assert len(tables) == 1  # 只有 Section 1 持仓表（Section 2 已删除）
+        spec = tables[0]
+        col_names = [c["name"] for c in spec["columns"]]
+        assert col_names == ["class", "value", "weight", "target", "delta"]
+        return spec
 
     def test_columns_are_five(self, journal: PortfolioJournal) -> None:
         """5 列：分类 / 市值 / 占比 / 目标 / 偏离（不再有单独 # 列）。
@@ -407,10 +405,10 @@ class TestHoldingsTable:
             assert not class_part.isascii()
 
     def test_investment_subclass_target_uses_percent(self, journal: PortfolioJournal) -> None:
-        """投资子类（10 个）的 target 列以 % 结尾（动态公式计算的结果）。
+        """投资子类（10 个）的 target 列包含 "%" 字符（整数仓位 + 百分比格式）。
 
-        测试只检查格式（以 % 结尾），具体值由 test_investment_subclass_target_uses_dynamic_formula 验证。
-        现金行特殊（区间字符串），跳过。
+        spec 097 第二十一轮（liubo 2026-09-24）：target = "{N} 份 ({X.X}%)"
+        现金行特殊（区间字符串，无 %），跳过。
         """
         from global_allocation.portfolio.breakdown import DISPLAY_NAME, SwensenClass
 
@@ -418,66 +416,55 @@ class TestHoldingsTable:
         for row in spec["rows"]:
             class_name = row["class"].split(". ", 1)[1]
             if class_name == DISPLAY_NAME[SwensenClass.CASH]:
-                continue  # 现金行 target 是区间字符串，不以 % 结尾
-            assert row["target"].endswith("%")
+                continue  # 现金行 target 是区间字符串，无 %
+            assert "%" in row["target"]
+            assert "份" in row["target"]
 
-    def test_investment_subclass_target_uses_dynamic_formula(
+    def test_investment_subclass_target_uses_position_weight(
         self, journal: PortfolioJournal
     ) -> None:
-        """投资子类 target 列严格遵循公式 target = subclass × super × (1 − 当前现金%)。
+        """投资子类 target 列严格遵循格式 "{N} 份 ({X.X}%)"。
 
-        这条测试是第十七轮新增 — 验证动态公式（不是固定百分比）。
+        spec 097 第二十一轮：target = target_position × unit_size / total_capital，
+        即整数份数 + 该份数对应的目标权重百分比（不再动态缩放）。
         """
         from global_allocation.portfolio.breakdown import DISPLAY_NAME, SwensenClass
-        from global_allocation.portfolio.strategy import (
-            DEFAULT_STRATEGY,
-            compute_subclass_actual_target,
-            compute_super_category_breakdown,
-        )
+        from global_allocation.portfolio.strategy import DEFAULT_POSITION_ALLOCATION
 
         spec = self._get_table(journal)
-        breakdown = compute_super_category_breakdown(
-            _get_breakdown(journal)
-        )
-        current_cash = breakdown[__import__("global_allocation.portfolio.strategy", fromlist=["SuperCategory"]).SuperCategory.CASH]
-
         # 反向查表：display_name → SwensenClass
         name_to_sub = {v: k for k, v in DISPLAY_NAME.items()}
 
-        # 遍历 11 行（投资子类 + 现金），投资子类按 display_name 找 subclass → 算 expected target
         for row in spec["rows"]:
             display_name = row["class"].split(". ", 1)[1]
             sub = name_to_sub[display_name]
             if sub == SwensenClass.CASH:
-                continue  # 现金走区间策略，不走动态百分比公式
-            expected_target = compute_subclass_actual_target(
-                DEFAULT_STRATEGY, sub, current_cash
-            )
-            assert expected_target is not None
-            expected_str = f"{float(expected_target) * 100:.1f}%"
+                continue
+            target_pos = DEFAULT_POSITION_ALLOCATION.target_position(sub)
+            target_weight_pct = float(DEFAULT_POSITION_ALLOCATION.target_weight(sub)) * 100
+            expected_str = f"{target_pos} 份 ({target_weight_pct:.1f}%)"
             assert row["target"] == expected_str
 
-    def test_cash_target_is_range(self, journal: PortfolioJournal) -> None:
-        """现金行的 target 列是区间字符串（不是 %）。
+    def test_cash_target_is_position_range(self, journal: PortfolioJournal) -> None:
+        """现金行的 target 列是区间份数字符串（"[10, 30] 份"），不是 %。
 
-        第十六轮：从 [20%, 50%] 放宽到 [15%, 50%]。
+        spec 097 第二十一轮：现金目标 = cash_range = (10, 30)。
         """
         from global_allocation.portfolio.breakdown import DISPLAY_NAME, SwensenClass
 
         spec = self._get_table(journal)
-        # 现金是 SwensenClass 枚举最后一项（11th row）
         cash_row = next(
             row for row in spec["rows"]
             if row["class"].split(". ", 1)[1] == DISPLAY_NAME[SwensenClass.CASH]
         )
-        assert cash_row["target"] == "[15%, 50%]"
+        assert cash_row["target"] == "[10, 30] 份"
 
-    def test_investment_subclass_delta_uses_pp_unit(
+    def test_investment_subclass_delta_uses_position_unit(
         self, journal: PortfolioJournal
     ) -> None:
-        """投资子类（10 个）的偏离列用 pp (percentage points) 后缀。
+        """投资子类（10 个）的偏离列用 "份" 后缀（整数份数差）。
 
-        例：股票目标 X% / 当前 Y% → 偏离 "+/-Z.Zpp"
+        例：A 股目标 11 份 / 当前 12 份 → 偏离 "+1 份"
         现金行 delta 是状态文本，跳过。
         """
         from global_allocation.portfolio.breakdown import DISPLAY_NAME, SwensenClass
@@ -488,11 +475,12 @@ class TestHoldingsTable:
             if class_name == DISPLAY_NAME[SwensenClass.CASH]:
                 continue  # 现金行 delta 是状态文本
             delta = row["delta"]
-            assert delta.endswith("pp")
+            assert delta.endswith("份")
+            assert not delta.endswith("pp")
             assert not delta.endswith("%")
 
     def test_cash_delta_is_status_text(self, journal: PortfolioJournal) -> None:
-        """现金行的偏离列是状态文本（区间内/低于下限/高于上限），不是 pp。
+        """现金行的偏离列是状态文本（区间内/低于下限/高于上限），不是份数差。
 
         现金走状态文本（区间策略本质）。
         """
@@ -511,8 +499,9 @@ class TestHoldingsTable:
     def test_investment_subclass_delta_sign_matches_current_vs_target(
         self, journal: PortfolioJournal
     ) -> None:
-        """投资子类偏离符号 = 当前 − 目标（正 = 超配，负 = 低配）。
+        """投资子类偏离符号 = 当前份 − 目标份（正 = 超配，负 = 低配）。
 
+        spec 097 第二十一轮：delta 列改用整数份数差 "{+/-N} 份"。
         现金行的 delta 是状态文本，跳过符号检查。
         """
         from global_allocation.portfolio.breakdown import DISPLAY_NAME, SwensenClass
@@ -522,10 +511,22 @@ class TestHoldingsTable:
             class_name = row["class"].split(". ", 1)[1]
             if class_name == DISPLAY_NAME[SwensenClass.CASH]:
                 continue
-            target_pct = float(row["target"].rstrip("%"))
-            current_pct = float(row["weight"].rstrip("%"))
-            expected_sign = "+" if current_pct >= target_pct else "-"
-            assert row["delta"].startswith(expected_sign)
+            # 解析 "{+/-N} 份"
+            delta_str = row["delta"]
+            # 去掉 "份" 后缀和空白
+            delta_num = int(delta_str.replace("份", "").strip())
+            # 从 target 解析目标份数 "{N} 份 ({X.X}%)"
+            target_pos = int(row["target"].split("份")[0].strip())
+            # 从市值 / unit_size 算当前份数（用 Decimal 精度）
+            value_str = row["value"].replace(",", "")
+            current_value = Decimal(value_str)
+            current_pos = round(float(current_value) / 10000)
+            expected_delta = current_pos - target_pos
+            assert delta_num == expected_delta
+            if expected_delta > 0:
+                assert delta_str.startswith("+")
+            elif expected_delta < 0:
+                assert delta_str.startswith("-")
 
 
 def _get_breakdown(journal: PortfolioJournal):
@@ -592,8 +593,8 @@ class TestRemovedSections:
     def test_no_subclass_table(self, journal: PortfolioJournal) -> None:
         """第十九轮/第二十轮：不应该有 4 列子类对比表（subclass/target/current/delta）— 信息已在持仓表。
 
-        第二十轮允许 4 列策略对比表（category/target/current/delta）— 它是超类粒度，跟
-        持仓表（子类粒度）是不同聚合层级，用户需要看超类比例监控。
+        第二十一轮：连 4 列策略对比表（category/target/current/delta）也删了 — 整数仓位模型
+        下持仓表的 target/delta 已包含超类信息，Section 2 冗余。
         """
         _seed(journal)
         card = build_portfolio_card(journal)
@@ -601,178 +602,22 @@ class TestRemovedSections:
         for t in tables:
             col_names = {c["name"] for c in t["columns"]}
             assert "subclass" not in col_names
+            # 第二十一轮：4 列策略对比表也不该存在
+            assert not (
+                col_names == {"category", "target", "current", "delta"}
+            ), "Section 2 策略对比表已删除（第二十一轮），不应再存在"
 
+    def test_no_section_2_strategy_header(self, journal: PortfolioJournal) -> None:
+        """第二十一轮：旧的 Section 2 标题"大类资产策略"必须不存在（已删除）。
 
-class TestStrategySection:
-    """spec 097 第二十轮：恢复 Section 2 大类资产策略（liubo 反馈要监控超类比例）。
-
-    之前第十八轮设计的 Section 2（5 行 × 4 列策略对比表），第十九轮被合并到持仓表，
-    第二十轮恢复 — 用户担心超类（股票/REITs/债券/商品/现金）整体比例失控。
-
-    - 表格：5 行 × 4 列
-      - 4 投资类（股票/REITs/债券/商品）：target = internal_weight × (1 − 当前现金占比)
-      - 现金：target = "[15%, 50%]"，delta = "区间内/低于下限/高于上限"
-    - 跟持仓表的区别：
-      - 持仓表：11 行子类粒度，target = subclass × super × (1 - 现金%)
-      - Section 2：5 行超类粒度，target = super 内部权重 × (1 - 现金%)
-      - 两者不严格相等但反映同一策略意图（用户在不同粒度看）
-    """
-
-    def _get_strategy_table(self, journal: PortfolioJournal) -> dict[str, object]:
-        """Section 2 策略表 — 4 列（category / target / current / delta）。"""
+        整数仓位模型下持仓表的 target/delta 已包含超类信息，Section 2 冗余，liubo 拍板删除。
+        """
         _seed(journal)
         card = build_portfolio_card(journal)
-        tables = [e for e in card["elements"] if e.get("tag") == "table"]
-        for t in tables:
-            col_names = [c["name"] for c in t["columns"]]
-            if col_names == ["category", "target", "current", "delta"]:
-                return t
-        raise AssertionError("Section 2 策略表未找到（4 列 category/target/current/delta）")
-
-    def test_section_2_header_present(self, journal: PortfolioJournal) -> None:
-        """第二十轮：Section 2 标题"大类资产策略"必须存在（liubo 反馈要监控超类比例）。"""
-        _seed(journal)
-        card = build_portfolio_card(journal)
-        found = False
         for e in card["elements"]:
             if e.get("tag") == "note":
                 for elem in e.get("elements", []):
-                    if elem.get("content") == "大类资产策略":
-                        found = True
-        assert found, "Section 2 标题「大类资产策略」必须存在"
-
-    def test_strategy_table_has_5_rows(self, journal: PortfolioJournal) -> None:
-        """策略表 5 行（4 投资类 + 1 现金）。"""
-        spec = self._get_strategy_table(journal)
-        assert len(spec["rows"]) == 5
-
-    def test_strategy_table_columns_are_four(self, journal: PortfolioJournal) -> None:
-        """策略表 4 列：超类 / 目标 / 当前 / 偏离。"""
-        spec = self._get_strategy_table(journal)
-        col_names = [c["name"] for c in spec["columns"]]
-        assert col_names == ["category", "target", "current", "delta"]
-
-    def test_strategy_table_all_columns_text_and_auto(self, journal: PortfolioJournal) -> None:
-        """策略表所有列 text + width=auto（跟持仓表一致）。"""
-        spec = self._get_strategy_table(journal)
-        for col in spec["columns"]:
-            assert col["data_type"] == "text"
-            assert col["width"] == "auto"
-
-    def test_strategy_table_rows_are_dict(self, journal: PortfolioJournal) -> None:
-        """Feishu API 强制 row 是 dict。"""
-        spec = self._get_strategy_table(journal)
-        for row in spec["rows"]:
-            assert isinstance(row, dict)
-            assert set(row.keys()) == {"category", "target", "current", "delta"}
-
-    def test_strategy_table_rows_in_default_order(self, journal: PortfolioJournal) -> None:
-        """策略表按 SuperCategory 枚举顺序排：股票→债券→REITs→商品→现金。"""
-        from global_allocation.portfolio.strategy import (
-            SUPER_CATEGORY_DISPLAY_NAME,
-            SuperCategory,
-        )
-
-        spec = self._get_strategy_table(journal)
-        actual_order = [row["category"] for row in spec["rows"]]
-        expected_order = [SUPER_CATEGORY_DISPLAY_NAME[c] for c in SuperCategory]
-        assert actual_order == expected_order
-
-    def test_strategy_table_investment_target_uses_percent(self, journal: PortfolioJournal) -> None:
-        """投资类 4 行的 target 列以 % 结尾（动态公式计算的结果）。
-
-        第十六轮变更：target 不再是固定百分比，而是内部权重 × (1 − 当前现金%)。
-        测试只检查格式（以 % 结尾），具体值由 test_investment_target_uses_dynamic_formula 验证。
-        """
-        spec = self._get_strategy_table(journal)
-        for row in spec["rows"][:4]:
-            assert row["target"].endswith("%")
-            assert "%" in row["target"]
-
-    def test_strategy_table_investment_target_uses_dynamic_formula(
-        self, journal: PortfolioJournal
-    ) -> None:
-        """投资类 target 列严格遵循公式 target = 内部权重 × (1 − 当前现金占比)。
-
-        这条测试是第十六轮新增 — 验证动态公式（不是固定百分比）。
-        """
-        from global_allocation.portfolio.strategy import (
-            DEFAULT_STRATEGY,
-            SUPER_CATEGORY_DISPLAY_NAME,
-            SuperCategory,
-            compute_actual_target,
-        )
-
-        spec = self._get_strategy_table(journal)
-        # 现金行（rows[4]）的当前列 → 当前现金占比
-        current_cash_str = spec["rows"][4]["current"]
-        current_cash_pct = float(current_cash_str.rstrip("%"))
-        current_cash = Decimal(str(current_cash_pct / 100))  # type: ignore[arg-type]
-
-        # 反向查表：display_name → SuperCategory
-        name_to_cat = {v: k for k, v in SUPER_CATEGORY_DISPLAY_NAME.items()}
-
-        # 遍历前 4 行（投资类），每行按 display_name 找 category → 算 expected target
-        for row in spec["rows"][:4]:
-            cat_name = row["category"]
-            cat = name_to_cat[cat_name]
-            assert cat != SuperCategory.CASH  # 前 4 行都是投资类
-            expected_target = compute_actual_target(DEFAULT_STRATEGY, cat, current_cash)
-            assert expected_target is not None
-            expected_str = f"{float(expected_target) * 100:.0f}%"
-            assert row["target"] == expected_str
-
-    def test_strategy_table_cash_target_is_range(self, journal: PortfolioJournal) -> None:
-        """现金行的 target 列是区间字符串（不是 %）。
-
-        第十六轮：从 [20%, 50%] 放宽到 [15%, 50%]。
-        """
-        spec = self._get_strategy_table(journal)
-        cash_row = spec["rows"][4]  # 第 5 行是现金
-        assert cash_row["target"] == "[15%, 50%]"
-
-    def test_strategy_table_current_column_uses_percent(self, journal: PortfolioJournal) -> None:
-        """当前列全部 5 行以 % 结尾（1 位小数）。"""
-        spec = self._get_strategy_table(journal)
-        for row in spec["rows"]:
-            assert row["current"].endswith("%")
-
-    def test_strategy_table_investment_delta_uses_pp_unit(self, journal: PortfolioJournal) -> None:
-        """投资类 4 行的偏离列用 pp (percentage points) 后缀。
-
-        例：股票目标 X% / 当前 Y% → 偏离 "+/-Z.Zpp"
-        """
-        spec = self._get_strategy_table(journal)
-        for row in spec["rows"][:4]:  # 前 4 行是投资类
-            delta = row["delta"]
-            assert delta.endswith("pp")
-            assert not delta.endswith("%")
-
-    def test_strategy_table_cash_delta_is_status_text(self, journal: PortfolioJournal) -> None:
-        """现金行的偏离列是状态文本（区间内/低于下限/高于上限），不是 pp。
-
-        第十六轮不变：现金走状态文本（区间策略本质）。
-        """
-        spec = self._get_strategy_table(journal)
-        cash_row = spec["rows"][4]  # 第 5 行是现金
-        delta = cash_row["delta"]
-        assert delta in {"区间内", "低于下限", "高于上限"}
-        assert not delta.endswith("pp")
-        assert not delta.endswith("%")
-
-    def test_strategy_table_investment_delta_sign_matches_current_vs_target(
-        self, journal: PortfolioJournal
-    ) -> None:
-        """投资类 4 行的偏离符号 = 当前 - 目标（正 = 超配，负 = 低配）。
-
-        现金行的 delta 是状态文本，跳过符号检查。
-        """
-        spec = self._get_strategy_table(journal)
-        for row in spec["rows"][:4]:  # 前 4 行是投资类
-            target_pct = float(row["target"].rstrip("%"))
-            current_pct = float(row["current"].rstrip("%"))
-            expected_sign = "+" if current_pct >= target_pct else "-"
-            assert row["delta"].startswith(expected_sign)
+                    assert elem.get("content") != "大类资产策略"
 
 
 class TestValuationSection:
@@ -1123,7 +968,8 @@ class TestValuationSection:
     def test_total_table_count_within_feishu_limit(self, journal: PortfolioJournal) -> None:
         """全数据场景下整张卡片 ≤5 table（飞书 ErrCode 11310 限制 — spec 098.4）。
 
-        4 张表 = 持仓聚合 + 策略对比 + combined 指标 + combined per-fund。
+        3 张表 = 持仓聚合 + combined 指标 + combined per-fund。
+        第二十一轮（当前）：删除 Section 2 策略对比表 → 3 张表（飞书 ≤5 限制内）。
         第十八轮：移除 017730/016664/006373（已砍） + 移除 HK seed（无 HK 基金）。
         """
         _seed_a_share_funds(journal)
@@ -1149,40 +995,37 @@ class TestValuationSection:
 
         card = build_portfolio_card(journal)
         tables = [e for e in card["elements"] if e.get("tag") == "table"]
-        assert len(tables) == 4, f"期望 4 张表，实际 {len(tables)}（飞书 ≤5 上限）"
+        assert len(tables) == 3, f"期望 3 张表，实际 {len(tables)}（飞书 ≤5 上限）"
 
     def test_hr_count_with_combined_section(self, journal: PortfolioJournal) -> None:
-        """combined section 渲染后整张卡片的 hr 数 = 7（baseline 4 + combined section 加 3）。
+        """combined section 渲染后整张卡片的 hr 数 = 5（baseline 2 + combined section 加 3）。
 
-        无估值时 4 hr（Section 1 内 2 + Section 2 跨 + Section 2 内 1）。
+        无估值时 2 hr（Section 1 柱状图前后）。
         渲染 combined section 后多 3 hr：
-        - 跨 Section 3 分隔（1，build_portfolio_card 加）
+        - 跨 Section 2 分隔（1，build_portfolio_card 加）
         - combined section note 后（1，_build_valuation_section 加）
         - combined per-fund 表前（1，_build_valuation_section 加）
         """
         _seed(journal)
-        # 无估值：4 hr
+        # 无估值：2 hr
         card_no_val = build_portfolio_card(journal)
         hrs_no_val = sum(1 for e in card_no_val["elements"] if e.get("tag") == "hr")
-        assert hrs_no_val == 4
+        assert hrs_no_val == 2
 
-        # 有估值：4 + 3 = 7 hr
+        # 有估值：2 + 3 = 5 hr
         _seed_valuation_today(journal)
         _seed_a_share_funds(journal)
         _seed_fund_valuations(journal)
         card_with_val = build_portfolio_card(journal)
         hrs_with_val = sum(1 for e in card_with_val["elements"] if e.get("tag") == "hr")
-        assert hrs_with_val == 7
+        assert hrs_with_val == 5
 
 
 class TestOrdering:
-    """元素顺序（spec 097 第二十轮 — 2 个 section：持仓 + 超类策略）。
+    """元素顺序（spec 097 第二十一轮 — 1 个 section：持仓；无 Section 2 策略对比表）。
 
     Section 1（实盘持仓）：note + div + chart + table
-    Section 2（大类资产策略）：note + table
-    跨 section 分隔：hr
-
-    元素序列（去掉 hr 后）：note + div + chart + table + note + table
+    元素序列（去掉 hr 后）：note + div + chart + table
     """
 
     def test_order(self, journal: PortfolioJournal) -> None:
@@ -1197,21 +1040,19 @@ class TestOrdering:
             "note",  # Section 1 header "实盘持仓"
             "div",   # Section 1 summary
             "chart", # Section 1 柱状图
-            "table", # Section 1 持仓表（5 列：含 target/delta）
-            "note",  # Section 2 header "大类资产策略"（第二十轮恢复）
-            "table", # Section 2 策略对比表（5 行 × 4 列）
+            "table", # Section 1 持仓表（5 列：含 target/delta，整数仓位模型）
         ]
 
     def test_hr_count_and_position(self, journal: PortfolioJournal) -> None:
-        """第二十轮：4 个 hr（Section 1 柱状图前后 + 跨 section 分隔 + Section 2 表格前）。
+        """第二十一轮：2 个 hr（Section 1 柱状图前后），无 Section 2 跨 section 分隔。
 
-        之前第十九轮 2 个 hr（删了 Section 2/3 后只剩 2 个 intra-section hr）
-        第二十轮恢复 Section 2 后多了一个跨 section 的 hr + Section 2 表格前 hr
+        之前第二十轮 4 个 hr（Section 1 柱状图前后 + 跨 Section 2 分隔 + Section 2 表格前）
+        第二十一轮删除 Section 2 后只剩 2 个 intra-section hr。
         """
         _seed(journal)
         card = build_portfolio_card(journal)
         hrs = [e for e in card["elements"] if e.get("tag") == "hr"]
-        assert len(hrs) == 4
+        assert len(hrs) == 2
 
     def test_first_element_is_section_header_note(self, journal: PortfolioJournal) -> None:
         """第一个元素是 note 标签（section header），内容是"实盘持仓"。
@@ -1229,26 +1070,17 @@ class TestOrdering:
             for elem in first["elements"]
         )
 
-    def test_section_2_note_header_after_hr(self, journal: PortfolioJournal) -> None:
-        """Section 2 开头：hr 分隔 + note "大类资产策略"。
+    def test_no_strategy_section_2_note(self, journal: PortfolioJournal) -> None:
+        """第二十一轮：删除 Section 2 大类资产策略 — note "大类资产策略" 不应存在。
 
-        第二十轮恢复：跟 Section 1 用 hr 隔开，视觉上明确区分。
+        Section 2 冗余（持仓表 target/delta 已包含超类信息），liubo 拍板删除。
         """
         _seed(journal)
         card = build_portfolio_card(journal)
-        elements = card["elements"]
-        # 找到 "大类资产策略" note 的索引
-        section_2_idx = None
-        for idx, e in enumerate(elements):
-            if e.get("tag") == "note" and any(
-                elem.get("content") == "大类资产策略"
-                for elem in e.get("elements", [])
-            ):
-                section_2_idx = idx
-                break
-        assert section_2_idx is not None
-        # 它前面必须是 hr（跨 section 分隔）
-        assert elements[section_2_idx - 1].get("tag") == "hr"
+        for e in card["elements"]:
+            if e.get("tag") == "note":
+                for elem in e.get("elements", []):
+                    assert elem.get("content") != "大类资产策略"
 
 
 # ─── A 股策略建议行（spec 098 第二十五轮 — liubo 2026-09-19 反馈）───

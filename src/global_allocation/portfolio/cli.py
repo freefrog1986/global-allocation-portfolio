@@ -1616,6 +1616,65 @@ def cmd_valuation_import_us_csv(
     console.print("下一步：跑 `gap valuation show` 看效果，或 `gap portfolio publish` 发飞书。")
 
 
+# ─── pe-rebalance subcommand (spec 022 — liubo 2026-09-24) ───
+
+
+@app.command("pe-rebalance")
+def cmd_pe_rebalance(
+    send: bool = typer.Option(False, "--send", help="发飞书卡片到话题 thread（每周五 cron 用）"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="只生成卡片 JSON，不真发"),
+    chat: str | None = typer.Option(None, "--chat", help="覆盖默认 chat_id"),
+    root: str | None = typer.Option(
+        None, "--root", help="话题根消息 id（发到话题 thread 而不是父群）"
+    ),
+) -> None:
+    """生成 PE-TTM 周调仓报告 (spec 022, liubo 2026-09-24)。
+
+    默认打到 stdout；--send 通过飞书 OpenAPI 发卡片到话题 thread（每周五 cron 用）。
+    --dry-run 只打印卡片 JSON 不真发。
+
+    数据源：hardcoded PE_SNAPSHOT_BY_INDEX + COST_BASIS_BY_CODE（spec 097 第十九轮）。
+    后续接 akshare fetcher 自动拉 PE 后会自动更新 snapshot。
+    """
+    from global_allocation.portfolio.pe_rebalance import (
+        weekly_rebalance_plan,
+    )
+    from global_allocation.portfolio.publisher import publish_pe_rebalance_report
+
+    actions = weekly_rebalance_plan()
+
+    if dry_run:
+        # 只生成卡片 JSON，不真发
+        result = publish_pe_rebalance_report(
+            actions=actions,
+            chat_id=chat,
+            root_id=root,
+            dry_run=True,
+        )
+        console.print("[cyan]dry-run[/cyan] 卡片 JSON（前 200 字符）：")
+        console.print(result[:200] + ("..." if len(result) > 200 else ""))
+        return
+
+    if send:
+        try:
+            result = publish_pe_rebalance_report(
+                actions=actions,
+                chat_id=chat,
+                root_id=root,
+                dry_run=False,
+            )
+        except Exception as e:
+            console.print(f"[red]✗[/red] 发送失败：{e}")
+            raise typer.Exit(code=1) from e
+
+        console.print(f"[green]✓[/green] 已发送：message_id = {result}")
+    else:
+        # 纯文本模式（兼容老 botmux 风格 — 测试 / 预览用）
+        from global_allocation.portfolio.pe_rebalance import format_weekly_report
+
+        console.print(format_weekly_report(actions))
+
+
 # ─── tx subcommand ───
 
 

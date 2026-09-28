@@ -1,16 +1,21 @@
-"""实盘账本飞书发送。
+"""实盘账本 + PE-TTM 周调仓 飞书发送。
 
-参照 specs/090-portfolio-journal.md。
+参照 specs/090-portfolio-journal.md + specs/022-pe-rebalance.md。
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Any
 
 from global_allocation.feishu.credentials import FeishuCredentials, load_credentials
 from global_allocation.portfolio.card import build_portfolio_card, card_to_json
 from global_allocation.portfolio.journal import PortfolioJournal
+from global_allocation.portfolio.pe_rebalance import RebalanceAction, weekly_rebalance_plan
+from global_allocation.portfolio.pe_rebalance_card import (
+    build_pe_rebalance_card,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -139,4 +144,60 @@ def _get_tenant_access_token(app_id: str, app_secret: str) -> str:
         return json.loads(r.read())["tenant_access_token"]
 
 
-__all__ = ["publish_portfolio_report"]
+__all__ = ["publish_portfolio_report", "publish_pe_rebalance_report"]
+
+
+# ─── PE-TTM 周调仓 飞书发送（spec 022 — liubo 2026-09-24 拍板）───
+
+
+def publish_pe_rebalance_report(
+    actions: list[RebalanceAction] | None = None,
+    credentials: FeishuCredentials | None = None,
+    chat_id: str | None = None,
+    root_id: str | None = None,
+    report_date: date | None = None,
+    dry_run: bool = False,
+) -> str:
+    """发送 PE-TTM 周调仓卡片到飞书。
+
+    Args:
+        actions: 调仓 action 列表；None = 调用 weekly_rebalance_plan()。
+        credentials: 凭证（默认从 env/文件读）。
+        chat_id: 覆盖凭证里的 chat_id。
+        root_id: 话题根消息 id（传入则发到话题 thread）。
+        report_date: 报告日期（标题用）；None = 今天。
+        dry_run: True → 返回卡片 JSON 字符串，不真发。
+
+    Returns:
+        dry_run=True → 卡片 JSON 字符串
+        dry_run=False → message_id
+    """
+    if credentials is None:
+        credentials = load_credentials()
+
+    actual_chat_id = chat_id or credentials.chat_id
+
+    card = build_pe_rebalance_card(actions=actions, report_date=report_date)
+    card_json = card_to_json(card)
+
+    if dry_run:
+        return card_json
+
+    # 真实发送（重试 3 次）
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            return _send_card(
+                app_id=credentials.app_id,
+                app_secret=credentials.app_secret,
+                chat_id=actual_chat_id,
+                card_json=card_json,
+                root_id=root_id,
+            )
+        except Exception as e:
+            last_error = e
+            logger.warning("PE 周报发送失败（第 %d 次）：%s", attempt + 1, e)
+            if attempt < 2:
+                import time
+                time.sleep(2**attempt)  # 1s, 2s
+    raise RuntimeError(f"PE 周报飞书发送失败（重试 3 次）：{last_error}")

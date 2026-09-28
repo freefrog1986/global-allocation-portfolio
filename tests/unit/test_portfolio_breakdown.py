@@ -68,33 +68,46 @@ class TestSubclassByCode:
             assert isinstance(sub, SwensenClass), f"{code} → {sub}"
 
     def test_known_funds_mapped_correctly(self) -> None:
-        # A 股宽基 5
+        # A 股宽基 6（第十九轮加 022448 国泰A500 联接）
         assert get_subclass("013310") == SwensenClass.CN_EQUITY  # 科创创业50
         assert get_subclass("022434") == SwensenClass.CN_EQUITY  # A500
         assert get_subclass("022424") == SwensenClass.CN_EQUITY  # A500
         assert get_subclass("017644") == SwensenClass.CN_EQUITY  # 1000 增强
         assert get_subclass("014532") == SwensenClass.CN_EQUITY  # A50
-        # 美股宽基 6
+        assert get_subclass("022448") == SwensenClass.CN_EQUITY  # A500 联接（第十九轮从红利策略移过来）
+        # 美股宽基 6（第十九轮补回 016452）
         assert get_subclass("519981") == SwensenClass.US_EQUITY  # 标普100
         assert get_subclass("017641") == SwensenClass.US_EQUITY  # 标普500
         assert get_subclass("018966") == SwensenClass.US_EQUITY  # 纳100
         assert get_subclass("539001") == SwensenClass.US_EQUITY  # 纳100
-        assert get_subclass("016452") == SwensenClass.US_EQUITY  # 纳100
+        assert get_subclass("016452") == SwensenClass.US_EQUITY  # 纳100（第十九轮补回）
         assert get_subclass("019524") == SwensenClass.US_EQUITY  # 纳100
-        # 国外发达 + 新兴（liubo 确认这俩都算宽基，保留）
-        assert get_subclass("457001") == SwensenClass.FOREIGN_DM_EQUITY  # MSCI AC Asia ex Japan
+        # 国外发达（liubo 2026-09-22 把 457001 移到 ETF 轮动组合，子类暂留空）+ 新兴
         assert get_subclass("378006") == SwensenClass.EM_EQUITY  # MSCI Emerging Markets
+        # 457001 移走：现在不属于大类资产配置组合
+        assert get_subclass("457001") is None
         # REITs / 债 / 商品 / 现金
         assert get_subclass("028277") == SwensenClass.CN_REIT
         assert get_subclass("160140") == SwensenClass.US_REIT
         assert get_subclass("100050") == SwensenClass.US_BOND
         # 原国内信用债基金 → CN_GOV_BOND（第十七轮：斯文森说信用债没阿尔法，并入利率债）
-        assert get_subclass("008505") == SwensenClass.CN_GOV_BOND
-        assert get_subclass("004827") == SwensenClass.CN_GOV_BOND
+        assert get_subclass("008505") == SwensenClass.CN_GOV_BOND  # 第十九轮解锁
+        assert get_subclass("004827") == SwensenClass.CN_GOV_BOND  # 第十九轮解锁
         assert get_subclass("003547") == SwensenClass.CN_GOV_BOND
         assert get_subclass("000931") == SwensenClass.CN_GOV_BOND
         assert get_subclass("000216") == SwensenClass.COMMODITY  # 商品
         assert get_subclass("004137") == SwensenClass.CASH  # 现金
+
+    def test_nineteen_new_funds_added(self) -> None:
+        """第十九轮（liubo 2026-09-22）加 9 只基金到大类资产配置：
+        - 022448 国泰中证A500ETF发起联接A（CN_EQUITY，从红利策略移过来）
+        - 007997 易方达年年恒秋一年定开债A（CN_GOV_BOND，从红利策略移过来）
+        - 7 只新增中债（CN_GOV_BOND）：004534/110017/009625/005690/400030/010942/008420
+        """
+        assert get_subclass("022448") == SwensenClass.CN_EQUITY  # 从红利策略移过来
+        for code in ("007997", "004534", "110017", "009625", "005690",
+                     "400030", "010942", "008420"):
+            assert get_subclass(code) == SwensenClass.CN_GOV_BOND, f"{code} 第十九轮新增"
 
     def test_eleven_non_broad_funds_removed(self) -> None:
         """第十八轮砍 11 只非宽基股权：港股 5 + 美股 3 QDII 主题 + A 股 3 红利低波。
@@ -153,31 +166,35 @@ class TestComputeBreakdown:
     def test_groups_by_subclass(
         self, tmp_path: Path
     ) -> None:
-        # 第十八轮：港股全砍，改用 国外发达 457001 当第二子类代表
+        # 第十九轮（liubo 2026-09-22）：457001 移到 ETF 轮动组合，
+        # 国外发达市场股票子类暂时为 0；改用新兴市场 378006 当海外子类代表
         journal = self._make_journal(
             tmp_path,
             [
                 ("013310", "A 股 1", AssetClass.EQUITY, Decimal("1000"), Decimal("2")),
-                ("457001", "国外发达 1", AssetClass.EQUITY, Decimal("500"), Decimal("3")),
-                ("457001", "国外发达 2", AssetClass.EQUITY, Decimal("500"), Decimal("3")),
+                ("378006", "新兴市场 1", AssetClass.EQUITY, Decimal("500"), Decimal("3")),
+                ("378006", "新兴市场 2", AssetClass.EQUITY, Decimal("500"), Decimal("3")),
             ],
         )
         rows = {r["subclass"]: r for r in compute_breakdown(journal)}
-        # 1 只 A 股 + 2 笔国外发达（同一只基金）= 国外发达 1 只基金、市值 3000
+        # 1 只 A 股 + 2 笔新兴市场（同一只基金）= 新兴市场 1 只基金、市值 3000
         assert rows[SwensenClass.CN_EQUITY]["count"] == 1
         assert rows[SwensenClass.CN_EQUITY]["value"] == Decimal("2000")
-        assert rows[SwensenClass.FOREIGN_DM_EQUITY]["count"] == 1
-        assert rows[SwensenClass.FOREIGN_DM_EQUITY]["value"] == Decimal("3000")
+        assert rows[SwensenClass.EM_EQUITY]["count"] == 1
+        assert rows[SwensenClass.EM_EQUITY]["value"] == Decimal("3000")
+        # 国外发达市场股票子类（liubo 2026-09-22 移走 457001 后）：当前为 0
+        assert rows[SwensenClass.FOREIGN_DM_EQUITY]["count"] == 0
+        assert rows[SwensenClass.FOREIGN_DM_EQUITY]["value"] == Decimal("0")
 
     def test_weight_sums_to_one_when_total_positive(
         self, tmp_path: Path
     ) -> None:
-        # 港股砍了，改用 国外发达
+        # 港股砍了、457001 移到 ETF 轮动组合，改用 378006（新兴市场）当海外代表
         journal = self._make_journal(
             tmp_path,
             [
                 ("013310", "A 股", AssetClass.EQUITY, Decimal("1000"), Decimal("2")),
-                ("457001", "国外发达", AssetClass.EQUITY, Decimal("500"), Decimal("3")),
+                ("378006", "新兴市场", AssetClass.EQUITY, Decimal("500"), Decimal("3")),
             ],
         )
         rows = compute_breakdown(journal)
