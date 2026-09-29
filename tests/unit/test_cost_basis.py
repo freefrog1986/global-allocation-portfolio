@@ -5,6 +5,7 @@
 2026-09-22 又把 457001 国富亚洲机会移到 ETF 轮动组合（36 → 35）。
 2026-09-22 第十九轮：加 022448 + 007997 + 7 只新债 + 解锁 008505/004827 → 46 只 + 1 cash。
 2026-09-24 第二次调仓：008505 转 4999.39 → 028277（国内 REITs 凑 1 仓）。
+2026-09-29 第二十轮：加 019172 摩根纳斯达克100指数(QDII)人民币A → 47 只（成本 0；DCA 进行中）。
 """
 
 from __future__ import annotations
@@ -21,13 +22,18 @@ from global_allocation.portfolio.cost_basis import (
 
 
 class TestCostBasisByCode:
-    def test_has_forty_six_funds(self) -> None:
-        """46 只大类资产配置基金有成本数字（第十九轮 liubo 2026-09-22 扩展后）。"""
-        assert len(COST_BASIS_BY_CODE) == 46
+    def test_has_forty_seven_funds(self) -> None:
+        """47 只大类资产配置基金有成本数字（第二十轮 liubo 2026-09-29 加 019172 后）。
+
+        019172 摩根纳指100 QDII 人民币A：直接 QDII（非联接），DCA ¥10/天，
+        初始成本 0（元代买）；合并到 NDX 仓位（4 联接 + 019172）。
+        """
+        assert len(COST_BASIS_BY_CODE) == 47
 
     def test_total_matches_sum(self) -> None:
         """总和等于 liubo 算出的 579163.47（46 只；2026-09-24 第二次调仓后 +0.61）。
         2026-09-22 第十九轮时为 579162.86；2026-09-24 因 028277 bump 到 10000 多了 0.61。
+        第二十轮 019172 成本 0，总和不变。
         """
         total = sum(COST_BASIS_BY_CODE.values())
         assert total == TOTAL_COST_CNY
@@ -44,13 +50,14 @@ class TestCostBasisByCode:
         assert COST_BASIS_BY_CODE["022448"] == Decimal("11000")  # 国泰中证A500ETF发起联接A
 
     def test_specific_us_amounts(self) -> None:
-        """6 只美股宽基（标普500/标普100 + 4 只纳100）。"""
+        """7 只美股宽基（标普500/标普100 + 5 只纳100，第二十轮加 019172）。"""
         assert COST_BASIS_BY_CODE["519981"] == Decimal("3620")   # 长信标普100
         assert COST_BASIS_BY_CODE["018966"] == Decimal("2020")   # 汇添富纳100
         assert COST_BASIS_BY_CODE["539001"] == Decimal("1000")   # 建信纳100
         assert COST_BASIS_BY_CODE["017641"] == Decimal("50")     # 摩根标普500
         assert COST_BASIS_BY_CODE["016452"] == Decimal("20")     # 南方纳100（第十九轮补回）
         assert COST_BASIS_BY_CODE["019524"] == Decimal("20")     # 华泰柏瑞纳100
+        assert COST_BASIS_BY_CODE["019172"] == Decimal("0")      # 摩根纳指100 QDII 人民币A（DCA 第二十轮加）
 
     def test_hk_amounts_removed(self) -> None:
         """港股 5 只都砍了，不在 cost_basis。"""
