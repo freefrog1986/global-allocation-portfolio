@@ -627,20 +627,20 @@ class TestWeeklyRebalancePlan:
         assert a500_actions[0].signal == PESignal.HOLD
 
     def test_ndx_triggers_hold(self) -> None:
-        """纳 100 合并 5 只（4 联接 + 019172 摩根 QDII 人民币A），仓位 0.31 + 分位 60% → HOLD。
+        """纳 100 合并 6 只（4 联接 + 019172 摩根 + 019441 万家），仓位 0.31 + 分位 60% → HOLD。
 
-        liubo 2026-09-29 加 019172：直接 QDII（非联接），DCA ¥10/天 → NDX 1 仓目标。
-        合并组 fund_code = 5 只 "+" 串联；仓位 = 4 只联接累计 / 10000 = 0.31 仓（019172 初始成本 0）。
+        liubo 2026-09-29 加 019172 + 019441：直接 QDII（双只备份，非联接），DCA 各 ¥10/天。
+        合并组 fund_code = 6 只 "+" 串联；仓位 = 4 只联接累计 / 10000 = 0.31 仓（019172/019441 初始成本 0）。
         """
         actions = weekly_rebalance_plan()
         ndx_actions = [a for a in actions if ".NDX" in a.etf_index_code]
         assert len(ndx_actions) == 1
         assert ndx_actions[0].signal == PESignal.HOLD
-        # 5 只合并（含 +019172）
+        # 6 只合并（含 4 联接 + 019172 + 019441）
         ndx_fund = ndx_actions[0].fund_code
         assert "018966" in ndx_fund and "539001" in ndx_fund
         assert "016452" in ndx_fund and "019524" in ndx_fund
-        assert "019172" in ndx_fund
+        assert "019172" in ndx_fund and "019441" in ndx_fund
 
     def test_reits_and_em_no_longer_skip(self) -> None:
         """REITs / EM 现在有估值指标 → 不再 SKIP（只剩商品 GOLD_NO_METRIC）。"""

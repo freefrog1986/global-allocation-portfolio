@@ -117,9 +117,10 @@ SUBCLASS_BY_CODE: dict[str, SwensenClass] = {
     "014532": SwensenClass.CN_EQUITY,  # 易方达MSCI中国A50
     "022448": SwensenClass.CN_EQUITY,  # 国泰中证A500ETF发起联接A（第十九轮从红利策略移过来）
     # 港股 (0) - liubo 2026-09-22 砍：不投港股
-    # 美股股票 (7 宽基) - 519981 标普100 + 017641 标普500 + 5 只纳100
+    # 美股股票 (8 宽基) - 519981 标普100 + 017641 标普500 + 6 只纳100
     # 第二十轮（liubo 2026-09-29）：加 019172 摩根纳斯达克100指数(QDII)人民币A
     # 直接 QDII（非联接），替代 4 只联接作为新加仓渠道；DCA ¥10/天 → 1 仓目标
+    # 第二十一轮（liubo 2026-09-29）：加 019441 万家纳斯达克100指数发起式(QDII)A — 双只备份
     "519981": SwensenClass.US_EQUITY,  # 长信标普100
     "018966": SwensenClass.US_EQUITY,  # 汇添富纳100
     "539001": SwensenClass.US_EQUITY,  # 建信纳100
@@ -127,6 +128,7 @@ SUBCLASS_BY_CODE: dict[str, SwensenClass] = {
     "016452": SwensenClass.US_EQUITY,  # 南方纳100（第十九轮补回）
     "019524": SwensenClass.US_EQUITY,  # 华泰柏瑞纳100
     "019172": SwensenClass.US_EQUITY,  # 摩根纳斯达克100指数(QDII)人民币A（第二十轮加）
+    "019441": SwensenClass.US_EQUITY,  # 万家纳斯达克100指数发起式(QDII)A（第二十一轮加）
     # 国外发达市场股票 (0) - liubo 2026-09-22 移 457001 到 ETF 轮动组合
     # 新兴市场股票 (1) - MSCI Emerging Markets 总回报
     "378006": SwensenClass.EM_EQUITY,  # 摩根全球新兴市场

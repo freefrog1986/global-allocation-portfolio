@@ -183,9 +183,11 @@ FUND_INDEX_MAP: dict[str, tuple[SwensenClass, str, str]] = {
     "022424": (SwensenClass.CN_EQUITY, "000510", "广发中证 A500"),
     "014532": (SwensenClass.CN_EQUITY, "930050", "易方达 MSCI 中国 A50"),
     "022448": (SwensenClass.CN_EQUITY, "000510", "国泰中证 A500 联接"),
-    # 美股股票 (7 只 → 3 个 ETF)
+    # 美股股票 (8 只 → 3 个 ETF)
     # 第二十轮（liubo 2026-09-29）：加 019172 摩根纳斯达克100指数(QDII)人民币A → .NDX
-    # 直接 QDII（不是联接），替代 4 只联接作为加仓渠道。NDX 现在合并 5 只。
+    # 直接 QDII（不是联接），替代 4 只联接作为加仓渠道。
+    # 第二十一轮（liubo 2026-09-29）：加 019441 万家纳斯达克100指数发起式(QDII)A → .NDX
+    # 双只备份，分散 QDII 额度风险。NDX 现在合并 6 只（4 联接 + 019172 + 019441）。
     "519981": (SwensenClass.US_EQUITY, ".OEX", "长信标普 100"),
     "018966": (SwensenClass.US_EQUITY, ".NDX", "汇添富纳指 100"),
     "539001": (SwensenClass.US_EQUITY, ".NDX", "建信纳指 100"),
@@ -193,6 +195,7 @@ FUND_INDEX_MAP: dict[str, tuple[SwensenClass, str, str]] = {
     "016452": (SwensenClass.US_EQUITY, ".NDX", "南方纳指 100"),
     "019524": (SwensenClass.US_EQUITY, ".NDX", "华泰柏瑞纳指 100"),
     "019172": (SwensenClass.US_EQUITY, ".NDX", "摩根纳指 100 QDII 人民币A"),
+    "019441": (SwensenClass.US_EQUITY, ".NDX", "万家纳指 100 发起式 QDII A"),
     # 新兴市场 (1 只 → MSCI EM)
     "378006": (SwensenClass.EM_EQUITY, ".MSCI_EM", "摩根全球新兴市场"),
     # REITs / 商品 — 用各自 REITs 指标，不再 SKIP
