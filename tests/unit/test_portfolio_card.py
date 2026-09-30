@@ -826,7 +826,7 @@ class TestValuationSection:
         # 美股基金缺估值时也建 NDX/SP 的 fallback 估值
         # 第十八轮：017730/016664/006373 已砍
         today = date.today()
-        for code in ("018966", "539001", "016452", "019524", "017641",
+        for code in ("018966", "539001", "016452", "017641",
                       "519981"):
             journal.db.upsert_fund_valuation(
                 FundValuation(
@@ -851,21 +851,20 @@ class TestValuationSection:
     def test_combined_per_fund_table_15_rows_when_3_regions(
         self, journal: PortfolioJournal
     ) -> None:
-        """3 region 都有持仓 → combined per-fund 表 15 行（A 3 + 港 3 + 美 9）。
+        """3 region 都有持仓 → combined per-fund 表行数 = fixture 实际基金数。
 
-        第十八轮：港股全砍后 fixture 改为「3 A 股 + 6 美股」= 9 行。
-        保留 15 行目标作为 fixture 满配置（HK fund seed 继续但标注已砍）；
-        assert 改为按 fixture 实际基金数（A + US）动态算 → 这里测试 9 行。
-        spec 098.4 — fixtures 简化：A 美股 = 9 行（实际基金数；港股 0）。
+        第十八轮：港股全砍后 fixture = 3 A + 5 美股 = 8 行。
+        第二十二轮（2026-09-29）：013127 转回大类资产 HK_EQUITY，per-fund 表多 1 行：
+        3 A 股 + 1 港股 (013127) + 5 美股 = 9 行。
         """
         _seed_a_share_funds(journal)
         _seed_fund_valuations(journal)
-        _seed_hk_funds(journal)  # 第十八轮 HK 全砍，仍 seed 但不会进 SUBCLASS_BY_CODE
+        _seed_hk_funds(journal)  # seed 3 只港股基金，但 SUBCLASS_BY_CODE 只认 013127
         _seed_hk_fund_valuations(journal)
         _seed_us_funds(journal)
-        # 美股 per-fund 估值（共用 INX 兜底数据；018966/539001/016452/019524/017641/519981 是 kept 6 只）
+        # 美股 per-fund 估值（共用 INX 兜底数据；2026-09-29 卖 019524 后 kept 5 只大类资产）
         today = date.today()
-        for code in ("018966", "539001", "016452", "019524", "017641",
+        for code in ("018966", "539001", "016452", "017641",
                       "519981", "017730", "016664", "006373"):
             journal.db.upsert_fund_valuation(
                 FundValuation(
@@ -881,7 +880,7 @@ class TestValuationSection:
 
         spec = self._get_combined_per_fund_table(journal)
         assert spec is not None
-        # 3 A 股 + 0 港股(全砍) + 6 美股(017730/016664/006373 砍了) = 9 行
+        # 3 A 股 + 1 港股 (013127) + 5 美股(2026-09-29 卖 019524；017730/016664/006373 砍了) = 9 行
         assert len(spec["rows"]) == 9
 
     def test_combined_per_fund_table_region_prefix(self, journal: PortfolioJournal) -> None:
@@ -893,7 +892,7 @@ class TestValuationSection:
         _seed_a_share_funds(journal)
         _seed_fund_valuations(journal)
         _seed_us_funds(journal)
-        for code in ("018966", "539001", "016452", "019524", "017641", "519981"):
+        for code in ("018966", "539001", "016452", "017641", "519981"):
             journal.db.upsert_fund_valuation(
                 FundValuation(
                     record_date=date.today(),
@@ -907,11 +906,11 @@ class TestValuationSection:
             )
         spec = self._get_combined_per_fund_table(journal)
         assert spec is not None
-        # 3 A 股 + 0 港股 + 6 美股 = 9 行
-        assert len(spec["rows"]) == 9
+        # 3 A 股 + 0 港股 + 5 美股(2026-09-29 卖 019524) = 8 行
+        assert len(spec["rows"]) == 8
         for row in spec["rows"][:3]:
             assert row["region"] == "A 股"
-        for row in spec["rows"][3:9]:
+        for row in spec["rows"][3:8]:
             assert row["region"] == "美股"
 
     def test_combined_per_fund_table_skipped_when_no_holdings(
@@ -938,8 +937,8 @@ class TestValuationSection:
         _seed_fund_valuations(journal)
         _seed_us_funds(journal)
         today = date.today()
-        for code in ("018966", "539001", "016452", "019524", "017641",
-                      "519981"):  # 第十八轮：3 只 QDII 主题砍了
+        for code in ("018966", "539001", "016452", "017641",
+                      "519981"):  # 第十八轮：3 只 QDII 主题砍了；2026-09-29 卖 019524
             journal.db.upsert_fund_valuation(
                 FundValuation(
                     record_date=today,
@@ -976,8 +975,8 @@ class TestValuationSection:
         _seed_fund_valuations(journal)
         _seed_us_funds(journal)
         today = date.today()
-        for code in ("018966", "539001", "016452", "019524", "017641",
-                      "519981"):  # 第十八轮：3 只 QDII 主题砍了
+        for code in ("018966", "539001", "016452", "017641",
+                      "519981"):  # 第十八轮：3 只 QDII 主题砍了；2026-09-29 卖 019524
             journal.db.upsert_fund_valuation(
                 FundValuation(
                     record_date=today,
@@ -2248,9 +2247,10 @@ class TestBuildFundValuationSectionHK:
         assert "高估" in verdict
 
     def test_hk_funds_no_valuation_show_data_missing(self, journal: PortfolioJournal) -> None:
-        """港股有 DB 但缺估值 — 第十八轮：HK 0 只基金 → per-fund 表不渲染。
+        """港股有基金但缺估值 — 第二十二轮：013127 在 SUBCLASS_BY_CODE → per-fund 表渲染 1 行「数据缺失」。
 
-        保留测试 scaffolding 验证 indicator 表存在 + per-fund 表缺失的现状。
+        故意不 _seed_hk_fund_valuations → 港股基金没估值。
+        但 013127 现在属 HK_EQUITY 子类，所以 per-fund 表会渲染一行，所有估值列显示"数据缺失"。
         """
         _seed_valuation_today(journal)
         _seed_hk_valuation_today(journal)
@@ -2259,16 +2259,25 @@ class TestBuildFundValuationSectionHK:
 
         hk_elements = _build_hk_valuation_section(journal)
         hk_tables = [e for e in hk_elements if e.get("tag") == "table"]
-        # 第十八轮：HK 0 只 kept 基金 → 没有 per-fund table（只有 indicator 表，最多 1 张）
         per_fund_tables = [
             t for t in hk_tables
             # per-fund table 有 "fund" 列；indicator 表只有 "indicator" / "current" / ...
             if any(c.get("name") == "fund" for c in t.get("columns", []))
         ]
-        assert per_fund_tables == [], (
-            "HK 已无 kept 基金，per-fund table 应当不渲染；"
-            f"实际找到 {len(per_fund_tables)} 张 per-fund 表"
+        # 第二十二轮：HK 1 只 kept 基金（013127）→ per-fund 表渲染 1 行（值=「数据缺失」）
+        assert len(per_fund_tables) == 1, (
+            "HK 现在 1 只 kept 基金 (013127)，per-fund table 应当渲染 1 行"
         )
+        rows = per_fund_tables[0]["rows"]
+        assert len(rows) == 1
+        row = rows[0]
+        # 第一列是 fund（"013127\n恒生科技"）
+        assert row["fund"].startswith("013127")
+        # 估值列都是"数据缺失"
+        assert row["pe"] == "数据缺失"
+        assert row["pe_pct"] == "数据缺失"
+        assert row["dy"] == "数据缺失"
+        assert row["verdict"] == "数据缺失"
 
 
 class TestIndexVerdictStrategyHK:
@@ -2331,17 +2340,18 @@ def _seed_us_valuation_today(journal: PortfolioJournal) -> None:
 
 
 def _seed_us_funds(journal: PortfolioJournal) -> None:
-    """塞 6 只美股基金（4 NDX + 1 标普 500 + 1 标普 100）。
+    """塞 5 只美股基金（3 NDX + 1 标普 500 + 1 标普 100）。
 
+    2026-09-29（第二十二轮）：liubo 卖出 019524 华泰柏瑞纳 100 联接。
+    第二十/二十一轮加的 019172/019441 直接 QDII 场外 — 测试不验估值，留 stub。
     第十八轮（2026-09-22）：3 只 QDII 全球主题（017730/016664/006373）砍了，
-    只剩 6 只宽基/纳指/标普 — 都是大类资产配置 US_EQUITY。
+    只剩 5 只宽基/纳指/标普 — 都是大类资产配置 US_EQUITY。
     让每只美股基金的市值都是 1.5 仓。
     """
     us_funds = [
         ("018966", "汇添富纳100"),
         ("539001", "建信纳100"),
         ("016452", "南方纳100"),
-        ("019524", "华泰柏瑞纳100"),
         ("017641", "摩根标普500"),
         ("519981", "长信标普100"),
     ]

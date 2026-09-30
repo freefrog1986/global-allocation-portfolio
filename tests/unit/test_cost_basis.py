@@ -7,6 +7,9 @@
 2026-09-24 第二次调仓：008505 转 4999.39 → 028277（国内 REITs 凑 1 仓）。
 2026-09-29 第二十轮：加 019172 摩根纳斯达克100指数(QDII)人民币A → 47 只（成本 0；DCA 进行中）。
 2026-09-29 第二十一轮：加 019441 万家纳斯达克100指数发起式(QDII)A → 48 只（DCA 双只备份）。
+2026-09-29 第二十二轮：liubo 卖出 019524 华泰柏瑞纳 100 联接（成本 20 收回现金）→ 47 只大类资产。
+2026-09-29 第二十三轮：liubo 把 013127 汇添富恒生科技 ETF 联接发起式(QDII)A 从 ETF 轮动组合转过来 → 48 只大类资产（+25000）。
+2026-09-29 第二十四轮：加 000614 华安德国 DAX 联接 A → 49 只大类资产（初始 0；支付宝慧定投 250-1000/周，平均 500 → 10000 CNY）。
 """
 
 from __future__ import annotations
@@ -23,22 +26,23 @@ from global_allocation.portfolio.cost_basis import (
 
 
 class TestCostBasisByCode:
-    def test_has_forty_eight_funds(self) -> None:
-        """48 只大类资产配置基金有成本数字（第二十一轮 liubo 2026-09-29 加 019441 后）。
+    def test_has_forty_nine_funds(self) -> None:
+        """49 只大类资产配置基金有成本数字（第二十四轮 liubo 2026-09-29 加 000614 后）。
 
         019441 万家纳指100 发起式 QDII A：直接 QDII（非联接），DCA ¥10/天 → 2000 CNY，
-        跟 019172 双只备份；初始成本 0。NDX 总共 6 只合并（4 联接 + 019172 + 019441）。
+        跟 019172 双只备份；初始成本 0。NDX 总共 5 只合并（1 联接 + 4 直接 QDII 场外）。
+        013127 汇添富恒生科技 ETF 联接发起式(QDII)A：2026-09-29 从 ETF 轮动组合转过来（+25000 CNY）。
         """
-        assert len(COST_BASIS_BY_CODE) == 48
+        assert len(COST_BASIS_BY_CODE) == 49
 
     def test_total_matches_sum(self) -> None:
-        """总和等于 liubo 算出的 579163.47（46 只；2026-09-24 第二次调仓后 +0.61）。
-        2026-09-22 第十九轮时为 579162.86；2026-09-24 因 028277 bump 到 10000 多了 0.61。
-        第二十轮 019172 成本 0，总和不变。
+        """总和等于 liubo 算出的 604143.47（49 只；2026-09-29 加 000614 初始 0 不影响总额）。
+        2026-09-22 第十九轮时为 579162.86；2026-09-24 因 028277 bump 到 10000 多了 0.61；
+        2026-09-29 卖出 019524 -20 + 加 013127 +25000 → 604143.47。
         """
         total = sum(COST_BASIS_BY_CODE.values())
         assert total == TOTAL_COST_CNY
-        assert TOTAL_COST_CNY == Decimal("579163.47")
+        assert TOTAL_COST_CNY == Decimal("604143.47")
 
     def test_specific_a_share_amounts(self) -> None:
         """6 只 A 股宽基（第十九轮加 022448 后 6 只）。"""
@@ -50,21 +54,34 @@ class TestCostBasisByCode:
         # 第十九轮从红利策略组合移过来
         assert COST_BASIS_BY_CODE["022448"] == Decimal("11000")  # 国泰中证A500ETF发起联接A
 
+    def test_specific_hk_amounts(self) -> None:
+        """港股：013127 汇添富恒生科技 ETF 联接发起式(QDII)A（2026-09-29 第二十三轮加）。
+        跟踪恒生科技 HSTECH 指数。"""
+        assert COST_BASIS_BY_CODE["013127"] == Decimal("25000")  # 汇添富恒生科技 ETF 联接发起式(QDII)A
+
     def test_specific_us_amounts(self) -> None:
-        """8 只美股宽基（标普500/标普100 + 6 只纳100，第二十一轮加 019441）。"""
+        """7 只美股宽基（标普500/标普100 + 5 只纳100；第二十二轮 liubo 2026-09-29 卖出 019524）。"""
         assert COST_BASIS_BY_CODE["519981"] == Decimal("3620")   # 长信标普100
         assert COST_BASIS_BY_CODE["018966"] == Decimal("2020")   # 汇添富纳100
-        assert COST_BASIS_BY_CODE["539001"] == Decimal("1000")   # 建信纳100
+        assert COST_BASIS_BY_CODE["539001"] == Decimal("1000")   # 建信纳100（QDII 场外）
         assert COST_BASIS_BY_CODE["017641"] == Decimal("50")     # 摩根标普500
         assert COST_BASIS_BY_CODE["016452"] == Decimal("20")     # 南方纳100（第十九轮补回）
-        assert COST_BASIS_BY_CODE["019524"] == Decimal("20")     # 华泰柏瑞纳100
+        # 019524 已卖出（2026-09-29 liubo 卖出 20 元，收回现金）
+        assert "019524" not in COST_BASIS_BY_CODE
         assert COST_BASIS_BY_CODE["019172"] == Decimal("0")      # 摩根纳指100 QDII 人民币A（DCA 第二十轮加）
         assert COST_BASIS_BY_CODE["019441"] == Decimal("0")      # 万家纳指100 发起式 QDII A（DCA 第二十一轮加，双只备份）
 
+    def test_sold_fund_removed(self) -> None:
+        """019524 已卖出（2026-09-29 liubo），不在 COST_BASIS_BY_CODE。"""
+        assert "019524" not in COST_BASIS_BY_CODE
+
     def test_hk_amounts_removed(self) -> None:
-        """港股 5 只都砍了，不在 cost_basis。"""
-        for code in ("004098", "013127", "006809", "014673", "016495"):
-            assert code not in COST_BASIS_BY_CODE, f"{code} 已砍"
+        """港股 4 只被砍 5 只里 4 只（004098/006809/014673/016495），不在大类资产 cost_basis。
+        013127 在 2026-09-29 重新加入大类资产（从 ETF 轮动组合转过来）。
+        港股科技（014673/016495）+ 港股银行（006809）现在都在 ETF 轮动组合里。
+        """
+        for code in ("004098", "006809", "014673", "016495"):
+            assert code not in COST_BASIS_BY_CODE, f"{code} 仍在其他组合"
 
     def test_themed_us_amounts_removed(self) -> None:
         """美股 3 只 QDII 主题都砍了。"""
@@ -77,8 +94,9 @@ class TestCostBasisByCode:
             assert code not in COST_BASIS_BY_CODE, f"{code} 已砍"
 
     def test_other_subclass_amounts(self) -> None:
-        """国外发达（liubo 2026-09-22 移 457001 到 ETF 轮动组合）/ 新兴市场 / REITs / 国内利率债 / 美债 / 商品。"""
+        """国外发达（第二十四轮加 000614 DAX 联接）/ 新兴市场 / REITs / 国内利率债 / 美债 / 商品。"""
         assert "457001" not in COST_BASIS_BY_CODE  # 已移到 ETF 轮动组合
+        assert COST_BASIS_BY_CODE["000614"] == Decimal("0")    # 华安 DAX 联接 A（DCA 进行中，第二十四轮加）
         assert COST_BASIS_BY_CODE["378006"] == Decimal("3910")   # 摩根全球新兴市场
         assert COST_BASIS_BY_CODE["028277"] == Decimal("10000")  # 华夏中证REITs全收益（2026-09-24 +4999.39 凑 1 仓，bump 到 10000 避免 Decimal 噪声）
         assert COST_BASIS_BY_CODE["160140"] == Decimal("5000")   # 南方道琼斯美国精选REIT

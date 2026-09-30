@@ -139,16 +139,21 @@ class RebalanceAction:
 # PE_SNAPSHOT_BY_INDEX: 指数代码 → (估值指标, 倍数, 10年分位)
 # 注意：分位值是 fraction（0.1694 = 16.94%），不是整数百分比。
 #
-# 数据来源（2026-09-28 末）：
-# - A 股: 理杏仁 CSV "frog 勿删_总市值加权_10年_20260928_222805.csv"
-# - 美股 INX/OEX: 同上 CSV（OEX 用 INX 代理）
-# - 美股 NDX: WebSearch 2026-09-14 PE 28.68, 分位 ~60% (lixinger 09-28 没数据，仍用旧值)
-# - 国外发达 (N225/GDAXI/FCHI): WebSearch 最新值
-# - 新兴市场: worldperatio + siblisresearch 2026-09-04（PE 14.3 / 分位 60%）
-# - US REIT: MSCI factsheet + NAREIT 2026-08-31（P/FFO 19.7 / 分位 60%）
-# - 中证 REITs: 招商证券 2026-08-31（P/NAV 1.03 / 分位 34% — 指数只有 5 年历史）
-# - HSI: hsi.com.hk / 百分位网 2026-09-28（PE 10.8557 / 分位 58.06%）
-# - 000903 中证 A100: liubo 2026-09-28 新加进 snapshot（PE 16.2030 / 分位 89.65%）
+# 数据来源（2026-09-29 末）：
+#   A 股: 理杏仁 CSV "frog 勿删_总市值加权_10年_20260928_222805.csv"
+#   美股 INX/OEX: 同上 CSV（OEX 用 INX 代理）
+#   美股 NDX: WebSearch 2026-09-14 PE 28.68, 分位 ~60% (lixinger 09-28 没数据，仍用旧值)
+#   国外发达 (N225/GDAXI/FCHI): guchacha.com 2026-09-22
+#     - N225 用日本股市整体市场口径月频（不是 N225 指数本身）
+#     - GDAXI 用 DAX 指数本身周频 2016 起
+#     - FCHI 用法国股市整体市场口径月频
+#   新兴市场: worldperatio + siblisresearch 2026-09-04（PE 14.3 / 分位 60%）
+#   US REIT: MSCI factsheet + NAREIT 2026-08-31（P/FFO 19.7 / 分位 60%）
+#   中证 REITs: 招商证券 2026-08-31（P/NAV 1.03 / 分位 34% — 指数只有 5 年历史）
+#   HSI: hsi.com.hk / 百分位网 2026-09-28（PE 10.8557 / 分位 58.06%）
+#   HSTECH: baifenwei.com 2026-08-21（PE 23.34 / 分位 35.7%；2026-09-29 liubo 把 013127 加到大类资产）
+#   000903 中证 A100: liubo 2026-09-28 新加进 snapshot（PE 16.2030 / 分位 89.65%）
+#   baifenwei.com 2026-09-24 也提供 PE 分位（沪深300/科创50 等 A 股）作为交叉验证。
 PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal, Decimal]] = {
     # ── A 股（PE-TTM）──
     "000510": (ValuationMetric.PE_TTM, Decimal("15.4577"), Decimal("0.4303")),  # 中证 A500
@@ -160,10 +165,12 @@ PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal, Decimal]] = {
     ".INX": (ValuationMetric.PE_TTM, Decimal("26.1363"), Decimal("0.6208")),    # 标普 500
     ".NDX": (ValuationMetric.PE_TTM, Decimal("28.68"), Decimal("0.60")),        # 纳斯达克 100（09-28 CSV 空）
     ".OEX": (ValuationMetric.PE_TTM, Decimal("26.1363"), Decimal("0.6208")),    # 标普 100（INX 代理）
-    # ── 国外发达（PE-TTM）──
-    ".N225": (ValuationMetric.PE_TTM, Decimal("22.0"), Decimal("0.65")),        # 日经 225
-    ".GDAXI": (ValuationMetric.PE_TTM, Decimal("17.91"), Decimal("0.53")),     # 德国 DAX
-    ".FCHI": (ValuationMetric.PE_TTM, Decimal("17.31"), Decimal("0.82")),      # 法国 CAC 40
+    # ── 港股（PE-TTM）──
+    "HSTECH": (ValuationMetric.PE_TTM, Decimal("23.34"), Decimal("0.357")),     # 恒生科技（baifenwei 2026-08-21）
+    # ── 国外发达（PE-TTM，guchacha.com 2026-09-22）──
+    ".N225": (ValuationMetric.PE_TTM, Decimal("19.21"), Decimal("0.698")),      # 日经 225（日本整体市场口径）
+    ".GDAXI": (ValuationMetric.PE_TTM, Decimal("16.90"), Decimal("0.471")),     # 德国 DAX（DAX 指数本身口径）
+    ".FCHI": (ValuationMetric.PE_TTM, Decimal("17.31"), Decimal("0.719")),      # 法国 CAC 40（法国整体市场口径）
     # ── 新兴市场（PE-TTM）──
     ".MSCI_EM": (ValuationMetric.PE_TTM, Decimal("14.30"), Decimal("0.60")),   # MSCI Emerging Markets
     # ── 美国 REITs（P/FFO，MSCI/NAREIT 标准）──
@@ -183,21 +190,32 @@ FUND_INDEX_MAP: dict[str, tuple[SwensenClass, str, str]] = {
     "022424": (SwensenClass.CN_EQUITY, "000510", "广发中证 A500"),
     "014532": (SwensenClass.CN_EQUITY, "930050", "易方达 MSCI 中国 A50"),
     "022448": (SwensenClass.CN_EQUITY, "000510", "国泰中证 A500 联接"),
-    # 美股股票 (8 只 → 3 个 ETF)
+    # 港股股票 (1 → HSTECH)
+    # 2026-09-29 liubo 把 013127 汇添富恒生科技 ETF 联接发起式(QDII)A
+    # 从 ETF 轮动组合转到大类资产配置（港股子类）
+    "013127": (SwensenClass.HK_EQUITY, "HSTECH", "汇添富恒生科技 ETF 联接发起式"),
+    # 美股股票 (7 只 → 4 个 ETF)
+    # 2026-09-29 liubo 卖出 019524（华泰柏瑞纳 100 联接），8 → 7
+    # 2026-09-29 liubo 确认 539001 是直接 QDII 场外（不是场内 ETF）
     # 第二十轮（liubo 2026-09-29）：加 019172 摩根纳斯达克100指数(QDII)人民币A → .NDX
-    # 直接 QDII（不是联接），替代 4 只联接作为加仓渠道。
+    # 直接 QDII（不是联接），替代联接作为加仓渠道。
     # 第二十一轮（liubo 2026-09-29）：加 019441 万家纳斯达克100指数发起式(QDII)A → .NDX
-    # 双只备份，分散 QDII 额度风险。NDX 现在合并 6 只（4 联接 + 019172 + 019441）。
+    # 双只备份，分散 QDII 额度风险。NDX 现在合并 5 只（1 联接 + 4 直接 QDII 场外）。
     "519981": (SwensenClass.US_EQUITY, ".OEX", "长信标普 100"),
-    "018966": (SwensenClass.US_EQUITY, ".NDX", "汇添富纳指 100"),
-    "539001": (SwensenClass.US_EQUITY, ".NDX", "建信纳指 100"),
+    "018966": (SwensenClass.US_EQUITY, ".NDX", "汇添富纳指 100 联接"),
+    "539001": (SwensenClass.US_EQUITY, ".NDX", "建信纳指 100 QDII 场外"),
     "017641": (SwensenClass.US_EQUITY, ".INX", "摩根标普 500"),
-    "016452": (SwensenClass.US_EQUITY, ".NDX", "南方纳指 100"),
-    "019524": (SwensenClass.US_EQUITY, ".NDX", "华泰柏瑞纳指 100"),
+    "016452": (SwensenClass.US_EQUITY, ".NDX", "南方纳指 100 发起式 QDII"),
     "019172": (SwensenClass.US_EQUITY, ".NDX", "摩根纳指 100 QDII 人民币A"),
     "019441": (SwensenClass.US_EQUITY, ".NDX", "万家纳指 100 发起式 QDII A"),
     # 新兴市场 (1 只 → MSCI EM)
     "378006": (SwensenClass.EM_EQUITY, ".MSCI_EM", "摩根全球新兴市场"),
+    # 国外发达市场 (1 → .GDAXI，2026-09-29 第二十四轮加)
+    # liubo 决定走场外基金（513030 场内 DAX ETF 有溢价），用支付宝慧定投：
+    # 扣款日每周三，单次金额 250-1000 元/周（平均约 500），目标累计 10000 CNY = 1 仓（满额自动暂停）。
+    # 综合 1.05%/年（A 类），限购 1000/天。
+    # 当前 cost_basis = 0（DCA 未开始），仓位 0 + 分位 47.1% < 50% → BUILD。
+    "000614": (SwensenClass.FOREIGN_DM_EQUITY, ".GDAXI", "华安德国 DAX 联接"),
     # REITs / 商品 — 用各自 REITs 指标，不再 SKIP
     "028277": (SwensenClass.CN_REIT, "932006", "华夏中证 REITs"),
     "160140": (SwensenClass.US_REIT, ".MSCI_US_REIT", "南方道琼斯美国 REIT"),
@@ -205,9 +223,11 @@ FUND_INDEX_MAP: dict[str, tuple[SwensenClass, str, str]] = {
     "000216": (SwensenClass.COMMODITY, "GOLD_NO_METRIC", "华安黄金 ETF 联接"),
 }
 
-# Watchlist：没持仓但想跟踪的指数（liubo 2026-09-24 加 HSI 恒生指数）
+# Watchlist：没持仓但想跟踪的指数（liubo 2026-09-24 加 HSI 恒生指数；
+# 2026-09-29 加国外发达市场 2 个指数 N225/FCHI — 457001 已转 ETF 轮动组合，
+# .GDAXI 在 2026-09-29 第二十四轮加 000614 华安 DAX 联接 A 后从 watchlist 移到 FUND_INDEX_MAP）。
 # 列表项：(subclass, index_code, display_name, metric, value, percentile)
-# 0 仓位也会触发 BUILD（提醒建仓）或 HOLD（等便宜）。
+# 0 仓位也会触发 BUILD（提醒建仓）或 HOLD（等便宜）/ REDUCE（不建仓）。
 INDEX_WATCHLIST: list[tuple[SwensenClass, str, str, ValuationMetric, Decimal, Decimal]] = [
     (
         SwensenClass.HK_EQUITY,
@@ -216,6 +236,25 @@ INDEX_WATCHLIST: list[tuple[SwensenClass, str, str, ValuationMetric, Decimal, De
         ValuationMetric.PE_TTM,
         Decimal("10.8557"),  # hsi.com.hk + 百分位网 2026-09-28
         Decimal("0.5806"),
+    ),
+    # ── 国外发达市场（liubo 2026-09-29 加；457001 转走 0 持仓，跟踪 PE 等建仓时机；
+    #    数据源 guchacha.com 2026-09-22。
+    #    .GDAXI 在 2026-09-29 加 000614 后从 watchlist 移除（fund 替代 watchlist））──
+    (
+        SwensenClass.FOREIGN_DM_EQUITY,
+        ".N225",
+        "日经 225",
+        ValuationMetric.PE_TTM,
+        Decimal("19.21"),    # guchacha 日本整体市场口径
+        Decimal("0.698"),
+    ),
+    (
+        SwensenClass.FOREIGN_DM_EQUITY,
+        ".FCHI",
+        "法国 CAC 40",
+        ValuationMetric.PE_TTM,
+        Decimal("17.31"),    # guchacha 法国整体市场口径
+        Decimal("0.719"),
     ),
 ]
 

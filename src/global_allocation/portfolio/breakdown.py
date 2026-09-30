@@ -21,12 +21,12 @@
   - 加 7 只新中债：004534/110017/009625/005690/400030/010942/008420
   - 补回 016452 南方纳100（第十八轮漏了）
 
-  A 股 / 美股 / 国外发达 / 新兴市场              ← 股票 4 子类（港股=0）
+  A 股 / 港股 / 美股 / 国外发达 / 新兴市场        ← 股票 5 子类（第二十二轮加港股 013127）
   国内 REITs / 美国 REITs                        ← REITs 2 子类
   国内利率债 / 美债                              ← 债券 2 子类（利率债扩到 23 只）
   商品 / 现金                                    ← 商品 + 现金 各 1 子类
 
-MVP 用 hardcoded mapping 标 47 只已知基金（含 1 只按现金 004137）；
+MVP 用 hardcoded mapping 标 49 只已知基金（含 1 只按现金 004137）；
 后续 spec 092 标的库可以把子类存到 fund_universe。
 """
 
@@ -100,7 +100,7 @@ DISPLAY_NAME: dict[SwensenClass, str] = {
 }
 
 
-# 已知 47 只基金的 mapping（MVP hardcode；后续 spec 092 移到 fund_universe 表）
+# 已知 48 只基金的 mapping（MVP hardcode；后续 spec 092 移到 fund_universe 表）
 # 2026-09-22 liubo 拍板股权类只用宽基 ETF（spec 098 第十八轮）：
 # - A 股宽基 5：A500 / 科创创业50 / A50 / 1000增强
 # - 美股宽基 6：标普500 / 标普100 / 纳100（4 只跟踪同一指数）
@@ -108,6 +108,8 @@ DISPLAY_NAME: dict[SwensenClass, str] = {
 # - 新兴市场 1：MSCI Emerging Markets
 # 第十九轮扩展（liubo 2026-09-22）：加 022448 A500 联接 + 7 只中债 +
 # 解锁 008505/004827 + 移来 007997 + 补回 016452 = 36 → 47 只
+# 第二十二轮（liubo 2026-09-29）：把 013127 汇添富恒生科技 ETF 联接发起式(QDII)A
+# 从 ETF 轮动组合转过来，港股子类从 0 → 1（之前砍的 5 只港股去了红利/ETF 轮动组合）
 SUBCLASS_BY_CODE: dict[str, SwensenClass] = {
     # A 股股票 (6 宽基) - 第十九轮加 022448 国泰A500 联接
     "013310": SwensenClass.CN_EQUITY,  # 华夏科创创业50
@@ -116,20 +118,26 @@ SUBCLASS_BY_CODE: dict[str, SwensenClass] = {
     "022424": SwensenClass.CN_EQUITY,  # 广发中证A500
     "014532": SwensenClass.CN_EQUITY,  # 易方达MSCI中国A50
     "022448": SwensenClass.CN_EQUITY,  # 国泰中证A500ETF发起联接A（第十九轮从红利策略移过来）
-    # 港股 (0) - liubo 2026-09-22 砍：不投港股
-    # 美股股票 (8 宽基) - 519981 标普100 + 017641 标普500 + 6 只纳100
+    # 港股 (1) - 2026-09-29 liubo 把 013127 从 ETF 轮动组合转过来，跟踪恒生科技 HSTECH
+    "013127": SwensenClass.HK_EQUITY,  # 汇添富恒生科技 ETF 联接发起式(QDII)A（第二十二轮从 ETF 轮动组合转过来）
+    # 美股股票 (7 宽基) - 519981 标普100 + 017641 标普500 + 5 只纳100
+    # 2026-09-29 liubo 卖出 019524（华泰柏瑞纳 100 联接），8 → 7
+    # 2026-09-29 liubo 确认 539001 是直接 QDII 场外（不是场内 ETF，天天基金可买）
     # 第二十轮（liubo 2026-09-29）：加 019172 摩根纳斯达克100指数(QDII)人民币A
-    # 直接 QDII（非联接），替代 4 只联接作为新加仓渠道；DCA ¥10/天 → 1 仓目标
+    # 直接 QDII（非联接），替代联接作为新加仓渠道；DCA ¥10/天 → 1 仓目标
     # 第二十一轮（liubo 2026-09-29）：加 019441 万家纳斯达克100指数发起式(QDII)A — 双只备份
     "519981": SwensenClass.US_EQUITY,  # 长信标普100
-    "018966": SwensenClass.US_EQUITY,  # 汇添富纳100
-    "539001": SwensenClass.US_EQUITY,  # 建信纳100
+    "018966": SwensenClass.US_EQUITY,  # 汇添富纳100（联接基金）
+    "539001": SwensenClass.US_EQUITY,  # 建信纳斯达克100指数(QDII)A人民币（直接 QDII 场外）
     "017641": SwensenClass.US_EQUITY,  # 摩根标普500
     "016452": SwensenClass.US_EQUITY,  # 南方纳100（第十九轮补回）
-    "019524": SwensenClass.US_EQUITY,  # 华泰柏瑞纳100
     "019172": SwensenClass.US_EQUITY,  # 摩根纳斯达克100指数(QDII)人民币A（第二十轮加）
     "019441": SwensenClass.US_EQUITY,  # 万家纳斯达克100指数发起式(QDII)A（第二十一轮加）
-    # 国外发达市场股票 (0) - liubo 2026-09-22 移 457001 到 ETF 轮动组合
+    # 国外发达市场股票 (1) - liubo 2026-09-22 移 457001 到 ETF 轮动组合后为 0，
+    # 2026-09-29 第二十四轮 liubo 把 000614 华安 DAX 联接 A 加回来（支付宝慧定投 250-1000 元/周，
+    # 平均 500，目标累计 10000 CNY = 1 仓自动暂停，跟踪法兰克福 DAX 指数 = .GDAXI），
+    # PE 16.90 / 分位 47.1% < 50% → BUILD
+    "000614": SwensenClass.FOREIGN_DM_EQUITY,  # 华安德国(DAX)联接(QDII)A（第二十四轮加，慧定投凑 1 仓）
     # 新兴市场股票 (1) - MSCI Emerging Markets 总回报
     "378006": SwensenClass.EM_EQUITY,  # 摩根全球新兴市场
     # REITs (2) — lixinger 无指数估值数据，per-fund 表显示"数据缺失"

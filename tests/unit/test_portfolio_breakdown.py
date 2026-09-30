@@ -75,14 +75,21 @@ class TestSubclassByCode:
         assert get_subclass("017644") == SwensenClass.CN_EQUITY  # 1000 增强
         assert get_subclass("014532") == SwensenClass.CN_EQUITY  # A50
         assert get_subclass("022448") == SwensenClass.CN_EQUITY  # A500 联接（第十九轮从红利策略移过来）
-        # 美股宽基 6（第十九轮补回 016452）
+        # 美股宽基 7（第十九轮补回 016452；2026-09-29 liubo 卖出 019524）
         assert get_subclass("519981") == SwensenClass.US_EQUITY  # 标普100
         assert get_subclass("017641") == SwensenClass.US_EQUITY  # 标普500
         assert get_subclass("018966") == SwensenClass.US_EQUITY  # 纳100
-        assert get_subclass("539001") == SwensenClass.US_EQUITY  # 纳100
+        assert get_subclass("539001") == SwensenClass.US_EQUITY  # 纳100（QDII 场外）
         assert get_subclass("016452") == SwensenClass.US_EQUITY  # 纳100（第十九轮补回）
-        assert get_subclass("019524") == SwensenClass.US_EQUITY  # 纳100
-        # 国外发达（liubo 2026-09-22 把 457001 移到 ETF 轮动组合，子类暂留空）+ 新兴
+        # 019524 已卖出（2026-09-29 liubo）
+        assert get_subclass("019524") is None
+        assert get_subclass("019172") == SwensenClass.US_EQUITY  # 纳100（第二十轮加）
+        assert get_subclass("019441") == SwensenClass.US_EQUITY  # 纳100（第二十一轮加）
+        # 港股 1（2026-09-29 第二十三轮：013127 从 ETF 轮动组合转过来）
+        assert get_subclass("013127") == SwensenClass.HK_EQUITY  # 恒生科技（汇添富联接 QDII）
+        # 国外发达 1（2026-09-29 第二十四轮：000614 华安 DAX 联接 A 加入大类资产）
+        assert get_subclass("000614") == SwensenClass.FOREIGN_DM_EQUITY  # 德国 DAX（华安联接 QDII）
+        # 新兴市场
         assert get_subclass("378006") == SwensenClass.EM_EQUITY  # MSCI Emerging Markets
         # 457001 移走：现在不属于大类资产配置组合
         assert get_subclass("457001") is None
@@ -110,12 +117,14 @@ class TestSubclassByCode:
             assert get_subclass(code) == SwensenClass.CN_GOV_BOND, f"{code} 第十九轮新增"
 
     def test_eleven_non_broad_funds_removed(self) -> None:
-        """第十八轮砍 11 只非宽基股权：港股 5 + 美股 3 QDII 主题 + A 股 3 红利低波。
+        """第十八轮砍 11 只非宽基股权：港股 4（+1 转走）+ 美股 3 QDII 主题 + A 股 3 红利低波。
 
-        这些基金不在 SUBCLASS_BY_CODE 里了（不再属于大类资产配置组合）。
+        港股原来 5 只砍掉的清单：004098/006809/014673/016495（4 只）。
+        013127 第十八轮被砍 → 第二十二轮（2026-09-29）从 ETF 轮动组合转回大类资产
+        配置 HK_EQUITY 子类，所以现在 013127 在 SUBCLASS_BY_CODE 里。
         """
-        # 港股 5
-        for code in ("004098", "013127", "006809", "014673", "016495"):
+        # 港股 4 只仍在 SUBSET 字节码外（只有 013127 转回）
+        for code in ("004098", "006809", "014673", "016495"):
             assert code not in SUBCLASS_BY_CODE, f"{code} 已砍"
             assert get_subclass(code) is None
         # 美股 QDII 主题 3
@@ -126,15 +135,22 @@ class TestSubclassByCode:
         for code in ("005561", "007605", "008114"):
             assert code not in SUBCLASS_BY_CODE, f"{code} 已砍"
             assert get_subclass(code) is None
+        # 013127 不在被砍 4 只清单里（已转回大类资产）
+        assert "013127" not in {
+            "004098", "006809", "014673", "016495",
+        }
 
     def test_no_more_hk_equity_in_mapping(self) -> None:
-        """第十八轮：港股全部砍完，SUBCLASS_BY_CODE 里没有 HK_EQUITY 基金。
-        （HK_EQUITY 枚举值保留，但当前 0 只基金映射过去。）"""
+        """第二十二轮（2026-09-29）：013127 汇添富恒生科技 转回大类资产，HK_EQUITY 子类 1 只。
+
+        之前第十八轮砍完后 HK_EQUITY 0 只；2026-09-29 liubo 把 013127 从
+        ETF 轮动组合转过来 → HK_EQUITY 现在 1 只。
+        """
         hk_funds = [
             code for code, sub in SUBCLASS_BY_CODE.items()
             if sub == SwensenClass.HK_EQUITY
         ]
-        assert hk_funds == []
+        assert hk_funds == ["013127"]
 
     def test_unknown_code_returns_none(self) -> None:
         assert get_subclass("999999") is None

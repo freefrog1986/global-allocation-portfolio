@@ -582,14 +582,54 @@ class TestWeeklyRebalancePlan:
         actions = weekly_rebalance_plan()
         # 持仓基金合并后：
         #   CN_EQUITY 6 只 (4 ETF) → 4
-        #   US_EQUITY 6 只 (3 ETF) → 3
+        #   HK_EQUITY 1 只 (HSTECH) → 1
+        #   US_EQUITY 7 只 (3 ETF) → 3
+        #   FOREIGN_DM_EQUITY 1 只 (.GDAXI via 000614) → 1
         #   EM 1 → 1
         #   CN_REIT 1 → 1
         #   US_REIT 1 → 1
         #   COMMODITY 1 → 1
-        # watchlist: HSI 1
-        # 合计: 4 + 3 + 1 + 1 + 1 + 1 + 1 = 12
-        assert len(actions) == 12
+        # watchlist: HSI 1 + 国外发达 2 (.N225/.FCHI；.GDAXI 已被 000614 替代) = 3
+        # 合计: 4 + 1 + 3 + 1 + 1 + 1 + 1 + 1 + 3 = 16
+        # 第二十二轮（2026-09-29）liubo 把 013127 汇添富恒生科技 转到大类资产
+        # → HK_EQUITY 从 0 → 1（HSI 仍在 watchlist，所以 HK 仍 2 group）
+        # 2026-09-29 加 国外发达 3 个指数 watchlist（FOREIGN_DM_EQUITY 0 持仓，但想跟踪）
+        # 第二十四轮（2026-09-29）加 000614 华安 DAX 联接 A → .GDAXI 从 watchlist 移到 FUND_INDEX_MAP
+        # 总 actions 仍是 16（-1 watchlist +1 fund = 净 0 变化）
+        assert len(actions) == 16
+
+    def test_foreign_dm_indices_appear_in_watchlist(self) -> None:
+        """FOREIGN_DM_EQUITY：3 个评估（.N225 watchlist + .GDAXI 来自 000614 fund + .FCHI watchlist）。
+
+        457001 2026-09-22 转 ETF 轮动组合后 FOREIGN_DM_EQUITY 子类 0 只基金。
+        liubo 2026-09-29 拍板：跟踪 3 个国外发达指数方便建仓决策。
+        第二十四轮（2026-09-29）liubo 加 000614 华安 DAX 联接 A → .GDAXI 从 watchlist 移到 fund map。
+        当前 snapshot（guchacha.com 2026-09-22）：
+        - .N225  日经 225: PE 19.21 / 分位 69.8% → HOLD（空仓 + 分位 >= 50% → 等便宜）
+        - .GDAXI 德国 DAX: PE 16.90 / 分位 47.1% → BUILD（空仓 + 分位 < 50% → 建仓，via 000614）
+        - .FCHI  法国 CAC 40: PE 17.31 / 分位 71.9% → HOLD（同 .N225）
+        """
+        actions = weekly_rebalance_plan()
+        fdm_actions = [
+            a for a in actions
+            if a.subclass == SwensenClass.FOREIGN_DM_EQUITY
+        ]
+        assert len(fdm_actions) == 3
+        codes = {a.etf_index_code for a in fdm_actions}
+        assert codes == {".N225", ".GDAXI", ".FCHI"}
+        # 分位 + 信号断言（guchacha 2026-09-22 数据）
+        by_idx = {a.etf_index_code: a for a in fdm_actions}
+        assert by_idx[".N225"].signal == PESignal.HOLD
+        assert by_idx[".N225"].metric_percentile == Decimal("0.698")
+        assert by_idx[".N225"].fund_code == "(.N225)"  # 仍是 watchlist
+        # 关键：DAX 实际分位 47.1% < 50% → BUILD（之前 hardcode 写 53% → HOLD 漏报）
+        # 第二十四轮：.GDAXI 现在由 000614 跟踪（不再是 watchlist 项）
+        assert by_idx[".GDAXI"].signal == PESignal.BUILD
+        assert by_idx[".GDAXI"].metric_percentile == Decimal("0.471")
+        assert by_idx[".GDAXI"].fund_code == "000614"  # 来自 FUND_INDEX_MAP，不是 watchlist
+        assert by_idx[".FCHI"].signal == PESignal.HOLD
+        assert by_idx[".FCHI"].metric_percentile == Decimal("0.719")
+        assert by_idx[".FCHI"].fund_code == "(.FCHI)"  # 仍是 watchlist
 
     def test_actions_ordered_by_subclass_then_code(self) -> None:
         """按 SwensenClass 枚举顺序排，再按 fund_code 排。"""
@@ -627,20 +667,23 @@ class TestWeeklyRebalancePlan:
         assert a500_actions[0].signal == PESignal.HOLD
 
     def test_ndx_triggers_hold(self) -> None:
-        """纳 100 合并 6 只（4 联接 + 019172 摩根 + 019441 万家），仓位 0.31 + 分位 60% → HOLD。
+        """纳 100 合并 5 只（1 联接 + 4 直接 QDII 场外），仓位 0.30 + 分位 60% → HOLD。
 
-        liubo 2026-09-29 加 019172 + 019441：直接 QDII（双只备份，非联接），DCA 各 ¥10/天。
-        合并组 fund_code = 6 只 "+" 串联；仓位 = 4 只联接累计 / 10000 = 0.31 仓（019172/019441 初始成本 0）。
+        liubo 2026-09-29 卖出 019524 + 加 019172/019441：合并组剩 5 只。
+        fund_code = 5 只 "+" 串联；仓位 = 1 联接 + 3 直接 QDII 累计 / 10000 = 0.30 仓
+        （019172/019441 初始成本 0；019524 已卖 -20）。
         """
         actions = weekly_rebalance_plan()
         ndx_actions = [a for a in actions if ".NDX" in a.etf_index_code]
         assert len(ndx_actions) == 1
         assert ndx_actions[0].signal == PESignal.HOLD
-        # 6 只合并（含 4 联接 + 019172 + 019441）
+        # 5 只合并（含 1 联接 018966 + 539001/016452/019172/019441 4 直接 QDII 场外）
         ndx_fund = ndx_actions[0].fund_code
         assert "018966" in ndx_fund and "539001" in ndx_fund
-        assert "016452" in ndx_fund and "019524" in ndx_fund
-        assert "019172" in ndx_fund and "019441" in ndx_fund
+        assert "016452" in ndx_fund and "019172" in ndx_fund
+        assert "019441" in ndx_fund
+        # 019524 已卖出（2026-09-29 liubo），不在合并组
+        assert "019524" not in ndx_fund
 
     def test_reits_and_em_no_longer_skip(self) -> None:
         """REITs / EM 现在有估值指标 → 不再 SKIP（只剩商品 GOLD_NO_METRIC）。"""
@@ -660,6 +703,47 @@ class TestWeeklyRebalancePlan:
         assert hsi.signal == PESignal.HOLD  # 63% > 50% → 等便宜
         assert hsi.current_position == Decimal("0")
         assert hsi.metric == ValuationMetric.PE_TTM
+
+    def test_hstech_appears_with_013127(self) -> None:
+        """HSTECH 恒生科技：2026-09-29 liubo 把 013127 转到大类资产，仓位 2.50 仓 + 分位 35.7% < 50% → ADD 凑 1 仓。
+
+        仓位 = 25000 / 10000 = 2.50（>= 1）+ 分位 35.7% ≥ 20% → 区间内不动 → HOLD
+        （注：仓位已经 2.50 仓了，远超 1 仓；ADD 只在仓位 < 1 + 分位 < 50% 时触发）
+        """
+        actions = weekly_rebalance_plan()
+        hstech_actions = [a for a in actions if a.etf_index_code == "HSTECH"]
+        assert len(hstech_actions) == 1
+        hstech = hstech_actions[0]
+        assert hstech.subclass == SwensenClass.HK_EQUITY
+        assert hstech.fund_code == "013127"
+        # 仓位 2.50 >= 1 + 分位 35.7% ∈ [20%, 80%] → HOLD
+        assert hstech.signal == PESignal.HOLD
+        assert hstech.current_position == Decimal("2.5")
+        assert hstech.metric == ValuationMetric.PE_TTM
+
+    def test_000614_tracks_gdaxi(self) -> None:
+        """000614 华安 DAX 联接 A 是 FOREIGN_DM_EQUITY 子类 .GDAXI 的跟踪器（第二十四轮）。
+
+        liubo 2026-09-29 决定走场外基金（513030 场内 DAX ETF 有溢价），
+        用支付宝慧定投：每周三扣款 250-1000 元/周（平均 500），目标累计 10000 CNY = 1 仓（满额自动暂停）。
+        当前 cost_basis = 0（DCA 未开始），仓位 0 + 分位 47.1% < 50% → BUILD。
+
+        watchlist 的 .GDAXI 项已移除（被 fund 000614 替代，避免重复计算）。
+        actions 里 .GDAXI 只有 1 个 action（来自 000614）。
+        """
+        actions = weekly_rebalance_plan()
+        gdaxi = [a for a in actions if a.etf_index_code == ".GDAXI"]
+        assert len(gdaxi) == 1, ".GDAXI 应该只有 000614 一个 action（watchlist 已移除）"
+        a = gdaxi[0]
+        assert a.fund_code == "000614"
+        assert a.subclass == SwensenClass.FOREIGN_DM_EQUITY
+        assert a.signal == PESignal.BUILD  # 仓位 0 + 分位 47.1% < 50%
+        assert a.current_position == Decimal("0")
+        assert a.metric_percentile == Decimal("0.471")
+        assert a.metric == ValuationMetric.PE_TTM
+        # .GDAXI 不在 watchlist 里了
+        watchlist_idx = {w[1] for w in INDEX_WATCHLIST}
+        assert ".GDAXI" not in watchlist_idx
 
 
 # ─── format_weekly_report ─────────────────────────────

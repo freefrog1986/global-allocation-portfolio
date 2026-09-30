@@ -782,8 +782,9 @@ DEFAULT_INDEX_TO_FUND_MAP: dict[str, list[str]] = {
     "GSPC": ["017641"],   # 标普 500（yahoo/alt code，备用）→ 摩根标普 500
     "OEX":  ["519981"],   # 标普 100 → 长信标普 100 等权重
     "NDX":  [
-        "018966", "539001", "016452", "019524",  # 4 只纳指 100 ETF
-        "017730", "016664", "006373",            # 3 只全球主题 QDII（实际偏纳指）
+        "018966", "539001", "016452",  # 3 只大类资产 NDX 基金（2026-09-29 liubo 卖出 019524 后剩 3 只大类资产）
+        "019172", "019441",            # 第 20/21 轮加的直接 QDII 场外
+        "017730", "016664", "006373",  # 3 只 ETF 轮动组合的全球主题 QDII（实际偏纳指，lixinger fallback 用）
     ],
 }
 
@@ -1673,6 +1674,66 @@ def cmd_pe_rebalance(
         from global_allocation.portfolio.pe_rebalance import format_weekly_report
 
         console.print(format_weekly_report(actions))
+
+
+# ─── etf-rotation subcommand (liubo 2026-09-29 拍板：主观轮动 + 严格仓位管理) ───
+
+
+@app.command("etf-rotation")
+def cmd_etf_rotation(
+    send: bool = typer.Option(False, "--send", help="发飞书卡片到话题 thread（每周五 cron 用）"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="只生成卡片 JSON，不真发"),
+    chat: str | None = typer.Option(None, "--chat", help="覆盖默认 chat_id"),
+    root: str | None = typer.Option(
+        None, "--root", help="话题根消息 id（发到话题 thread 而不是父群）"
+    ),
+) -> None:
+    """生成 ETF 轮动组合 周快照（liubo 2026-09-29 拍板）。
+
+    默认打到 stdout（纯文本快照）；--send 通过飞书 OpenAPI 发卡片到话题 thread（每周五 cron 用）。
+    --dry-run 只打印卡片 JSON 不真发。
+
+    策略规则（2026-09-29）：
+    - 标的完全主观（liubo 选）
+    - 1 仓 = 5,000 CNY（不混大类资产配置的 1 万）
+    - 单笔规模 = 1 仓
+    - 类别上限 ≤ 总成本 × 30%（老仓位豁免）
+    - 同基金冷却期 7 天
+    """
+    from datetime import date as _date
+
+    from global_allocation.portfolio.etf_rotation import format_weekly_snapshot_text
+    from global_allocation.portfolio.publisher import publish_etf_rotation_report
+
+    today = _date.today()
+
+    if dry_run:
+        result = publish_etf_rotation_report(
+            chat_id=chat,
+            root_id=root,
+            report_date=today,
+            dry_run=True,
+        )
+        console.print("[cyan]dry-run[/cyan] 卡片 JSON（前 200 字符）：")
+        console.print(result[:200] + ("..." if len(result) > 200 else ""))
+        return
+
+    if send:
+        try:
+            result = publish_etf_rotation_report(
+                chat_id=chat,
+                root_id=root,
+                report_date=today,
+                dry_run=False,
+            )
+        except Exception as e:
+            console.print(f"[red]✗[/red] 发送失败：{e}")
+            raise typer.Exit(code=1) from e
+
+        console.print(f"[green]✓[/green] 已发送：message_id = {result}")
+    else:
+        # 纯文本模式（兼容老 botmux 风格 — 测试 / 预览用）
+        console.print(format_weekly_snapshot_text(today))
 
 
 # ─── tx subcommand ───
