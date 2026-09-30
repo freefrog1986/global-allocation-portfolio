@@ -58,29 +58,29 @@ class TestCardStructure:
 
     def test_has_header(self) -> None:
         """header.template + title。"""
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         assert "header" in card
         assert card["header"]["template"] == "purple"
         assert "title" in card["header"]
         assert card["header"]["title"]["tag"] == "plain_text"
         assert "ETF 轮动组合 周快照" in card["header"]["title"]["content"]
-        assert "2026-09-29" in card["header"]["title"]["content"]
+        assert "2026-09-30" in card["header"]["title"]["content"]
 
     def test_has_elements(self) -> None:
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         assert "elements" in card
         assert isinstance(card["elements"], list)
         assert len(card["elements"]) > 0
 
     def test_has_footer(self) -> None:
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         assert "footer" in card
         footer_text = card["footer"]["elements"][0]["content"]
         assert "ETF 轮动组合" in footer_text
 
     def test_three_sections(self) -> None:
         """3 个 section header: 组合总览 / 类别上限状态 / 各基金仓位 + 冷却期。"""
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         notes = _all_note_texts(card)
         assert "组合总览" in notes
         assert "类别上限状态" in notes
@@ -98,7 +98,7 @@ class TestOverviewSection:
 
     def test_overview_div_contains_totals(self) -> None:
         """div 文本含总成本 / 总资产 / 总盈亏 / 收益率。"""
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         # 找组合总览后面的 div
         overview_div = None
         for i, el in enumerate(card["elements"]):
@@ -115,15 +115,15 @@ class TestOverviewSection:
         assert overview_div is not None
         text = overview_div["text"]["content"]
         assert "总成本" in text
-        assert "66,420" in text  # 总成本数字
-        assert "62,090.41" in text  # 总资产
+        assert "71,420" in text  # 总成本数字（2026-09-30 加 010989 后）
+        assert "67,090.41" in text  # 总资产
         assert "总盈亏" in text
-        assert "-4,329.59" in text  # P&L 数字
+        assert "-4,329.59" in text  # P&L 数字（不变）
         assert "总收益率" in text or "%" in text
 
     def test_overview_mentions_strategy_params(self) -> None:
         """div 文本包含单仓 / 类别上限 / 冷却期常量。"""
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         overview_div = None
         for i, el in enumerate(card["elements"]):
             if (
@@ -145,33 +145,33 @@ class TestCategorySection:
     """Section 2：类别上限状态表。"""
 
     def test_has_table(self) -> None:
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         table = _find_table_after_note(card, "类别上限状态")
         assert table is not None
 
     def test_table_has_5_columns(self) -> None:
         """5 列：类别 / 累计成本 / 上限 / 使用率 / 状态。"""
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         table = _find_table_after_note(card, "类别上限状态")
         assert len(table["columns"]) == 5
 
-    def test_table_has_4_rows(self) -> None:
-        """4 个类别（港股科技互联网 / 港股银行 / 亚太除日本 / 全球科技主动）。"""
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+    def test_table_has_5_rows(self) -> None:
+        """5 个类别（港股科技互联网 / 港股银行 / 亚太除日本 / 全球科技主动 / 房地产）。"""
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         table = _find_table_after_note(card, "类别上限状态")
-        assert len(table["rows"]) == 4
+        assert len(table["rows"]) == 5
 
     def test_row_keys_are_ascii(self) -> None:
         """row keys 用 ASCII（飞书 API 要求）。"""
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         table = _find_table_after_note(card, "类别上限状态")
         for row in table["rows"]:
             for key in row.keys():
                 assert all(ord(c) < 128 for c in key), f"非 ASCII key: {key}"
 
     def test_hk_tech_internet_marked_as_over(self) -> None:
-        """港股科技互联网 53,000 / 19,926 = 266% → 标 '⚠️ 超限（豁免）'。"""
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+        """港股科技互联网 53,000 / 21,426 = 247% → 标 '⚠️ 超限（豁免）'。"""
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         table = _find_table_after_note(card, "类别上限状态")
         hk_tech_row = next(
             r for r in table["rows"] if r["cat"] == "港股科技互联网"
@@ -184,37 +184,45 @@ class TestCategorySection:
         assert float(pct_text.rstrip("%")) > 100
 
     def test_hk_bank_marked_as_under(self) -> None:
-        """港股银行 1,010 / 19,926 = 5% → 标 '✓ 未超限'。"""
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+        """港股银行 1,010 / 21,426 = 4.71% → 标 '✓ 未超限'。"""
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         table = _find_table_after_note(card, "类别上限状态")
         hk_bank_row = next(r for r in table["rows"] if r["cat"] == "港股银行")
         assert "✓" in hk_bank_row["state"]
         assert "未超限" in hk_bank_row["state"]
+
+    def test_real_estate_marked_as_under(self) -> None:
+        """房地产 5,000 / 21,426 = 23.3% → 标 '✓ 未超限'。"""
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
+        table = _find_table_after_note(card, "类别上限状态")
+        re_row = next(r for r in table["rows"] if r["cat"] == "房地产")
+        assert "✓" in re_row["state"]
+        assert "未超限" in re_row["state"]
 
 
 class TestFundSection:
     """Section 3：各基金仓位 + 冷却期表。"""
 
     def test_has_table(self) -> None:
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         table = _find_table_after_note(card, "各基金仓位 + 冷却期")
         assert table is not None
 
     def test_table_has_5_columns(self) -> None:
         """5 列：基金 / 类别 / 累计成本 / 仓位 / 冷却期。"""
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         table = _find_table_after_note(card, "各基金仓位 + 冷却期")
         assert len(table["columns"]) == 5
 
-    def test_table_has_8_funds(self) -> None:
-        """8 只基金（2026-09-29 减 013127 后）。"""
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+    def test_table_has_9_funds(self) -> None:
+        """9 只基金（2026-09-30 加 010989 后）。"""
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         table = _find_table_after_note(card, "各基金仓位 + 冷却期")
-        assert len(table["rows"]) == 8
+        assert len(table["rows"]) == 9
 
-    def test_all_8_funds_present(self) -> None:
-        """8 只基金都在表格里。"""
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+    def test_all_9_funds_present(self) -> None:
+        """9 只基金都在表格里。"""
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         table = _find_table_after_note(card, "各基金仓位 + 冷却期")
         fund_names = {r["fund"] for r in table["rows"]}
         expected_names = {
@@ -226,19 +234,20 @@ class TestFundSection:
             "全球科技主动（016664）",
             "全球科技主动（006373）",
             "全球科技主动（017730）",
+            "房地产（010989）",
         }
         assert fund_names == expected_names
 
     def test_013127_not_in_table(self) -> None:
         """013127 已转走，不在表格里。"""
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         table = _find_table_after_note(card, "各基金仓位 + 冷却期")
         fund_names = {r["fund"] for r in table["rows"]}
         assert not any("013127" in name for name in fund_names)
 
     def test_position_values_correct(self) -> None:
         """仓位数字 = cost / 5000。"""
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         table = _find_table_after_note(card, "各基金仓位 + 冷却期")
         # 找 006327 (cost=10000) → 2.00 仓
         row_006327 = next(r for r in table["rows"] if "006327" in r["fund"])
@@ -249,7 +258,7 @@ class TestFundSection:
 
     def test_cooldown_first_time_trade(self) -> None:
         """首次交易：冷却期列显示 '✓ 可交易'。"""
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         table = _find_table_after_note(card, "各基金仓位 + 冷却期")
         # 默认 LAST_TRADE_BY_FUND 空 → 全部首次交易
         for row in table["rows"]:
@@ -261,7 +270,7 @@ class TestCardToJson:
 
     def test_json_serializable(self) -> None:
         """Card 能 JSON 序列化（ensure_ascii=False 让中文正常）。"""
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         json_str = card_to_json(card)
         # 重新解析，确认合法 JSON
         parsed = json.loads(json_str)
@@ -269,17 +278,17 @@ class TestCardToJson:
 
     def test_chinese_not_escaped(self) -> None:
         """ensure_ascii=False → 中文保留原样（不变成 \\uXXXX）。"""
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         json_str = card_to_json(card)
         assert "ETF 轮动组合" in json_str
         assert "\\u" not in json_str or "组合" not in json_str.replace("\\u", "")
 
 
 class TestSpecialSnapshotDate:
-    """snapshot 日期是 2026-09-29（013127 移走当天）。"""
+    """snapshot 日期是 2026-09-30（010989 新买当天）。"""
 
     def test_snapshot_date_in_overview(self) -> None:
-        card = build_etf_rotation_card(report_date=date(2026, 9, 29))
+        card = build_etf_rotation_card(report_date=date(2026, 9, 30))
         # 找组合总览后面的 div
         for i, el in enumerate(card["elements"]):
             if (
@@ -289,7 +298,7 @@ class TestSpecialSnapshotDate:
                 for j in range(i + 1, len(card["elements"])):
                     if card["elements"][j]["tag"] == "div":
                         text = card["elements"][j]["text"]["content"]
-                        assert "2026-09-29" in text
+                        assert "2026-09-30" in text
                         return
         raise AssertionError("没找到组合总览 div")
 
