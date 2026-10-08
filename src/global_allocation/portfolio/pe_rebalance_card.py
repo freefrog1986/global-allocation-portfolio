@@ -67,12 +67,15 @@ SUBCLASS_DISPLAY: dict[SwensenClass, str] = {
 }
 
 
-# ─── 估值指标的中文显示（PE-TTM / P/FFO / P/NAV）─────────────────────
+# ─── 估值指标的中文显示（PE-TTM / P/FFO / P/NAV / 黄金 2 指标）─────────────
 
 METRIC_DISPLAY: dict[ValuationMetric, str] = {
     ValuationMetric.PE_TTM: "PE-TTM",
     ValuationMetric.P_FFO: "P/FFO",
     ValuationMetric.P_NAV: "P/NAV",
+    # spec 099 黄金 2 指标
+    ValuationMetric.GOLD_HISTORICAL_PCT: "金价",         # value=SGE Au99.99 CNY/g
+    ValuationMetric.GOLD_REAL_YIELD: "实际利率",          # value=FRED DFII10（fraction）
 }
 
 
@@ -89,9 +92,22 @@ def _fmt_pct(pct: Decimal | None) -> str:
 
 
 def _fmt_metric_value(metric: ValuationMetric, value: Decimal | None) -> str:
-    """估值倍数格式化：PE/P-FFO 用 'XX.XX'，P-NAV 用 'XX.XXx'。"""
+    """估值倍数 / 价格格式化：
+    - PE / P-FFO: 'XX.XX'
+    - P-NAV: 'XX.XXx'
+    - 金价: 'XXX.XX CNY/g'
+    - 实际利率: 'X.XX%'（fraction → percent）
+    """
     if value is None:
         return "—"
+    if metric == ValuationMetric.GOLD_HISTORICAL_PCT:
+        # SGE Au99.99 当前价（CNY/g）
+        quantized = value.quantize(Decimal("0.00"))
+        return f"{quantized} CNY/g"
+    if metric == ValuationMetric.GOLD_REAL_YIELD:
+        # FRED DFII10（fraction: 0.0291 = 2.91%）
+        pct = (value * Decimal("100")).quantize(Decimal("0.00"))
+        return f"{pct}%"
     quantized = value.quantize(Decimal("0.00"))
     if metric == ValuationMetric.P_NAV:
         return f"{quantized}x"
@@ -99,7 +115,7 @@ def _fmt_metric_value(metric: ValuationMetric, value: Decimal | None) -> str:
 
 
 def _fmt_metric_cell(metric: ValuationMetric, value: Decimal | None) -> str:
-    """详情表「估值」列：'PE-TTM 15.89' / 'P/FFO 19.70' / 'P/NAV 1.03x'。"""
+    """详情表「估值」列：'PE-TTM 15.89' / 'P/FFO 19.70' / 'P/NAV 1.03x' / '金价 907.50 CNY/g'。"""
     name = METRIC_DISPLAY[metric]
     val_str = _fmt_metric_value(metric, value)
     return f"{name} {val_str}"
@@ -198,7 +214,8 @@ _DETAIL_COLUMNS = [
     {"name": "sub", "display_name": "子类", "data_type": "text", "width": "auto"},
     {"name": "etf", "display_name": "ETF / 指数", "data_type": "text", "width": "auto"},
     {"name": "val", "display_name": "估值", "data_type": "text", "width": "auto"},
-    {"name": "pct", "display_name": "10Y 分位", "data_type": "text", "width": "auto"},
+    # spec 099：黄金 5Y 分位 + 股票 10Y 分位统一显示
+    {"name": "pct", "display_name": "分位", "data_type": "text", "width": "auto"},
     {"name": "pos", "display_name": "当前仓位", "data_type": "text", "width": "auto"},
     {"name": "act", "display_name": "操作", "data_type": "text", "width": "auto"},
 ]
