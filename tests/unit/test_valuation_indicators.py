@@ -15,7 +15,6 @@ from global_allocation.portfolio.valuation_indicators import (
     compute_buffett_indicator,
     compute_composite_score,
     compute_equity_risk_premium,
-    compute_gold_real_yield,
     compute_pe_percentile,
     compute_verdict,
     interpret_composite_score,
@@ -713,42 +712,9 @@ class TestHKThresholdValidity:
 
 
 # ─── spec 099 黄金 2 指标（A+B 综合分，liubo 2026-10-08 拍板）────────
-
-
-class TestGoldRealYield:
-    """黄金实际利率倒数 = 1 / real_yield（spec 099 指标 B）。"""
-
-    def test_basic(self) -> None:
-        """real_yield=2.91% → 1/0.0291 ≈ 34.36。"""
-        result = compute_gold_real_yield(Decimal("0.0291"))
-        # 1/0.0291 = 34.36426...
-        assert abs(result - Decimal("1") / Decimal("0.0291")) < Decimal("1e-10")
-
-    def test_low_real_yield_high_value(self) -> None:
-        """实际利率 1% → 1/0.01 = 100（实际利率低 = 黄金便宜 = 估值大）。"""
-        result = compute_gold_real_yield(Decimal("0.01"))
-        assert result == Decimal("100")
-
-    def test_high_real_yield_low_value(self) -> None:
-        """实际利率 5% → 1/0.05 = 20（实际利率高 = 黄金贵 = 估值小）。"""
-        result = compute_gold_real_yield(Decimal("0.05"))
-        assert result == Decimal("20")
-
-    def test_decimal_precision(self) -> None:
-        """Decimal 全程精度无损。"""
-        result = compute_gold_real_yield(Decimal("0.0285"))
-        expected = Decimal("1") / Decimal("0.0285")
-        assert result == expected
-
-    def test_negative_real_yield_rejected(self) -> None:
-        """实际利率 ≤ 0 → 抛 ValueError（spec 099 第六十二条保守处理）。"""
-        with pytest.raises(ValueError, match="实际利率必须为正数"):
-            compute_gold_real_yield(Decimal("-0.005"))
-
-    def test_zero_real_yield_rejected(self) -> None:
-        """实际利率 = 0 → 抛 ValueError（分母为零）。"""
-        with pytest.raises(ValueError, match="实际利率必须为正数"):
-            compute_gold_real_yield(Decimal("0"))
+# 2026-10-08 第二轮修订：指标 B 改成"实际利率本身 direction='high'"（liubo 指出方向反了）：
+# 实际利率 ↑ → 黄金吸引力 ↓ → 黄金便宜（低估）
+# 之前错版：direction='low'，1/r 倒数法（liubo 指出"等利率低了黄金涨起来，再买就追高了"）
 
 
 class TestGoldThresholdValidity:
@@ -759,7 +725,7 @@ class TestGoldThresholdValidity:
         assert ValuationIndicatorCode.GOLD_HISTORICAL_PCT in DEFAULT_THRESHOLDS
 
     def test_gold_real_yield_in_thresholds(self) -> None:
-        """实际利率倒数指标必须有阈值。"""
+        """实际利率指标必须有阈值。"""
         assert ValuationIndicatorCode.GOLD_REAL_YIELD in DEFAULT_THRESHOLDS
 
     def test_gold_historical_pct_direction_is_high(self) -> None:
@@ -767,7 +733,7 @@ class TestGoldThresholdValidity:
         assert DEFAULT_THRESHOLDS[ValuationIndicatorCode.GOLD_HISTORICAL_PCT].direction == "high"
 
     def test_gold_real_yield_direction_is_low(self) -> None:
-        """实际利率倒数 direction='low'（值大=便宜）。"""
+        """实际利率 direction='low'（值大=黄金便宜，跟股债利差/股息率同款）。"""
         assert DEFAULT_THRESHOLDS[ValuationIndicatorCode.GOLD_REAL_YIELD].direction == "low"
 
     def test_gold_historical_pct_thresholds_match_pe(self) -> None:
@@ -776,6 +742,16 @@ class TestGoldThresholdValidity:
         gold = DEFAULT_THRESHOLDS[ValuationIndicatorCode.GOLD_HISTORICAL_PCT]
         assert a_share.low_max == gold.low_max
         assert a_share.high_min == gold.high_min
+
+    def test_gold_real_yield_thresholds_inverse_to_dividend_yield(self) -> None:
+        """实际利率阈值跟 A 股股息率阈值是同方向的（值大=低估）：
+        - 股息率 direction='low'：value 越大越低估（高分红 = 便宜）
+        - 实际利率 direction='low'：value 越大越低估（高利率 = 黄金便宜）
+        """
+        div_yield = DEFAULT_THRESHOLDS[ValuationIndicatorCode.DIVIDEND_YIELD]
+        real_yield = DEFAULT_THRESHOLDS[ValuationIndicatorCode.GOLD_REAL_YIELD]
+        assert div_yield.direction == "low"
+        assert real_yield.direction == "low"
 
 
 class TestGoldScoreBands:
@@ -800,34 +776,33 @@ class TestGoldScoreBands:
         ) == 5
 
     def test_gold_real_yield_score_1(self) -> None:
-        """实际利率倒数 ≥ 50（实际利率 ≤ 2%）→ 1 分（极低估）。"""
+        """实际利率 ≥ 3% → 1 分（极低估，黄金大底）。"""
         assert score_indicator(
-            ValuationIndicatorCode.GOLD_REAL_YIELD, Decimal("55")
+            ValuationIndicatorCode.GOLD_REAL_YIELD, Decimal("0.04")
         ) == 1
 
     def test_gold_real_yield_score_2(self) -> None:
-        """实际利率倒数 35-50（实际利率 2-2.86%）→ 2 分（低估）。"""
+        """实际利率 2-3% → 2 分（低估）。当前 2.91% 落这里。"""
         assert score_indicator(
-            ValuationIndicatorCode.GOLD_REAL_YIELD, Decimal("40")
+            ValuationIndicatorCode.GOLD_REAL_YIELD, Decimal("0.0291")
         ) == 2
 
     def test_gold_real_yield_score_3(self) -> None:
-        """实际利率倒数 25-35（实际利率 2.86-4%）→ 3 分（正常）。"""
-        # 实际利率 2.91% → 1/0.0291 ≈ 34.36 → 3 分
+        """实际利率 1-2% → 3 分（正常）。"""
         assert score_indicator(
-            ValuationIndicatorCode.GOLD_REAL_YIELD, Decimal("34.36")
+            ValuationIndicatorCode.GOLD_REAL_YIELD, Decimal("0.015")
         ) == 3
 
     def test_gold_real_yield_score_4(self) -> None:
-        """实际利率倒数 15-25（实际利率 4-6.67%）→ 4 分（偏高估）。"""
+        """实际利率 0-1% → 4 分（偏高估）。"""
         assert score_indicator(
-            ValuationIndicatorCode.GOLD_REAL_YIELD, Decimal("20")
+            ValuationIndicatorCode.GOLD_REAL_YIELD, Decimal("0.005")
         ) == 4
 
     def test_gold_real_yield_score_5(self) -> None:
-        """实际利率倒数 < 15（实际利率 > 6.67%）→ 5 分（极高估）。"""
+        """实际利率 < 0%（实际负利率）→ 5 分（极高估，黄金泡沫）。"""
         assert score_indicator(
-            ValuationIndicatorCode.GOLD_REAL_YIELD, Decimal("10")
+            ValuationIndicatorCode.GOLD_REAL_YIELD, Decimal("-0.005")
         ) == 5
 
 
@@ -835,42 +810,47 @@ class TestGoldCompositeScore:
     """黄金 2 指标综合分（spec 099 核心：A+B 简单平均）。"""
 
     def test_current_2026_10_actual(self) -> None:
-        """当前真实数据：金价分位 78% + 实际利率倒数 34.36 → 综合分验证。
-        - 78% 分位 → 4 分（偏高估）
-        - 34.36 倍 → 3 分（正常）
-        - 综合 = (4 + 3) / 2 = 3.5 → 解读"偏高估"
+        """当前真实数据：金价 5 年分位 61.58% + 实际利率 2.91% → 综合分验证。
+        - 61.58% 分位 → 3 分（正常）
+        - 2.91% 实际利率 → 2 分（低估，liubo 修订版）
+        - 综合 = (3 + 2) / 2 = 2.5 → 解读"正常"（半开区间 [2.5, 3.5) = 正常）
+        - 调仓：0.25 仓欠配 + 综合分 2.5 < 3.0 → ADD +1（liubo 修订后变成加仓信号）
         """
         score_a = score_indicator(
-            ValuationIndicatorCode.GOLD_HISTORICAL_PCT, Decimal("0.78")
+            ValuationIndicatorCode.GOLD_HISTORICAL_PCT, Decimal("0.6158")
         )
         score_b = score_indicator(
-            ValuationIndicatorCode.GOLD_REAL_YIELD, Decimal("34.36")
+            ValuationIndicatorCode.GOLD_REAL_YIELD, Decimal("0.0291")
         )
-        assert score_a == 4
-        assert score_b == 3
+        assert score_a == 3
+        assert score_b == 2
         composite = compute_composite_score([score_a, score_b])
-        assert composite == Decimal("3.5")
-        assert interpret_composite_score(composite) == "偏高估"
+        assert composite == Decimal("2.5")
+        # 半开区间 [2.5, 3.5) = 正常（2.5 落在下限边界，归属"正常"区间）
+        assert interpret_composite_score(composite) == "正常"
 
     def test_both_undervalued_low_composite(self) -> None:
-        """两个都低估 → 综合分 1.0-1.5 → "极低"。"""
+        """两个都低估（黄金大底） → 综合分 1.0 → "极低"。"""
         score_a = score_indicator(
             ValuationIndicatorCode.GOLD_HISTORICAL_PCT, Decimal("0.05")  # 1 分
         )
         score_b = score_indicator(
-            ValuationIndicatorCode.GOLD_REAL_YIELD, Decimal("60")  # 1 分
+            ValuationIndicatorCode.GOLD_REAL_YIELD, Decimal("0.05")  # 1 分（实际利率 5%，黄金大底）
         )
         composite = compute_composite_score([score_a, score_b])
         assert composite == Decimal("1.0")
         assert interpret_composite_score(composite) == "极低"
 
     def test_both_overvalued_high_composite(self) -> None:
-        """两个都高估 → 综合分 4.5-5.0 → "极高估"。"""
+        """两个都高估（黄金泡沫）→ 综合分 5.0 → "极高估"。
+
+        实际负利率（如 2020 疫情期 -1%）+ 金价历史新高分位 → 黄金泡沫。
+        """
         score_a = score_indicator(
             ValuationIndicatorCode.GOLD_HISTORICAL_PCT, Decimal("0.95")  # 5 分
         )
         score_b = score_indicator(
-            ValuationIndicatorCode.GOLD_REAL_YIELD, Decimal("10")  # 5 分
+            ValuationIndicatorCode.GOLD_REAL_YIELD, Decimal("-0.01")  # 5 分（实际负利率）
         )
         composite = compute_composite_score([score_a, score_b])
         assert composite == Decimal("5.0")
@@ -888,10 +868,16 @@ class TestGoldFormat5Band:
         assert result == "<10%/30%/70%/90%/≥90%\n1/2/3/4/5"
 
     def test_gold_real_yield_format(self) -> None:
-        """实际利率倒数 5 档：≥50/35/25/15/<15（绝对倍数，multiply_by_100=False 不转百分比）。"""
+        """实际利率 5 档（liubo 2026-10-08 修订版，direction='high'）：
+        ≥3% / 2% / 1% / 0% / <0% (format × 100 显示成百分号)
+        渲染：≥3%/2%/1%/0%/<0%
+        """
         result = format_5band_threshold(
-            DEFAULT_SCORE_BANDS[ValuationIndicatorCode.GOLD_REAL_YIELD],
-            multiply_by_100=False,
+            DEFAULT_SCORE_BANDS[ValuationIndicatorCode.GOLD_REAL_YIELD]
         )
-        # 不 × 100，原值显示
-        assert result == "≥50/35/25/15/<15\n1/2/3/4/5"
+        # direction='high' 首段 ScoreBand 0.03 → score1.low=0.03
+        # 按 s1.low != -∞ 走 score1.low 分支（"≥X"），中间按 score2/3/4.low 排（0.02/0.01/0.00）
+        # 末段 ScoreBand (-1e10, 0) → score5.high=0
+        # 按 s5.high != None 走 score5.high 分支（"<X"）
+        # 渲染：≥3%/2%/1%/0%/<0%
+        assert result == "≥3%/2%/1%/0%/<0%\n1/2/3/4/5"

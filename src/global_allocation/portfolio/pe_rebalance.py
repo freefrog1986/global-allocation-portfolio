@@ -60,7 +60,6 @@ from global_allocation.portfolio.cost_basis import COST_BASIS_BY_CODE
 from global_allocation.portfolio.models import ValuationIndicatorCode
 from global_allocation.portfolio.valuation_indicators import (
     compute_composite_score,
-    compute_gold_real_yield,
     score_indicator,
 )
 
@@ -79,8 +78,8 @@ class ValuationMetric(str, Enum):
     P_FFO = "p_ffo"    # US REIT（MSCI/NAREIT 标准）
     P_NAV = "p_nav"    # 中证 REITs（国内券商惯例）
     # ── 黄金 2 指标（spec 099 — liubo 2026-10-08 拍板 A+B 综合分）───
-    GOLD_HISTORICAL_PCT = "gold_historical_pct"  # SGE Au99.99 10 年分位
-    GOLD_REAL_YIELD = "gold_real_yield"          # 1 / FRED DFII10 实际利率（绝对倍数）
+    GOLD_HISTORICAL_PCT = "gold_historical_pct"  # SGE Au99.99 5 年分位
+    GOLD_REAL_YIELD = "gold_real_yield"          # FRED DFII10 实际利率（fraction 0.0291 = 2.91%）
 
 
 # 指标在卡片 / 报告里的人类可读名
@@ -89,7 +88,7 @@ METRIC_DISPLAY_NAME: dict[ValuationMetric, str] = {
     ValuationMetric.P_FFO: "P/FFO",
     ValuationMetric.P_NAV: "P/NAV",
     ValuationMetric.GOLD_HISTORICAL_PCT: "金价分位",
-    ValuationMetric.GOLD_REAL_YIELD: "1/实际利率",
+    ValuationMetric.GOLD_REAL_YIELD: "实际利率",
 }
 
 
@@ -777,8 +776,9 @@ def _compute_gold_composite(
     输出：综合分 1-5（1=极低估，5=极高估）；None = 数据缺失
 
     步骤：
-    1. 指标 A：金价分位 → score_indicator(1-5)
-    2. 指标 B：1/实际利率（compute_gold_real_yield）→ score_indicator(1-5)
+    1. 指标 A：金价 5 年分位 → score_indicator(1-5)
+    2. 指标 B：实际利率本身（DFII10）→ score_indicator(1-5)
+       方向：实际利率 ↑ → 黄金吸引力 ↓ → 黄金便宜（低估）
     3. 综合分 = (score_a + score_b) / 2（简单平均，spec 098 投票机制）
 
     失败 → 返回 None（让 evaluate_fund 走 SKIP 路径）
@@ -788,12 +788,8 @@ def _compute_gold_composite(
     if gold_pct is None:
         return None
     _, _, real_yield = GOLD_SNAPSHOT_BY_FUND[fund_code]
-    try:
-        gold_real_yield = compute_gold_real_yield(real_yield)
-    except ValueError:
-        return None
     score_a = score_indicator(ValuationIndicatorCode.GOLD_HISTORICAL_PCT, gold_pct)
-    score_b = score_indicator(ValuationIndicatorCode.GOLD_REAL_YIELD, gold_real_yield)
+    score_b = score_indicator(ValuationIndicatorCode.GOLD_REAL_YIELD, real_yield)
     return compute_composite_score([score_a, score_b])
 
 
@@ -986,7 +982,8 @@ def format_weekly_report(actions: list[RebalanceAction], today: date | None = No
                     # 金价单位是 CNY/g，不是倍数
                     val_str = f"{float(a.metric_value):.2f} CNY/g"
                 elif a.metric == ValuationMetric.GOLD_REAL_YIELD:
-                    val_str = f"{float(a.metric_value):.2f}x"
+                    # 实际利率用百分号显示
+                    val_str = f"{float(a.metric_value) * 100:.2f}%"
                 else:
                     val_str = f"{float(a.metric_value):.2f}"
                 val_text = (
