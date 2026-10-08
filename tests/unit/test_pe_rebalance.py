@@ -479,13 +479,28 @@ class TestBuildEvaluations:
         assert cn_reit[0].metric_value is not None
         assert us_reit[0].metric_value is not None
 
-    def test_commodity_has_no_metric(self) -> None:
-        """商品（黄金）metric 缺失 → 仍 SKIP。"""
+    def test_commodity_gold_has_composite_score(self) -> None:
+        """商品（黄金）spec 099 加 2 指标综合分 → 不再 SKIP。
+
+        黄金（000216 华安黄金 ETF 联接）现在有：
+        - metric = GOLD_HISTORICAL_PCT（金价分位主指标，给卡片展示用）
+        - metric_value = 当前 SGE Au99.99 金价（CNY/g）
+        - metric_percentile = 10 年分位（fraction）
+        - composite_score = 2 指标综合分 1-5
+        """
         evals = build_evaluations()
         commodities = [e for e in evals if e.subclass == SwensenClass.COMMODITY]
         assert len(commodities) == 1
-        assert commodities[0].metric_value is None
-        assert commodities[0].metric_percentile is None
+        gold = commodities[0]
+        assert gold.fund_code == "000216"
+        assert gold.metric == ValuationMetric.GOLD_HISTORICAL_PCT
+        assert gold.metric_value is not None  # SGE Au99.99 当前价
+        assert gold.metric_percentile is not None  # 10 年分位
+        assert gold.composite_score is not None  # spec 099 综合分
+        # 综合分 1-5 范围
+        assert Decimal("1") <= gold.composite_score <= Decimal("5")
+        # etf_index_code 改成 GOLD（不再是 GOLD_NO_METRIC）
+        assert gold.etf_index_code == "GOLD"
 
     def test_em_equity_has_metric(self) -> None:
         """新兴市场现在有 PE（不再 SKIP）。"""
@@ -685,13 +700,18 @@ class TestWeeklyRebalancePlan:
         # 019524 已卖出（2026-09-29 liubo），不在合并组
         assert "019524" not in ndx_fund
 
-    def test_reits_and_em_no_longer_skip(self) -> None:
-        """REITs / EM 现在有估值指标 → 不再 SKIP（只剩商品 GOLD_NO_METRIC）。"""
+    def test_no_subclass_left_as_skip(self) -> None:
+        """spec 099 黄金加综合分后，所有子类都不再 SKIP。
+
+        之前历史：REITs / EM 加估值指标后，只剩商品（黄金 GOLD_NO_METRIC）→ SKIP。
+        现在：黄金走 2 指标综合分路径 → 不会再 SKIP。
+        """
         actions = weekly_rebalance_plan()
         skips = [a for a in actions if a.signal == PESignal.SKIP]
-        # 只剩商品（黄金无估值指标）
-        assert len(skips) == 1
-        assert skips[0].subclass == SwensenClass.COMMODITY
+        assert len(skips) == 0, (
+            f"spec 099 后不应再有 SKIP，实际有 {len(skips)} 只："
+            f"{[(s.fund_code, s.subclass.value) for s in skips]}"
+        )
 
     def test_hsi_appears_as_hold_or_build(self) -> None:
         """HSI 恒生指数 watchlist 出现在 plan 里（HSI 分位 63% > 50% → HOLD）。"""

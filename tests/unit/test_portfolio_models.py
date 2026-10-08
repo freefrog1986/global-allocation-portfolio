@@ -223,9 +223,9 @@ class TestValuationIndicatorCode:
     美股 4 维度：PE 分位 / 股息率 / 美股巴菲特 / 美股股债利差（spec 098.3 — liubo 2026-09-20 拍板）
     """
 
-    def test_has_twelve_codes(self) -> None:
-        """4 个 A 股 + 4 个港股 + 4 个美股 = 12 个。"""
-        assert len(ValuationIndicatorCode) == 12
+    def test_has_fourteen_codes(self) -> None:
+        """4 A 股 + 4 港股 + 4 美股 + 2 黄金（spec 099）= 14 个。"""
+        assert len(ValuationIndicatorCode) == 14
 
     def test_specific_values(self) -> None:
         """spec 098 + 098.2 + 098.3 写死的 12 个 code — DB UNIQUE 索引依赖这些字符串。"""

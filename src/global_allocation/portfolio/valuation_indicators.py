@@ -122,6 +122,27 @@ DEFAULT_THRESHOLDS: dict[ValuationIndicatorCode, IndicatorThreshold] = {
         high_min=Decimal("0.02"),
         direction="low",
     ),
+    # ── 黄金 2 指标（spec 099 — liubo 2026-10-08 拍板 A+B 综合分）───
+    # 黄金不像股票有 4 个独立维度（盈利/分红/宏观/相对），用 2 个就够：
+    # - A：价格分位（绝对水平，direction='high'，越大越高估）
+    # - B：实际利率倒数（相对机会成本，direction='low'，越大越低估）
+    #
+    # 指标 A：金价 10 年分位（跟 A 股 PE 分位阈值一致）
+    # direction='high' — 越大越高估
+    ValuationIndicatorCode.GOLD_HISTORICAL_PCT: IndicatorThreshold(
+        low_max=Decimal("0.30"),  # < 30% 低估
+        high_min=Decimal("0.70"),  # > 70% 高估
+        direction="high",
+    ),
+    # 指标 B：实际利率倒数 = 1 / 实际利率（绝对倍数 15-100 范围）
+    # 实际利率 = FRED DFII10 (10Y TIPS)
+    # 阈值依据：实际利率 2% → 1/0.02=50 极低估；实际利率 6.67% → 1/0.0667=15 极高估
+    # direction='low' — 越大越低估（实际利率低 = 黄金便宜）
+    ValuationIndicatorCode.GOLD_REAL_YIELD: IndicatorThreshold(
+        low_max=Decimal("50"),    # ≥ 50 偏低估（实际利率 ≤ 2%）
+        high_min=Decimal("25"),   # ≤ 25 偏高估（实际利率 ≥ 4%）
+        direction="low",
+    ),
 }
 
 
@@ -302,6 +323,28 @@ DEFAULT_SCORE_BANDS: dict[ValuationIndicatorCode, list[ScoreBand]] = {
         ScoreBand(Decimal("0"), Decimal("0.01"), 4, "low"),
         ScoreBand(Decimal("-1e10"), Decimal("0"), 5, "low"),
     ],
+    # ── 黄金 2 指标 5 档（spec 099 — liubo 2026-10-08）───
+    # 黄金分位：跟 A 股 PE 分位阈值完全一致（30/70 是 3 段边界，10/90 是 5 段延伸）
+    ValuationIndicatorCode.GOLD_HISTORICAL_PCT: [
+        ScoreBand(Decimal("-1e10"), Decimal("0.10"), 1, "high"),
+        ScoreBand(Decimal("0.10"), Decimal("0.30"), 2, "high"),
+        ScoreBand(Decimal("0.30"), Decimal("0.70"), 3, "high"),
+        ScoreBand(Decimal("0.70"), Decimal("0.90"), 4, "high"),
+        ScoreBand(Decimal("0.90"), None, 5, "high"),
+    ],
+    # 实际利率倒数（direction='low'：越大越低估）
+    #   极低估(1):   value ≥ 50    (实际利率 ≤ 2%)
+    #   低估(2):     35 ≤ value < 50  (实际利率 2-2.86%)
+    #   正常(3):     25 ≤ value < 35  (实际利率 2.86-4%)
+    #   偏高估(4):   15 ≤ value < 25  (实际利率 4-6.67%)
+    #   极高估(5):   value < 15    (实际利率 > 6.67%)
+    ValuationIndicatorCode.GOLD_REAL_YIELD: [
+        ScoreBand(Decimal("50"), None, 1, "low"),
+        ScoreBand(Decimal("35"), Decimal("50"), 2, "low"),
+        ScoreBand(Decimal("25"), Decimal("35"), 3, "low"),
+        ScoreBand(Decimal("15"), Decimal("25"), 4, "low"),
+        ScoreBand(Decimal("-1e10"), Decimal("15"), 5, "low"),
+    ],
 }
 
 
@@ -377,6 +420,31 @@ def compute_buffett_indicator(
     if gdp <= Decimal("0"):
         raise ValueError(f"GDP 必须为正数，实际 {gdp}")
     return market_cap / gdp
+
+
+def compute_gold_real_yield(
+    real_yield: Decimal,
+) -> Decimal:
+    """黄金实际利率倒数 = 1 / 实际利率（spec 099 指标 B）。
+
+    金融学逻辑：黄金 = 无息资产，机会成本 = 美国 10Y 实际利率（TIPS）。
+    实际利率越低 → 持有黄金越便宜（机会成本小）。
+    返回 0~N 范围的绝对倍数（不是 fraction）：
+    - real_yield=2.91% → 1/0.0291 ≈ 34.36
+    - real_yield=1.0%  → 1/0.01 = 100
+    - real_yield=5.0%  → 1/0.05 = 20
+
+    direction='low'：越大越低估（实际利率低 = 黄金便宜）
+
+    边界：
+    - real_yield <= 0 → 抛 ValueError（实际利率为负或为 0：
+      - 负：实际利率为负是历史常态（如 2020 疫情期 -1%），但 spec 099 第六十二条
+        "实际利率 ≤ 0 → 抛 ValueError" 视为数据异常保守处理
+      - 0：分母为零数学错误）
+    """
+    if real_yield <= Decimal("0"):
+        raise ValueError(f"实际利率必须为正数，实际 {real_yield}")
+    return Decimal("1") / real_yield
 
 
 def compute_verdict(
@@ -480,12 +548,16 @@ def interpret_composite_score(composite: Decimal) -> str:
     return "极高估"
 
 
-def format_5band_threshold(bands: list[ScoreBand]) -> str:
+def format_5band_threshold(bands: list[ScoreBand], multiply_by_100: bool = True) -> str:
     """把 1 个指标的 5 个 ScoreBand 格式化成卡片阈值文案（spec 098 第二十四轮）。
 
     格式：2 行（用 \\n 分隔，飞书 table cell 支持换行）：
         行 1：5 个分界点    "≥5%/4%/2%/0%/<0%"
         行 2：5 个分数对应  "1/2/3/4/5"
+
+    multiply_by_100：True（默认）→ 所有值 × 100 显示成百分号（PE 分位、股债利差等）
+                    False → 原值显示（spec 099 黄金实际利率倒数 1/r 是绝对倍数 15-100
+                    范围，× 100 显示成 1500%/1000% 没有意义，用原值显示 "≥50/35/25/15/<15"）
 
     渲染规则（按 score 1→5 排序）：
 
@@ -531,30 +603,31 @@ def format_5band_threshold(bands: list[ScoreBand]) -> str:
     if len(sorted_bands) != 5:
         return ""  # 兜底：只支持 5 档
     s1, _, _, _, s5 = sorted_bands
+    suffix = "%" if multiply_by_100 else ""
+
+    def _fmt(v: Decimal) -> str:
+        if multiply_by_100:
+            return f"{float(v) * 100:g}{suffix}"
+        return f"{float(v):g}"
+
     points: list[str] = []
     if s1.low <= Decimal("-1e9"):
         # score1 哨兵：用 score1.high 作左端（"<X"），中间按 score2/3/4.high 排
-        v = float(s1.high) * 100
-        points.append(f"<{v:g}%")
+        points.append(f"<{_fmt(s1.high)}")
         for i in (1, 2, 3):
-            v = float(sorted_bands[i].high) * 100
-            points.append(f"{v:g}%")
+            points.append(_fmt(sorted_bands[i].high))
     else:
         # score1 正常：用 score1.low 作左端（"≥X"），中间按 score2/3/4.low 排
-        v = float(s1.low) * 100
-        points.append(f"≥{v:g}%")
+        points.append(f"≥{_fmt(s1.low)}")
         for i in (1, 2, 3):
-            v = float(sorted_bands[i].low) * 100
-            points.append(f"{v:g}%")
+            points.append(_fmt(sorted_bands[i].low))
     # 右端
     if s5.high is None:
         # 哨兵：用 score5.low 作右端（"≥X"）
-        v = float(s5.low) * 100
-        points.append(f"≥{v:g}%")
+        points.append(f"≥{_fmt(s5.low)}")
     else:
         # 正常：用 score5.high 作右端（"<X"）
-        v = float(s5.high) * 100
-        points.append(f"<{v:g}%")
+        points.append(f"<{_fmt(s5.high)}")
     scores = [str(b.score) for b in sorted_bands]
     return "/".join(points) + "\n" + "/".join(scores)
 
@@ -567,6 +640,7 @@ __all__ = [
     "compute_equity_risk_premium",
     "compute_pe_percentile",
     "compute_buffett_indicator",
+    "compute_gold_real_yield",
     "compute_verdict",
     "score_indicator",
     "compute_composite_score",

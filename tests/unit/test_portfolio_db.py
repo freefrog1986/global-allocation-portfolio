@@ -329,17 +329,18 @@ class TestValuationIndicators:
         assert cur.fetchone()[0] == 1
 
     def test_different_codes_coexist(self, db: PortfolioDB) -> None:
-        """同一天 12 个不同指标（4 A 股 + 4 港股 + 4 美股）→ 12 条独立记录（不互相覆盖）。
+        """同一天 14 个不同指标（4 A 股 + 4 港股 + 4 美股 + 2 黄金）→ 14 条独立记录（不互相覆盖）。
 
         spec 098.2：港股加 4 个 indicator_code 后总数从 4 变 8。
         spec 098.3：美股再加 4 个 indicator_code 后总数从 8 变 12。
+        spec 099：黄金再加 2 个 indicator_code 后总数从 12 变 14。
         """
         for code in ValuationIndicatorCode:
             db.upsert_valuation_indicator(
                 self._ind(code=code, value=Decimal("0.05"))
             )
         day_indicators = db.list_valuation_indicators_for_date(date(2026, 9, 19))
-        assert len(day_indicators) == 12
+        assert len(day_indicators) == 14
         assert {i.indicator_code for i in day_indicators} == set(ValuationIndicatorCode)
 
     def test_different_days_coexist(self, db: PortfolioDB) -> None:

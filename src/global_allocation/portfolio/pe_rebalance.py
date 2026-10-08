@@ -57,17 +57,30 @@ from typing import Iterable
 
 from global_allocation.portfolio.breakdown import SwensenClass
 from global_allocation.portfolio.cost_basis import COST_BASIS_BY_CODE
+from global_allocation.portfolio.models import ValuationIndicatorCode
+from global_allocation.portfolio.valuation_indicators import (
+    compute_composite_score,
+    compute_gold_real_yield,
+    score_indicator,
+)
 
 
 # ─── 类型 ──────────────────────────────────────────
 
 
 class ValuationMetric(str, Enum):
-    """估值指标类型（liubo 2026-09-24 扩展，支持 REITs 用 P/FFO / P/NAV）。"""
+    """估值指标类型（liubo 2026-09-24 扩展，支持 REITs 用 P/FFO / P/NAV）。
+
+    spec 099 黄金：加 2 个黄金指标类型（GOLD_HISTORICAL_PCT + GOLD_REAL_YIELD），
+    但黄金调仓走 composite_score（综合分 1-5）而不是单分位，所以 metric 字段只用于展示。
+    """
 
     PE_TTM = "pe_ttm"  # 股票类（PE-TTM）
     P_FFO = "p_ffo"    # US REIT（MSCI/NAREIT 标准）
     P_NAV = "p_nav"    # 中证 REITs（国内券商惯例）
+    # ── 黄金 2 指标（spec 099 — liubo 2026-10-08 拍板 A+B 综合分）───
+    GOLD_HISTORICAL_PCT = "gold_historical_pct"  # SGE Au99.99 10 年分位
+    GOLD_REAL_YIELD = "gold_real_yield"          # 1 / FRED DFII10 实际利率（绝对倍数）
 
 
 # 指标在卡片 / 报告里的人类可读名
@@ -75,6 +88,8 @@ METRIC_DISPLAY_NAME: dict[ValuationMetric, str] = {
     ValuationMetric.PE_TTM: "PE-TTM",
     ValuationMetric.P_FFO: "P/FFO",
     ValuationMetric.P_NAV: "P/NAV",
+    ValuationMetric.GOLD_HISTORICAL_PCT: "金价分位",
+    ValuationMetric.GOLD_REAL_YIELD: "1/实际利率",
 }
 
 
@@ -96,12 +111,13 @@ class FundPEvaluation:
     - fund_code: 基金代码（合并组用 "+" 连接；watchlist 用 "(INDEX_CODE)" 标记）。
     - fund_name: 基金中文名（飞书表格展示用）。
     - subclass: SwensenClass 子类。
-    - etf_index_code: 跟踪指数的代码（如 "000510" 中证 A500、".INX" 标普 500、"HSI" 恒生）。
+    - etf_index_code: 跟踪指数的代码（如 "000510" 中证 A500、".INX" 标普 500、"HSI" 恒生、"GOLD" 黄金）。
     - etf_index_name: 指数中文名。
-    - metric: 估值指标（PE-TTM / P-FFO / P-NAV）。
-    - metric_value: 估值倍数（None = 数据缺失；PE 15.89 / P/FFO 19.7 / P/NAV 1.03）。
+    - metric: 估值指标（PE-TTM / P-FFO / P-NAV / GOLD_HISTORICAL_PCT / GOLD_REAL_YIELD）。
+    - metric_value: 估值倍数（None = 数据缺失；PE 15.89 / P/FFO 19.7 / P/NAV 1.03 / 金价 615.50 / 1/r 34.36）。
     - metric_percentile: 10 年分位（None = 数据缺失；fraction, 0.1694 = 16.94%）。
     - current_position: 当前仓位（单位 = 1 万 CNY；cost / 10000）。
+    - composite_score: 综合分 1-5（spec 099 黄金专用；股票留 None 走分位路径）。
     """
 
     fund_code: str
@@ -113,6 +129,7 @@ class FundPEvaluation:
     metric_value: Decimal | None
     metric_percentile: Decimal | None
     current_position: Decimal
+    composite_score: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +148,7 @@ class RebalanceAction:
     metric_value: Decimal | None
     metric_percentile: Decimal | None
     current_position: Decimal
+    composite_score: Decimal | None = None  # spec 099 黄金专用
 
 
 # ─── 硬编码估值 snapshot (2026-09-24 liubo 灌的数据 + WebSearch) ────────
@@ -177,6 +195,10 @@ PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal, Decimal]] = {
     ".MSCI_US_REIT": (ValuationMetric.P_FFO, Decimal("19.70"), Decimal("0.60")),  # MSCI US REIT
     # ── 国内 REITs（P/NAV，招商/中金标准）──
     "932006": (ValuationMetric.P_NAV, Decimal("1.03"), Decimal("0.34")),       # 中证 REITs 指数
+    # ── 黄金（spec 099 — liubo 2026-10-08）──
+    # 主指标存金价分位（给卡片展示用），调仓信号走 composite_score
+    # 综合分在 GOLD_SNAPSHOT 算好后 build_evaluations 填入 FundPEvaluation.composite_score
+    "GOLD": (ValuationMetric.GOLD_HISTORICAL_PCT, Decimal("615.50"), Decimal("0.78")),  # SGE Au99.99 2026-10-08
 }
 
 
@@ -219,8 +241,10 @@ FUND_INDEX_MAP: dict[str, tuple[SwensenClass, str, str]] = {
     # REITs / 商品 — 用各自 REITs 指标，不再 SKIP
     "028277": (SwensenClass.CN_REIT, "932006", "华夏中证 REITs"),
     "160140": (SwensenClass.US_REIT, ".MSCI_US_REIT", "南方道琼斯美国 REIT"),
-    # 商品 — 黄金 PE 不适用，仍标 None 让 evaluate_fund 返回 SKIP
-    "000216": (SwensenClass.COMMODITY, "GOLD_NO_METRIC", "华安黄金 ETF 联接"),
+    # 商品 — 黄金 (spec 099 — liubo 2026-10-08 加 2 指标综合分)
+    # 黄金走 GOLD 指数代码 → PE_SNAPSHOT_BY_INDEX 取主指标（分位），
+    # composite_score 字段塞综合分 1-5 → _evaluate_signal 走 3.0/4.0 边界
+    "000216": (SwensenClass.COMMODITY, "GOLD", "华安黄金 ETF 联接"),
 }
 
 # Watchlist：没持仓但想跟踪的指数（liubo 2026-09-24 加 HSI 恒生指数；
@@ -284,7 +308,37 @@ INDEX_DISPLAY_NAME: dict[str, str] = {
     ".MSCI_US_REIT": "MSCI US REIT",
     "932006": "中证 REITs",
     "HSI": "恒生指数",
-    "GOLD_NO_METRIC": "黄金 (无估值指标)",
+    "GOLD": "黄金",
+}
+
+
+# ─── 黄金 2 指标 snapshot（spec 099 — liubo 2026-10-08 拍板）───
+# 黄金不用 PE_SNAPSHOT_BY_INDEX 那套单一指标分位，而是用 2 指标综合分。
+# GOLD_SNAPSHOT_BY_FUND 存黄金基金的 2 指标原始值：
+#   - gold_price: 当前 SGE Au99.99 价格（CNY/g）
+#   - gold_pct_10y: 10 年分位（fraction: 0.78 = 78%）
+#   - real_yield_dfii10: FRED DFII10 当前值（fraction: 0.0291 = 2.91%）
+#
+# 综合分 = (score_gold_historical_pct + score_gold_real_yield) / 2
+# 调仓规则跟股票一样（3.0/4.0 边界替代 0.5/0.8 边界）
+#
+# 数据源：
+#   金价：akshare.spot_golden_benchmark_sge（日频）
+#   实际利率：FRED CSV https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFII10（日频，国内可达）
+#   10 年分位：手工 weekly 算（或后续接 akshare fetcher 自动算）
+#
+# 当前快照（2026-10-08 liubo 手工录入）：
+#   SGE Au99.99 = 615.50 CNY/g
+#   10 年分位 = 78%（偏高估区间）
+#   FRED DFII10 = 2.91%（2026-10-06）
+#   → 1/r = 1/0.0291 ≈ 34.36（正常区间，3 分）
+#   → 综合分 (4+3)/2 = 3.5（"偏高估"）
+GOLD_SNAPSHOT_BY_FUND: dict[str, tuple[Decimal, Decimal, Decimal]] = {
+    "000216": (
+        Decimal("615.50"),  # 金价 SGE Au99.99 CNY/g
+        Decimal("0.78"),    # 10 年分位 78%
+        Decimal("0.0291"),  # FRED DFII10 实际利率 2.91%
+    ),
 }
 
 
@@ -327,6 +381,10 @@ def evaluate_fund(
 
 def _evaluate_signal(eval: FundPEvaluation) -> RebalanceAction:
     """纯信号评估（不应用冷却期）。测试 + 内部用。"""
+    # 黄金走综合分路径（spec 099 — 2 指标简单平均 1-5）
+    if eval.composite_score is not None:
+        return _evaluate_gold_signal(eval)
+
     # 数据缺失
     if eval.metric_percentile is None:
         return RebalanceAction(
@@ -474,6 +532,158 @@ def _evaluate_signal(eval: FundPEvaluation) -> RebalanceAction:
     )
 
 
+def _evaluate_gold_signal(eval: FundPEvaluation) -> RebalanceAction:
+    """黄金综合分调仓（spec 099 — liubo 2026-10-08 拍板 A+B 综合分）。
+
+    跟股票规则同结构，但边界从 0.5/0.8 分位 改成 3.0/4.0 综合分：
+    - 仓位 = 0 + 综合分 < 3.0 → BUILD +1
+    - 仓位 = 0 + 综合分 >= 3.0 → HOLD
+    - 仓位 in (0, 1) + 综合分 < 3.0 → ADD +1
+    - 仓位 in (0, 1) + 3.0 <= 综合分 <= 4.0 → HOLD
+    - 仓位 in (0, 1) + 综合分 > 4.0 → REDUCE -1
+    - 仓位 >= 1 + 综合分 < 2.0 → ADD +1（深价值例外）
+    - 仓位 >= 1 + 2.0 <= 综合分 <= 4.0 → HOLD
+    - 仓位 >= 1 + 综合分 > 4.0 → REDUCE -1
+    - composite_score 缺失 → SKIP
+    """
+    assert eval.composite_score is not None  # _evaluate_signal 已检查
+    score = eval.composite_score
+    pos = eval.current_position
+
+    # 仓位 = 0
+    if pos == Decimal("0"):
+        if score < Decimal("3.0"):
+            return RebalanceAction(
+                fund_code=eval.fund_code,
+                fund_name=eval.fund_name,
+                subclass=eval.subclass,
+                etf_index_code=eval.etf_index_code,
+                etf_index_name=eval.etf_index_name,
+                metric=eval.metric,
+                signal=PESignal.BUILD,
+                change=Decimal("1"),
+                reason=f"空仓 + 综合分 {score} < 3.0 → 建仓",
+                metric_value=eval.metric_value,
+                metric_percentile=eval.metric_percentile,
+                current_position=pos,
+                composite_score=score,
+            )
+        return RebalanceAction(
+            fund_code=eval.fund_code,
+            fund_name=eval.fund_name,
+            subclass=eval.subclass,
+            etf_index_code=eval.etf_index_code,
+            etf_index_name=eval.etf_index_name,
+            metric=eval.metric,
+            signal=PESignal.HOLD,
+            change=Decimal("0"),
+            reason=f"空仓 + 综合分 {score} >= 3.0 → 等便宜",
+            metric_value=eval.metric_value,
+            metric_percentile=eval.metric_percentile,
+            current_position=pos,
+            composite_score=score,
+        )
+
+    # 仓位 in (0, 1) — 「欠配」状态
+    if pos < Decimal("1"):
+        if score < Decimal("3.0"):
+            return RebalanceAction(
+                fund_code=eval.fund_code,
+                fund_name=eval.fund_name,
+                subclass=eval.subclass,
+                etf_index_code=eval.etf_index_code,
+                etf_index_name=eval.etf_index_name,
+                metric=eval.metric,
+                signal=PESignal.ADD,
+                change=Decimal("1"),
+                reason=f"欠配 + 综合分 {score} < 3.0 → 加 1 仓凑目标",
+                metric_value=eval.metric_value,
+                metric_percentile=eval.metric_percentile,
+                current_position=pos,
+                composite_score=score,
+            )
+        if score > Decimal("4.0"):
+            return RebalanceAction(
+                fund_code=eval.fund_code,
+                fund_name=eval.fund_name,
+                subclass=eval.subclass,
+                etf_index_code=eval.etf_index_code,
+                etf_index_name=eval.etf_index_name,
+                metric=eval.metric,
+                signal=PESignal.REDUCE,
+                change=Decimal("-1"),
+                reason=f"综合分 {score} > 4.0 → 减仓",
+                metric_value=eval.metric_value,
+                metric_percentile=eval.metric_percentile,
+                current_position=pos,
+                composite_score=score,
+            )
+        return RebalanceAction(
+            fund_code=eval.fund_code,
+            fund_name=eval.fund_name,
+            subclass=eval.subclass,
+            etf_index_code=eval.etf_index_code,
+            etf_index_name=eval.etf_index_name,
+            metric=eval.metric,
+            signal=PESignal.HOLD,
+            change=Decimal("0"),
+            reason=f"欠配 + 综合分 {score} (3.0-4.0) → 区间内不动",
+            metric_value=eval.metric_value,
+            metric_percentile=eval.metric_percentile,
+            current_position=pos,
+            composite_score=score,
+        )
+
+    # 仓位 >= 1 — 已配足：只有深价值（< 2.0）才继续加
+    if score < Decimal("2.0"):
+        return RebalanceAction(
+            fund_code=eval.fund_code,
+            fund_name=eval.fund_name,
+            subclass=eval.subclass,
+            etf_index_code=eval.etf_index_code,
+            etf_index_name=eval.etf_index_name,
+            metric=eval.metric,
+            signal=PESignal.ADD,
+            change=Decimal("1"),
+            reason=f"已配足 + 综合分 {score} < 2.0 → 深价值加仓",
+            metric_value=eval.metric_value,
+            metric_percentile=eval.metric_percentile,
+            current_position=pos,
+            composite_score=score,
+        )
+    if score > Decimal("4.0"):
+        return RebalanceAction(
+            fund_code=eval.fund_code,
+            fund_name=eval.fund_name,
+            subclass=eval.subclass,
+            etf_index_code=eval.etf_index_code,
+            etf_index_name=eval.etf_index_name,
+            metric=eval.metric,
+            signal=PESignal.REDUCE,
+            change=Decimal("-1"),
+            reason=f"综合分 {score} > 4.0 → 减仓",
+            metric_value=eval.metric_value,
+            metric_percentile=eval.metric_percentile,
+            current_position=pos,
+            composite_score=score,
+        )
+    return RebalanceAction(
+        fund_code=eval.fund_code,
+        fund_name=eval.fund_name,
+        subclass=eval.subclass,
+        etf_index_code=eval.etf_index_code,
+        etf_index_name=eval.etf_index_name,
+        metric=eval.metric,
+        signal=PESignal.HOLD,
+        change=Decimal("0"),
+        reason=f"综合分 {score} (2.0-4.0) → 区间内不动",
+        metric_value=eval.metric_value,
+        metric_percentile=eval.metric_percentile,
+        current_position=pos,
+        composite_score=score,
+    )
+
+
 def _apply_cooldown(action: RebalanceAction, today: date) -> RebalanceAction:
     """月度冷却期检查（liubo 2026-09-25 拍板）。
 
@@ -526,7 +736,8 @@ def build_evaluations() -> list[FundPEvaluation]:
     """从 FUND_INDEX_MAP + PE_SNAPSHOT_BY_INDEX + COST_BASIS_BY_CODE 构建评估列表。
 
     每只基金 1 个 FundPEvaluation（不合并 — 由 merge_by_etf 后续处理）。
-    snapshot 缺数据的（如 000216 商品用 GOLD_NO_METRIC）→ PE=None → evaluate_fund 返回 SKIP。
+    snapshot 缺数据的 → PE=None → evaluate_fund 返回 SKIP。
+    黄金（spec 099）：额外从 GOLD_SNAPSHOT_BY_FUND 算 2 指标综合分填 composite_score。
     """
     out: list[FundPEvaluation] = []
     for fund_code, (subclass, index_code, fund_name) in FUND_INDEX_MAP.items():
@@ -535,6 +746,8 @@ def build_evaluations() -> list[FundPEvaluation]:
             metric, value, pct = ValuationMetric.PE_TTM, None, None
         else:
             metric, value, pct = snapshot
+        # 黄金算综合分（spec 099）
+        composite = _compute_gold_composite(fund_code, value, pct)
         out.append(
             FundPEvaluation(
                 fund_code=fund_code,
@@ -546,9 +759,41 @@ def build_evaluations() -> list[FundPEvaluation]:
                 metric_value=value,
                 metric_percentile=pct,
                 current_position=get_current_position(fund_code),
+                composite_score=composite,
             )
         )
     return out
+
+
+def _compute_gold_composite(
+    fund_code: str,
+    gold_price: Decimal | None,
+    gold_pct: Decimal | None,
+) -> Decimal | None:
+    """算黄金 2 指标综合分（spec 099 — liubo 2026-10-08）。
+
+    输入：fund_code（从 GOLD_SNAPSHOT_BY_FUND 取指标）
+    输出：综合分 1-5（1=极低估，5=极高估）；None = 数据缺失
+
+    步骤：
+    1. 指标 A：金价分位 → score_indicator(1-5)
+    2. 指标 B：1/实际利率（compute_gold_real_yield）→ score_indicator(1-5)
+    3. 综合分 = (score_a + score_b) / 2（简单平均，spec 098 投票机制）
+
+    失败 → 返回 None（让 evaluate_fund 走 SKIP 路径）
+    """
+    if fund_code not in GOLD_SNAPSHOT_BY_FUND:
+        return None
+    if gold_pct is None:
+        return None
+    _, _, real_yield = GOLD_SNAPSHOT_BY_FUND[fund_code]
+    try:
+        gold_real_yield = compute_gold_real_yield(real_yield)
+    except ValueError:
+        return None
+    score_a = score_indicator(ValuationIndicatorCode.GOLD_HISTORICAL_PCT, gold_pct)
+    score_b = score_indicator(ValuationIndicatorCode.GOLD_REAL_YIELD, gold_real_yield)
+    return compute_composite_score([score_a, score_b])
 
 
 def build_watchlist_evaluations() -> list[FundPEvaluation]:
@@ -730,11 +975,19 @@ def format_weekly_report(actions: list[RebalanceAction], today: date | None = No
             }[a.signal]
             metric_name = METRIC_DISPLAY_NAME[a.metric]
             if a.metric_value is not None and a.metric_percentile is not None:
-                val_str = (
-                    f"{float(a.metric_value):.2f}"
-                    if a.metric in (ValuationMetric.PE_TTM, ValuationMetric.P_FFO)
-                    else f"{float(a.metric_value):.2f}x"
-                )
+                if a.metric == ValuationMetric.PE_TTM:
+                    val_str = f"{float(a.metric_value):.2f}"
+                elif a.metric == ValuationMetric.P_FFO:
+                    val_str = f"{float(a.metric_value):.2f}x"
+                elif a.metric == ValuationMetric.P_NAV:
+                    val_str = f"{float(a.metric_value):.2f}x"
+                elif a.metric == ValuationMetric.GOLD_HISTORICAL_PCT:
+                    # 金价单位是 CNY/g，不是倍数
+                    val_str = f"{float(a.metric_value):.2f} CNY/g"
+                elif a.metric == ValuationMetric.GOLD_REAL_YIELD:
+                    val_str = f"{float(a.metric_value):.2f}x"
+                else:
+                    val_str = f"{float(a.metric_value):.2f}"
                 val_text = (
                     f"{metric_name} {val_str} / 分位 {float(a.metric_percentile) * 100:.2f}%"
                 )

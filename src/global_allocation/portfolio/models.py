@@ -185,6 +185,13 @@ class ValuationIndicatorCode(str, Enum):
     US_BUFFETT_INDICATOR = "us_buffett_indicator"  # US 总市值 / US GDP
     US_EQUITY_RISK_PREMIUM = "us_equity_risk_premium"  # 美股股债利差 = 1/PE - 美 10Y 国债
 
+    # ── 黄金 2 指标（spec 099 — liubo 2026-10-08 拍板 A+B 综合分）───
+    # 黄金不像股票有 4 个独立维度（盈利/分红/宏观/相对），用 2 个就够：
+    # - A：价格分位（绝对水平）
+    # - B：实际利率倒数（相对机会成本）
+    GOLD_HISTORICAL_PCT = "gold_historical_pct"  # SGE Au99.99 10 年分位（direction='high'，越大越高估）
+    GOLD_REAL_YIELD = "gold_real_yield"  # 1 / FRED DFII10 实际利率（direction='low'，越大越低估）
+
 
 class ValuationIndicator(_FrozenModel):
     """单日单个估值指标快照（spec 098）。
