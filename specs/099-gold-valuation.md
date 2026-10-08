@@ -26,9 +26,9 @@
 
 ## 选定的 2 个估值指标
 
-### 指标 A：金价 10 年分位（GOLD_HISTORICAL_PCT）
+### 指标 A：金价 5 年分位（GOLD_HISTORICAL_PCT）
 
-- 公式：当前金价在过去 10 年金价序列里的百分位
+- 公式：当前金价在过去 5 年金价序列里的百分位
 - 数据源：akshare `spot_golden_benchmark_sge`（SGE Au99.99 上海黄金交易所基准价，日频）
 - 阈值（direction='high' — 越大越高估）：
   - 极低估 (1):  < 30% 分位
@@ -37,7 +37,11 @@
   - 偏高估 (4):  70% ≤ value < 90%
   - 极高估 (5):  ≥ 90% 分位
 - 优点：跟 A 股 PE 分位方法完全一致，复用 compute_pe_percentile 函数（金价当 PE 用）
-- 缺点：金价趋势性强（2015-2024 长期上涨），分位可能长期贴边；需要配合 B 指标交叉验证
+- 缺点：金价趋势性强（2020 起飞到现在），分位可能长期贴边；需要配合 B 指标交叉验证
+- **窗口选择（liubo 2026-10-08 拍板用 5 年不是 10 年）**：
+  - 5 年 = 1 轮完整黄金牛熊（2020 起飞 → 2024 高点 → 2025 整理），更能反映"近 1 轮"估值
+  - 10 年多算 2016-2020 横盘段（350-450 USD/oz 低位），拉低分位、钝化
+  - 当前实测 5 年分位 61.58% vs 10 年分位 65.54%（差 4 个百分点）
 
 ### 指标 B：实际利率倒数法（GOLD_REAL_YIELD）
 
@@ -50,6 +54,13 @@
   - FRED 国内直连可达（已测 2026-10-08 curl 通）
   - 不需要 API key（CSV 公共接口）
   - fallback：手动每周 hardcode DFII10 当前值
+- **为什么用 TIPS 实际利率而不是 DGS10 名义利率（liubo 2026-10-08 疑问澄清）**：
+  - DGS10 = 10Y 名义国债收益率（5.27% 2026-10-06）
+  - DFII10 = 10Y TIPS 实际利率（2.91% 2026-10-06）
+  - 三角恒等：DGS10 - DFII10 = T10YIE 通胀预期（2.36%）
+  - 黄金 = 抗通胀资产，天然吃回通胀补偿（2.36%），所以持有黄金的"真实机会成本"是实际利率 2.91%（不是名义 5.27%）
+  - 教科书 / 央行黄金研究 / Dalio《债务危机》都按 TIPS 实际利率估值
+  - 用 DGS10 名义利率会高估持有成本（5.27% 里 2.36% 是通胀补偿，黄金天然抗）
 - 阈值（direction='low' — 越大越低估）：
   - 极低估 (1):  估值 ≥ 50     (实际利率 ≤ 2%)
   - 低估 (2):    35 ≤ value < 50  (实际利率 2-2.86%)
@@ -118,11 +129,11 @@ class ValuationIndicatorCode(str, Enum):
 # 黄金不放在 PE_SNAPSHOT_BY_INDEX（那是 PE/分位单一指标快照）
 # 黄金用专用结构 GOLD_SNAPSHOT
 GOLD_SNAPSHOT: dict[str, tuple[Decimal, Decimal, Decimal, Decimal]] = {
-    # fund_code → (gold_price, gold_pct_10y, real_yield_dfii10, gold_real_yield_value)
+    # fund_code → (gold_price, gold_pct_5y, real_yield_dfii10, gold_real_yield_value)
     "000216": (
-        Decimal("615.50"),  # SGE Au99.99 当前价 CNY/g（2026-10-08 手工录入）
-        Decimal("0.78"),    # 10 年分位 78%（2026-10-08）
-        Decimal("0.0291"),  # FRED DFII10 当前 2.91%（2026-10-06）
+        Decimal("907.50"),  # SGE Au99.99 当前价 CNY/g（akshare 2026-09-29）
+        Decimal("0.6158"),  # 5 年分位 61.58%（liubo 2026-10-08 拍板 5 年）
+        Decimal("0.0291"),  # FRED DFII10 当前 2.91%（2026-10-06，TIPS 实际利率）
         Decimal("34.36"),   # 1/0.0291 = 34.36（compute 自动算）
     ),
 }

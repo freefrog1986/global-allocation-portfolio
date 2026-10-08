@@ -198,7 +198,8 @@ PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal, Decimal]] = {
     # ── 黄金（spec 099 — liubo 2026-10-08）──
     # 主指标存金价分位（给卡片展示用），调仓信号走 composite_score
     # 综合分在 GOLD_SNAPSHOT 算好后 build_evaluations 填入 FundPEvaluation.composite_score
-    "GOLD": (ValuationMetric.GOLD_HISTORICAL_PCT, Decimal("615.50"), Decimal("0.78")),  # SGE Au99.99 2026-10-08
+    # 2026-10-08 改：金价 907.50 + 5 年分位 61.58%（liubo 拍板用 5 年分位）
+    "GOLD": (ValuationMetric.GOLD_HISTORICAL_PCT, Decimal("907.50"), Decimal("0.6158")),  # SGE Au99.99 5 年分位 2026-10-08
 }
 
 
@@ -325,19 +326,19 @@ INDEX_DISPLAY_NAME: dict[str, str] = {
 # 数据源：
 #   金价：akshare.spot_golden_benchmark_sge（日频）
 #   实际利率：FRED CSV https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFII10（日频，国内可达）
-#   10 年分位：手工 weekly 算（或后续接 akshare fetcher 自动算）
+#   5 年分位：手工 weekly 算（akshare 拉历史金价 → 5 年窗口算分位）
 #
-# 当前快照（2026-10-08 liubo 手工录入）：
-#   SGE Au99.99 = 615.50 CNY/g
-#   10 年分位 = 78%（偏高估区间）
-#   FRED DFII10 = 2.91%（2026-10-06）
+# 当前快照（2026-10-08 liubo 录入 — 5 年分位 + TIPS 实际利率 liubo 拍板）：
+#   SGE Au99.99 = 907.50 CNY/g（akshare 2026-09-29 最新）
+#   5 年分位 = 61.58%（2021-08-05 → 2026-09-29，最低 361.47，最高 1248.22）
+#   FRED DFII10 = 2.91%（2026-10-06，TIPS 10Y 实际利率）
 #   → 1/r = 1/0.0291 ≈ 34.36（正常区间，3 分）
-#   → 综合分 (4+3)/2 = 3.5（"偏高估"）
+#   → 综合分 (3+3)/2 = 3.0（"正常"）
 GOLD_SNAPSHOT_BY_FUND: dict[str, tuple[Decimal, Decimal, Decimal]] = {
     "000216": (
-        Decimal("615.50"),  # 金价 SGE Au99.99 CNY/g
-        Decimal("0.78"),    # 10 年分位 78%
-        Decimal("0.0291"),  # FRED DFII10 实际利率 2.91%
+        Decimal("907.50"),  # 金价 SGE Au99.99 CNY/g（akshare 2026-09-29）
+        Decimal("0.6158"),  # 5 年分位 61.58%（liubo 2026-10-08 拍板用 5 年）
+        Decimal("0.0291"),  # FRED DFII10 实际利率 2.91%（TIPS）
     ),
 }
 
