@@ -683,17 +683,20 @@ class TestWeeklyRebalancePlan:
         assert len(a500_actions) == 1
         assert a500_actions[0].signal == PESignal.HOLD
 
-    def test_ndx_triggers_hold(self) -> None:
-        """纳 100 合并 5 只（1 联接 + 4 直接 QDII 场外），仓位 0.30 + 分位 60% → HOLD。
+    def test_ndx_skips_when_data_missing(self) -> None:
+        """纳 100 合并 5 只（1 联接 + 4 直接 QDII 场外）。
 
         liubo 2026-09-29 卖出 019524 + 加 019172/019441：合并组剩 5 只。
         fund_code = 5 只 "+" 串联；仓位 = 1 联接 + 3 直接 QDII 累计 / 10000 = 0.30 仓
         （019172/019441 初始成本 0；019524 已卖 -20）。
+
+        2026-10-09 liubo 拍板清空：理杏仁 CSV 没 NDX 数据 → entry 删除 → 5 只 SKIP
+        （估值数据缺失，规则上不能调仓）。
         """
         actions = weekly_rebalance_plan()
         ndx_actions = [a for a in actions if ".NDX" in a.etf_index_code]
         assert len(ndx_actions) == 1
-        assert ndx_actions[0].signal == PESignal.HOLD
+        assert ndx_actions[0].signal == PESignal.SKIP
         # 5 只合并（含 1 联接 018966 + 539001/016452/019172/019441 4 直接 QDII 场外）
         ndx_fund = ndx_actions[0].fund_code
         assert "018966" in ndx_fund and "539001" in ndx_fund
@@ -702,18 +705,21 @@ class TestWeeklyRebalancePlan:
         # 019524 已卖出（2026-09-29 liubo），不在合并组
         assert "019524" not in ndx_fund
 
-    def test_no_subclass_left_as_skip(self) -> None:
-        """spec 099 黄金加综合分后，所有子类都不再 SKIP。
+    def test_no_subclass_left_as_skip_except_ndx(self) -> None:
+        """spec 099 黄金加综合分后，只有 .NDX（数据缺失）会 SKIP。
 
         之前历史：REITs / EM 加估值指标后，只剩商品（黄金 GOLD_NO_METRIC）→ SKIP。
         现在：黄金走 2 指标综合分路径 → 不会再 SKIP。
+
+        2026-10-09 拍板清空 .NDX 后，美股 NDX 5 只合并组因估值数据缺失 SKIP（数据源问题）。
+        其他所有子类都不应 SKIP。
         """
         actions = weekly_rebalance_plan()
         skips = [a for a in actions if a.signal == PESignal.SKIP]
-        assert len(skips) == 0, (
-            f"spec 099 后不应再有 SKIP，实际有 {len(skips)} 只："
-            f"{[(s.fund_code, s.subclass.value) for s in skips]}"
-        )
+        # 只有 .NDX 5 只合并组 SKIP
+        assert len(skips) == 1
+        assert skips[0].etf_index_code == ".NDX"
+        assert skips[0].subclass == SwensenClass.US_EQUITY
 
     def test_hsi_appears_as_hold_or_build(self) -> None:
         """HSI 恒生指数 watchlist 出现在 plan 里（HSI 分位 63% > 50% → HOLD）。"""
@@ -727,10 +733,11 @@ class TestWeeklyRebalancePlan:
         assert hsi.metric == ValuationMetric.PE_TTM
 
     def test_hstech_appears_with_013127(self) -> None:
-        """HSTECH 恒生科技：2026-09-29 liubo 把 013127 转到大类资产，仓位 2.50 仓 + 分位 35.7% < 50% → ADD 凑 1 仓。
+        """HSTECH 恒生科技：2026-09-29 liubo 把 013127 转到大类资产。
 
-        仓位 = 25000 / 10000 = 2.50（>= 1）+ 分位 35.7% ≥ 20% → 区间内不动 → HOLD
-        （注：仓位已经 2.50 仓了，远超 1 仓；ADD 只在仓位 < 1 + 分位 < 50% 时触发）
+        仓位 = 25000 / 10000 = 2.50（>= 1）。
+        2026-10-09 理杏仁 CSV：PE 21.8289 / 分位 19.69% < 20% → 深价值例外 → ADD +1
+        （虽然仓位已经 2.50 仓远超 1 仓，但分位 < 20% 触发「已配足 + 深价值」分支）。
         """
         actions = weekly_rebalance_plan()
         hstech_actions = [a for a in actions if a.etf_index_code == "HSTECH"]
@@ -738,8 +745,9 @@ class TestWeeklyRebalancePlan:
         hstech = hstech_actions[0]
         assert hstech.subclass == SwensenClass.HK_EQUITY
         assert hstech.fund_code == "013127"
-        # 仓位 2.50 >= 1 + 分位 35.7% ∈ [20%, 80%] → HOLD
-        assert hstech.signal == PESignal.HOLD
+        # 仓位 2.50 >= 1 + 分位 19.69% < 20% → 深价值 ADD +1
+        assert hstech.signal == PESignal.ADD
+        assert hstech.change == Decimal("1")
         assert hstech.current_position == Decimal("2.5")
         assert hstech.metric == ValuationMetric.PE_TTM
 
@@ -818,10 +826,11 @@ class TestPESnapshotData:
             assert idx in PE_SNAPSHOT_BY_INDEX
 
     def test_us_indices_present(self) -> None:
-        """美股 INX + NDX + OEX 都在。"""
+        """美股 INX + OEX 都在；.NDX 2026-10-09 liubo 拍板清空（理杏仁 CSV 无数据）。"""
         assert ".INX" in PE_SNAPSHOT_BY_INDEX
-        assert ".NDX" in PE_SNAPSHOT_BY_INDEX
         assert ".OEX" in PE_SNAPSHOT_BY_INDEX
+        # .NDX 不在 dict 是 expected：5 只纳指 100 基金 SKIP（数据源问题）
+        assert ".NDX" not in PE_SNAPSHOT_BY_INDEX
 
     def test_foreign_dm_indices_present(self) -> None:
         """国外发达 3 个指数都在。"""

@@ -159,10 +159,10 @@ class RebalanceAction:
 # PE_SNAPSHOT_BY_INDEX: 指数代码 → (估值指标, 倍数, 10年分位)
 # 注意：分位值是 fraction（0.1694 = 16.94%），不是整数百分比。
 #
-# 数据来源（2026-09-29 末）：
-#   A 股: 理杏仁 CSV "frog 勿删_总市值加权_10年_20260928_222805.csv"
+# 数据来源（2026-10-09 末，liubo 给的理杏仁 CSV "frog 勿删_总市值加权_10年_20261009_110800.csv"）：
+#   A 股: 理杏仁 CSV（000510/000852/000903/930050/931643 + 2026-10-09 新加 000688/000698/399673）
 #   美股 INX/OEX: 同上 CSV（OEX 用 INX 代理）
-#   美股 NDX: WebSearch 2026-09-14 PE 28.68, 分位 ~60% (lixinger 09-28 没数据，仍用旧值)
+#   美股 NDX: 理杏仁 CSV 无数据 → entry 删除 → 5 只纳指 100 基金（018966/539001/016452/019172/019441）SKIP（liubo 2026-10-09 拍板）
 #   国外发达 (N225/GDAXI/FCHI): guchacha.com 2026-09-22
 #     - N225 用日本股市整体市场口径月频（不是 N225 指数本身）
 #     - GDAXI 用 DAX 指数本身周频 2016 起
@@ -171,26 +171,25 @@ class RebalanceAction:
 #   US REIT: MSCI factsheet + NAREIT 2026-08-31（P/FFO 19.7 / 分位 60%）
 #   中证 REITs: 招商证券 2026-08-31（P/NAV 1.03 / 分位 34% — 指数只有 5 年历史）
 #   HSI: hsi.com.hk / 百分位网 2026-09-28（PE 10.8557 / 分位 58.06%）
-#   HSTECH: baifenwei.com 2026-08-21（PE 23.34 / 分位 35.7%；2026-09-29 liubo 把 013127 加到大类资产）
-#   000903 中证 A100: liubo 2026-09-28 新加进 snapshot（PE 16.2030 / 分位 89.65%）
+#   HSTECH: 理杏仁 2026-10-09（PE 21.8289 / 分位 19.69%；触发 ADD +1 — 欠配 0.65 仓 + PE < 20%）
 #   baifenwei.com 2026-09-24 也提供 PE 分位（沪深300/科创50 等 A 股）作为交叉验证。
-PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal, Decimal]] = {
-    # ── A 股（PE-TTM）──
-    "000510": (ValuationMetric.PE_TTM, Decimal("15.4577"), Decimal("0.4303")),  # 中证 A500
-    "000852": (ValuationMetric.PE_TTM, Decimal("41.9057"), Decimal("0.6781")),  # 中证 1000
-    "000903": (ValuationMetric.PE_TTM, Decimal("16.2030"), Decimal("0.8965")),  # 中证 A100（liubo 2026-09-28 加）
-    "930050": (ValuationMetric.PE_TTM, Decimal("15.5418"), Decimal("0.1342")),  # 中证 A50
-    "931643": (ValuationMetric.PS_TTM, Decimal("6.5005"), Decimal("0.6875")),  # 科创创业 50（liubo 2026-10-09 改 PS-TTM，理杏仁 2026-10-09）
-    # liubo 2026-10-09 新增 3 个科创/创业类指数，PS-TTM（理杏仁 2026-10-09 数据）
-    "000688": (ValuationMetric.PS_TTM, Decimal("8.7917"), Decimal("0.7532")),  # 科创 50
-    "000698": (ValuationMetric.PS_TTM, Decimal("6.2560"), Decimal("0.4627")),  # 科创 100
-    "399673": (ValuationMetric.PS_TTM, Decimal("4.1510"), Decimal("0.2044")),  # 创业板 50
-    # ── 美股（PE-TTM）──
-    ".INX": (ValuationMetric.PE_TTM, Decimal("26.1363"), Decimal("0.6208")),    # 标普 500
-    ".NDX": (ValuationMetric.PE_TTM, Decimal("28.68"), Decimal("0.60")),        # 纳斯达克 100（09-28 CSV 空）
-    ".OEX": (ValuationMetric.PE_TTM, Decimal("26.1363"), Decimal("0.6208")),    # 标普 100（INX 代理）
-    # ── 港股（PE-TTM）──
-    "HSTECH": (ValuationMetric.PE_TTM, Decimal("23.34"), Decimal("0.357")),     # 恒生科技（baifenwei 2026-08-21）
+PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal | None, Decimal | None]] = {
+    # ── A 股（PE-TTM，理杏仁 2026-10-09）──
+    "000510": (ValuationMetric.PE_TTM, Decimal("15.4214"), Decimal("0.4155")),  # 中证 A500
+    "000852": (ValuationMetric.PE_TTM, Decimal("41.1066"), Decimal("0.6580")),  # 中证 1000
+    "000903": (ValuationMetric.PE_TTM, Decimal("16.1626"), Decimal("0.8949")),  # 中证 A100
+    "930050": (ValuationMetric.PE_TTM, Decimal("15.4805"), Decimal("0.1186")),  # 中证 A50（11.86% < 20% 触发 ADD，但有冷却期冻结）
+    # ── A 股科创/创业类（PS-TTM，理杏仁 2026-10-09）───
+    "931643": (ValuationMetric.PS_TTM, Decimal("6.5005"), Decimal("0.6875")),   # 科创创业 50
+    "000688": (ValuationMetric.PS_TTM, Decimal("8.7917"), Decimal("0.7532")),   # 科创 50
+    "000698": (ValuationMetric.PS_TTM, Decimal("6.2560"), Decimal("0.4627")),   # 科创 100
+    "399673": (ValuationMetric.PS_TTM, Decimal("4.1510"), Decimal("0.2044")),   # 创业板 50
+    # ── 美股（PE-TTM，理杏仁 2026-10-09）──
+    ".INX": (ValuationMetric.PE_TTM, Decimal("26.1682"), Decimal("0.6214")),    # 标普 500
+    # .NDX: 理杏仁 2026-10-09 CSV 无数据 → entry 删除 → 5 只纳指 100 基金 SKIP（liubo 2026-10-09 拍板清空）
+    ".OEX": (ValuationMetric.PE_TTM, Decimal("26.1682"), Decimal("0.6214")),    # 标普 100（INX 代理，2026-10-09 更新）
+    # ── 港股（PE-TTM，理杏仁 2026-10-09）──
+    "HSTECH": (ValuationMetric.PE_TTM, Decimal("21.8289"), Decimal("0.1969")),  # 恒生科技（理杏仁 2026-10-09，触发 ADD +1）
     # ── 国外发达（PE-TTM，guchacha.com 2026-09-22）──
     ".N225": (ValuationMetric.PE_TTM, Decimal("19.21"), Decimal("0.698")),      # 日经 225（日本整体市场口径）
     ".GDAXI": (ValuationMetric.PE_TTM, Decimal("16.90"), Decimal("0.471")),     # 德国 DAX（DAX 指数本身口径）
