@@ -77,6 +77,8 @@ class ValuationMetric(str, Enum):
     PE_TTM = "pe_ttm"  # 股票类（PE-TTM）
     P_FFO = "p_ffo"    # US REIT（MSCI/NAREIT 标准）
     P_NAV = "p_nav"    # 中证 REITs（国内券商惯例）
+    # ── 科创 / 创业类（liubo 2026-10-09 拍板：科创 50 / 100 / 创业板 50 / 科创创业 50 改 PS）───
+    PS_TTM = "ps_ttm"  # PS-TTM（市销率，营收估值，适合未盈利或盈利波动的成长股）
     # ── 黄金 2 指标（spec 099 — liubo 2026-10-08 拍板 A+B 综合分）───
     GOLD_HISTORICAL_PCT = "gold_historical_pct"  # SGE Au99.99 5 年分位
     GOLD_REAL_YIELD = "gold_real_yield"          # FRED DFII10 实际利率（fraction 0.0291 = 2.91%）
@@ -87,6 +89,7 @@ METRIC_DISPLAY_NAME: dict[ValuationMetric, str] = {
     ValuationMetric.PE_TTM: "PE-TTM",
     ValuationMetric.P_FFO: "P/FFO",
     ValuationMetric.P_NAV: "P/NAV",
+    ValuationMetric.PS_TTM: "PS-TTM",  # liubo 2026-10-09 拍板科创 / 创业类指数改 PS 估值
     ValuationMetric.GOLD_HISTORICAL_PCT: "金价分位",
     ValuationMetric.GOLD_REAL_YIELD: "实际利率",
 }
@@ -177,7 +180,11 @@ PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal, Decimal]] = {
     "000852": (ValuationMetric.PE_TTM, Decimal("41.9057"), Decimal("0.6781")),  # 中证 1000
     "000903": (ValuationMetric.PE_TTM, Decimal("16.2030"), Decimal("0.8965")),  # 中证 A100（liubo 2026-09-28 加）
     "930050": (ValuationMetric.PE_TTM, Decimal("15.5418"), Decimal("0.1342")),  # 中证 A50
-    "931643": (ValuationMetric.PE_TTM, Decimal("47.7959"), Decimal("0.6187")),  # 科创创业 50
+    "931643": (ValuationMetric.PS_TTM, Decimal("6.5005"), Decimal("0.6875")),  # 科创创业 50（liubo 2026-10-09 改 PS-TTM，理杏仁 2026-10-09）
+    # liubo 2026-10-09 新增 3 个科创/创业类指数，PS-TTM（理杏仁 2026-10-09 数据）
+    "000688": (ValuationMetric.PS_TTM, Decimal("8.7917"), Decimal("0.7532")),  # 科创 50
+    "000698": (ValuationMetric.PS_TTM, Decimal("6.2560"), Decimal("0.4627")),  # 科创 100
+    "399673": (ValuationMetric.PS_TTM, Decimal("4.1510"), Decimal("0.2044")),  # 创业板 50
     # ── 美股（PE-TTM）──
     ".INX": (ValuationMetric.PE_TTM, Decimal("26.1363"), Decimal("0.6208")),    # 标普 500
     ".NDX": (ValuationMetric.PE_TTM, Decimal("28.68"), Decimal("0.60")),        # 纳斯达克 100（09-28 CSV 空）
@@ -205,13 +212,17 @@ PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal, Decimal]] = {
 # 基金 → 跟踪指数代码 + 中文名映射
 FUND_INDEX_MAP: dict[str, tuple[SwensenClass, str, str]] = {
     # fund_code → (SwensenClass, index_code, fund_name)
-    # A 股股票 (6 只 → 4 个 ETF)
+    # A 股股票 (9 只 → 7 个 ETF；2026-10-09 加 011612/020291/160422 3 只科创/创业宽基)
     "013310": (SwensenClass.CN_EQUITY, "931643", "华夏科创创业 50"),
     "022434": (SwensenClass.CN_EQUITY, "000510", "南方中证 A500"),
     "017644": (SwensenClass.CN_EQUITY, "000852", "博道中证 1000 增强"),
     "022424": (SwensenClass.CN_EQUITY, "000510", "广发中证 A500"),
     "014532": (SwensenClass.CN_EQUITY, "930050", "易方达 MSCI 中国 A50"),
     "022448": (SwensenClass.CN_EQUITY, "000510", "国泰中证 A500 联接"),
+    # A 股宽基扩展 3 只（liubo 2026-10-09 拍板科创/创业类改 PS 估值）
+    "011612": (SwensenClass.CN_EQUITY, "000688", "华夏科创 50ETF 联接 A"),
+    "020291": (SwensenClass.CN_EQUITY, "000698", "华夏科创 100ETF 联接 A"),
+    "160422": (SwensenClass.CN_EQUITY, "399673", "华安创业板 50ETF 联接 A"),
     # 港股股票 (1 → HSTECH)
     # 2026-09-29 liubo 把 013127 汇添富恒生科技 ETF 联接发起式(QDII)A
     # 从 ETF 轮动组合转到大类资产配置（港股子类）
@@ -298,6 +309,9 @@ INDEX_DISPLAY_NAME: dict[str, str] = {
     "000903": "中证 A100",
     "930050": "中证 A50",
     "931643": "科创创业 50",
+    "000688": "科创 50",
+    "000698": "科创 100",
+    "399673": "创业板 50",
     ".INX": "标普 500",
     ".NDX": "纳斯达克 100",
     ".OEX": "标普 100",

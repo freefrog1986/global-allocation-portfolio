@@ -245,6 +245,10 @@ INDEX_VERDICT_STRATEGY: dict[str, str] = {
     "000510": "broad",     # 中证 A500
     "931643": "growth",    # 科创创业 50
     "000852": "growth",    # 中证 1000
+    # liubo 2026-10-09 新增 3 个科创/创业类（跟 931643/000852 同档 growth）
+    "000688": "growth",    # 科创 50
+    "000698": "growth",    # 科创 100
+    "399673": "growth",    # 创业板 50
     "930955": "dividend",  # 红利低波 100
     # 港股指数（spec 098.2 — liubo 2026-09-19）
     "HSSCHKY": "dividend",  # 恒生港股通高股息率（看股息率 + 股息率加权 PE 分位）

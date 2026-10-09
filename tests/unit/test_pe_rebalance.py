@@ -459,10 +459,10 @@ class TestBuildEvaluations:
         assert len(evals) == len(FUND_INDEX_MAP)
 
     def test_a_share_evaluations_have_metric(self) -> None:
-        """A 股 6 只基金 metric 都从 snapshot 取到（4 个不同 ETF）。"""
+        """A 股 9 只基金 metric 都从 snapshot 取到（2026-10-09 加 011612/020291/160422 3 只科创/创业宽基）。"""
         evals = build_evaluations()
         a_share = [e for e in evals if e.subclass == SwensenClass.CN_EQUITY]
-        assert len(a_share) == 6
+        assert len(a_share) == 9
         for e in a_share:
             assert e.metric_value is not None
             assert e.metric_percentile is not None
@@ -611,7 +611,9 @@ class TestWeeklyRebalancePlan:
         # 2026-09-29 加 国外发达 3 个指数 watchlist（FOREIGN_DM_EQUITY 0 持仓，但想跟踪）
         # 第二十四轮（2026-09-29）加 000614 华安 DAX 联接 A → .GDAXI 从 watchlist 移到 FUND_INDEX_MAP
         # 总 actions 仍是 16（-1 watchlist +1 fund = 净 0 变化）
-        assert len(actions) == 16
+        # 第二十五轮（2026-10-09）加 011612/020291/160422 3 只科创/创业宽基 → CN_EQUITY 6+3=9 只 → 4+3=7 ETF
+        # 总 actions = 16 + 3 = 19（liubo 2026-10-09）
+        assert len(actions) == 19
 
     def test_foreign_dm_indices_appear_in_watchlist(self) -> None:
         """FOREIGN_DM_EQUITY：3 个评估（.N225 watchlist + .GDAXI 来自 000614 fund + .FCHI watchlist）。
@@ -849,7 +851,19 @@ class TestPESnapshotData:
         assert metric == ValuationMetric.P_NAV
 
     def test_a_share_uses_pe_ttm_metric(self) -> None:
-        """A 股指数估值指标是 PE-TTM。"""
-        for a_share in ("000510", "000852", "930050", "931643"):
+        """A 股指数估值指标：
+        - 宽基（PE 适用）：000510 / 000852 / 930050 → PE_TTM
+        - 科创/创业类（PS 适用）：931643 → PS_TTM（liubo 2026-10-09 改）
+        """
+        for a_share in ("000510", "000852", "930050"):
             metric, _, _ = PE_SNAPSHOT_BY_INDEX[a_share]
             assert metric == ValuationMetric.PE_TTM
+        # 931643 科创创业 50 改 PS（liubo 2026-10-09）
+        metric, _, _ = PE_SNAPSHOT_BY_INDEX["931643"]
+        assert metric == ValuationMetric.PS_TTM
+
+    def test_new_growth_uses_ps_ttm(self) -> None:
+        """2026-10-09 新加 3 个科创/创业类指数（000688 科创 50 / 000698 科创 100 / 399673 创业板 50）都用 PS-TTM。"""
+        for a_share in ("000688", "000698", "399673"):
+            metric, _, _ = PE_SNAPSHOT_BY_INDEX[a_share]
+            assert metric == ValuationMetric.PS_TTM

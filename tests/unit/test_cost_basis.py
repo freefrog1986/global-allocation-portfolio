@@ -10,6 +10,7 @@
 2026-09-29 第二十二轮：liubo 卖出 019524 华泰柏瑞纳 100 联接（成本 20 收回现金）→ 47 只大类资产。
 2026-09-29 第二十三轮：liubo 把 013127 汇添富恒生科技 ETF 联接发起式(QDII)A 从 ETF 轮动组合转过来 → 48 只大类资产（+25000）。
 2026-09-29 第二十四轮：加 000614 华安德国 DAX 联接 A → 49 只大类资产（初始 0；支付宝慧定投 250-1000/周，平均 500 → 10000 CNY）。
+2026-10-09 第二十五轮：加 011612/020291/160422 3 只科创/创业宽基 → 52 只大类资产（初始 0；科创/创业类改 PS 估值）。
 """
 
 from __future__ import annotations
@@ -26,17 +27,18 @@ from global_allocation.portfolio.cost_basis import (
 
 
 class TestCostBasisByCode:
-    def test_has_forty_nine_funds(self) -> None:
-        """49 只大类资产配置基金有成本数字（第二十四轮 liubo 2026-09-29 加 000614 后）。
+    def test_has_fifty_two_funds(self) -> None:
+        """52 只大类资产配置基金有成本数字（第二十五轮 liubo 2026-10-09 加 011612/020291/160422 3 只科创/创业宽基后）。
 
         019441 万家纳指100 发起式 QDII A：直接 QDII（非联接），DCA ¥10/天 → 2000 CNY，
         跟 019172 双只备份；初始成本 0。NDX 总共 5 只合并（1 联接 + 4 直接 QDII 场外）。
         013127 汇添富恒生科技 ETF 联接发起式(QDII)A：2026-09-29 从 ETF 轮动组合转过来（+25000 CNY）。
+        011612/020291/160422 科创/创业宽基 3 只：2026-10-09 加，初始 0 占位，等首次买入再填。
         """
-        assert len(COST_BASIS_BY_CODE) == 49
+        assert len(COST_BASIS_BY_CODE) == 52
 
     def test_total_matches_sum(self) -> None:
-        """总和等于 liubo 算出的 604143.47（49 只；2026-09-29 加 000614 初始 0 不影响总额）。
+        """总和等于 liubo 算出的 604143.47（52 只；2026-10-09 加 011612/020291/160422 初始 0 不影响总额）。
         2026-09-22 第十九轮时为 579162.86；2026-09-24 因 028277 bump 到 10000 多了 0.61；
         2026-09-29 卖出 019524 -20 + 加 013127 +25000 → 604143.47。
         """
@@ -45,7 +47,7 @@ class TestCostBasisByCode:
         assert TOTAL_COST_CNY == Decimal("604143.47")
 
     def test_specific_a_share_amounts(self) -> None:
-        """6 只 A 股宽基（第十九轮加 022448 后 6 只）。"""
+        """9 只 A 股宽基（第十九轮加 022448 后 6 只 + 2026-10-09 加 3 只科创/创业）。"""
         assert COST_BASIS_BY_CODE["013310"] == Decimal("20000")  # 华夏科创创业50
         assert COST_BASIS_BY_CODE["022434"] == Decimal("10500")  # 南方中证A500
         assert COST_BASIS_BY_CODE["017644"] == Decimal("5000")   # 博道中证1000指数增强
@@ -53,6 +55,10 @@ class TestCostBasisByCode:
         assert COST_BASIS_BY_CODE["014532"] == Decimal("10000")  # 易方达MSCI中国A50（2026-09-24 +8000）
         # 第十九轮从红利策略组合移过来
         assert COST_BASIS_BY_CODE["022448"] == Decimal("11000")  # 国泰中证A500ETF发起联接A
+        # 2026-10-09 加 3 只科创/创业宽基（占位 0）
+        assert COST_BASIS_BY_CODE["011612"] == Decimal("0")      # 华夏科创50ETF联接A
+        assert COST_BASIS_BY_CODE["020291"] == Decimal("0")      # 华夏科创100ETF联接A
+        assert COST_BASIS_BY_CODE["160422"] == Decimal("0")      # 华安创业板50ETF联接A
 
     def test_specific_hk_amounts(self) -> None:
         """港股：013127 汇添富恒生科技 ETF 联接发起式(QDII)A（2026-09-29 第二十三轮加）。

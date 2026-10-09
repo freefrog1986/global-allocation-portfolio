@@ -73,6 +73,7 @@ METRIC_DISPLAY: dict[ValuationMetric, str] = {
     ValuationMetric.PE_TTM: "PE-TTM",
     ValuationMetric.P_FFO: "P/FFO",
     ValuationMetric.P_NAV: "P/NAV",
+    ValuationMetric.PS_TTM: "PS-TTM",                    # liubo 2026-10-09 科创/创业类改 PS
     # spec 099 黄金 2 指标
     ValuationMetric.GOLD_HISTORICAL_PCT: "金价",         # value=SGE Au99.99 CNY/g
     ValuationMetric.GOLD_REAL_YIELD: "实际利率",          # value=FRED DFII10（fraction）

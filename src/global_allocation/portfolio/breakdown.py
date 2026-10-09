@@ -111,13 +111,17 @@ DISPLAY_NAME: dict[SwensenClass, str] = {
 # 第二十二轮（liubo 2026-09-29）：把 013127 汇添富恒生科技 ETF 联接发起式(QDII)A
 # 从 ETF 轮动组合转过来，港股子类从 0 → 1（之前砍的 5 只港股去了红利/ETF 轮动组合）
 SUBCLASS_BY_CODE: dict[str, SwensenClass] = {
-    # A 股股票 (6 宽基) - 第十九轮加 022448 国泰A500 联接
+    # A 股股票 (9 宽基) - 第十九轮加 022448 国泰A500 联接；2026-10-09 加 011612/020291/160422 3 只占位 0
     "013310": SwensenClass.CN_EQUITY,  # 华夏科创创业50
     "022434": SwensenClass.CN_EQUITY,  # 南方中证A500
     "017644": SwensenClass.CN_EQUITY,  # 博道中证1000指数增强
     "022424": SwensenClass.CN_EQUITY,  # 广发中证A500
     "014532": SwensenClass.CN_EQUITY,  # 易方达MSCI中国A50
     "022448": SwensenClass.CN_EQUITY,  # 国泰中证A500ETF发起联接A（第十九轮从红利策略移过来）
+    # A 股宽基扩展 3 只（liubo 2026-10-09 拍板科创/创业类改 PS 估值）
+    "011612": SwensenClass.CN_EQUITY,  # 华夏科创50ETF联接A
+    "020291": SwensenClass.CN_EQUITY,  # 华夏科创100ETF联接A
+    "160422": SwensenClass.CN_EQUITY,  # 华安创业板50ETF联接A
     # 港股 (1) - 2026-09-29 liubo 把 013127 从 ETF 轮动组合转过来，跟踪恒生科技 HSTECH
     "013127": SwensenClass.HK_EQUITY,  # 汇添富恒生科技 ETF 联接发起式(QDII)A（第二十二轮从 ETF 轮动组合转过来）
     # 美股股票 (7 宽基) - 519981 标普100 + 017641 标普500 + 5 只纳100
