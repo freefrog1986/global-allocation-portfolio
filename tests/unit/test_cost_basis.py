@@ -43,14 +43,14 @@ class TestCostBasisByCode:
         assert len(COST_BASIS_BY_CODE) == 52
 
     def test_total_matches_sum(self) -> None:
-        """总和等于 liubo 算出的 604143.47（52 只；2026-10-09 三笔转换净 0，总和不变）。
+        """总和等于 liubo 算出的 605804.47（52 只；2026-10-09 三笔转换净 0 + 14 只基金校准 +1661）。
         2026-09-22 第十九轮时为 579162.86；2026-09-24 因 028277 bump 到 10000 多了 0.61；
         2026-09-29 卖出 019524 -20 + 加 013127 +25000 → 604143.47。
-        2026-10-09 三笔转换（004827 -20000、006829 -10000；019857 +10000、023414 +10000、013127 +10000）净 0 → 604143.47。
+        2026-10-09 三笔转换净 0 + 14 只基金成本校准 +1661 → 605804.47。
         """
         total = sum(COST_BASIS_BY_CODE.values())
         assert total == TOTAL_COST_CNY
-        assert TOTAL_COST_CNY == Decimal("604143.47")
+        assert TOTAL_COST_CNY == Decimal("605804.47")
 
     def test_specific_a_share_amounts(self) -> None:
         """9 只 A 股宽基（第十九轮加 022448 后 6 只 + 2026-10-09 加 3 只科创/创业）。"""
@@ -77,11 +77,11 @@ class TestCostBasisByCode:
         assert COST_BASIS_BY_CODE["018966"] == Decimal("2020")   # 汇添富纳100
         assert COST_BASIS_BY_CODE["539001"] == Decimal("1000")   # 建信纳100（QDII 场外）
         assert COST_BASIS_BY_CODE["017641"] == Decimal("50")     # 摩根标普500
-        assert COST_BASIS_BY_CODE["016452"] == Decimal("20")     # 南方纳100（第十九轮补回）
+        assert COST_BASIS_BY_CODE["016452"] == Decimal("60")     # 南方纳100（第十九轮补回；2026-10-09 校准）
         # 019524 已卖出（2026-09-29 liubo 卖出 20 元，收回现金）
         assert "019524" not in COST_BASIS_BY_CODE
-        assert COST_BASIS_BY_CODE["019172"] == Decimal("0")      # 摩根纳指100 QDII 人民币A（DCA 第二十轮加）
-        assert COST_BASIS_BY_CODE["019441"] == Decimal("0")      # 万家纳指100 发起式 QDII A（DCA 第二十一轮加，双只备份）
+        assert COST_BASIS_BY_CODE["019172"] == Decimal("40")     # 摩根纳指100 QDII 人民币A（DCA 第二十轮加；2026-10-09 校准 ¥40 已买）
+        assert COST_BASIS_BY_CODE["019441"] == Decimal("40")     # 万家纳指100 发起式 QDII A（DCA 第二十一轮加，双只备份；2026-10-09 校准 ¥40 已买）
 
     def test_sold_fund_removed(self) -> None:
         """019524 已卖出（2026-09-29 liubo），不在 COST_BASIS_BY_CODE。"""
@@ -109,7 +109,7 @@ class TestCostBasisByCode:
         """国外发达（第二十四轮加 000614 DAX 联接）/ 新兴市场 / REITs / 国内利率债 / 美债 / 商品。"""
         assert "457001" not in COST_BASIS_BY_CODE  # 已移到 ETF 轮动组合
         assert COST_BASIS_BY_CODE["000614"] == Decimal("0")    # 华安 DAX 联接 A（DCA 进行中，第二十四轮加）
-        assert COST_BASIS_BY_CODE["378006"] == Decimal("3910")   # 摩根全球新兴市场
+        assert COST_BASIS_BY_CODE["378006"] == Decimal("5310")   # 摩根全球新兴市场（2026-10-09 校准）
         assert COST_BASIS_BY_CODE["028277"] == Decimal("10000")  # 华夏中证REITs全收益（2026-09-24 +4999.39 凑 1 仓，bump 到 10000 避免 Decimal 噪声）
         assert COST_BASIS_BY_CODE["160140"] == Decimal("5000")   # 南方道琼斯美国精选REIT
         assert COST_BASIS_BY_CODE["003547"] == Decimal("2000")   # 鹏华丰禄
