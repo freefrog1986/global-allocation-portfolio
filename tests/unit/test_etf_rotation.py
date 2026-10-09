@@ -302,10 +302,12 @@ class TestSeparateFromOtherPortfolios:
         assert code not in GLOBAL, code
 
     def test_013127_now_in_global_cost_basis(self) -> None:
-        """013127 2026-09-29 转到大类资产配置 → COST_BASIS_BY_CODE 里有它（25000 CNY）。"""
+        """013127 2026-09-29 转到大类资产配置 → COST_BASIS_BY_CODE 里有它。
+        2026-09-29 转过来时 25000 CNY；2026-10-09 liubo 加仓 +1 仓 → 35000 CNY。
+        """
         from global_allocation.portfolio.cost_basis import COST_BASIS_BY_CODE as GLOBAL
 
-        assert GLOBAL["013127"] == Decimal("25000")
+        assert GLOBAL["013127"] == Decimal("35000")
 
     @pytest.mark.parametrize("code", [
         "006327", "014673", "016495", "006809",

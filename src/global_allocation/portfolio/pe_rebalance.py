@@ -211,7 +211,7 @@ PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal | None, Decimal |
 # 基金 → 跟踪指数代码 + 中文名映射
 FUND_INDEX_MAP: dict[str, tuple[SwensenClass, str, str]] = {
     # fund_code → (SwensenClass, index_code, fund_name)
-    # A 股股票 (9 只 → 7 个 ETF；2026-10-09 加 011612/020291/160422 3 只科创/创业宽基)
+    # A 股股票 (9 只 → 7 个 ETF；2026-10-09 加 011612/019857/023414 3 只科创/创业宽基)
     "013310": (SwensenClass.CN_EQUITY, "931643", "华夏科创创业 50"),
     "022434": (SwensenClass.CN_EQUITY, "000510", "南方中证 A500"),
     "017644": (SwensenClass.CN_EQUITY, "000852", "博道中证 1000 增强"),
@@ -219,9 +219,10 @@ FUND_INDEX_MAP: dict[str, tuple[SwensenClass, str, str]] = {
     "014532": (SwensenClass.CN_EQUITY, "930050", "易方达 MSCI 中国 A50"),
     "022448": (SwensenClass.CN_EQUITY, "000510", "国泰中证 A500 联接"),
     # A 股宽基扩展 3 只（liubo 2026-10-09 拍板科创/创业类改 PS 估值）
+    # 2026-10-09 liubo 改换 2 只：020291/160422 → 019857/023414（费率/跟踪更好）
     "011612": (SwensenClass.CN_EQUITY, "000688", "华夏科创 50ETF 联接 A"),
-    "020291": (SwensenClass.CN_EQUITY, "000698", "华夏科创 100ETF 联接 A"),
-    "160422": (SwensenClass.CN_EQUITY, "399673", "华安创业板 50ETF 联接 A"),
+    "019857": (SwensenClass.CN_EQUITY, "000698", "博时上证科创板 100ETF 联接 A"),
+    "023414": (SwensenClass.CN_EQUITY, "399673", "工银创业板 50ETF 联接 A"),
     # 港股股票 (1 → HSTECH)
     # 2026-09-29 liubo 把 013127 汇添富恒生科技 ETF 联接发起式(QDII)A
     # 从 ETF 轮动组合转到大类资产配置（港股子类）

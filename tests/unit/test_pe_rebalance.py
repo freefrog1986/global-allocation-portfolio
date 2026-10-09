@@ -459,7 +459,7 @@ class TestBuildEvaluations:
         assert len(evals) == len(FUND_INDEX_MAP)
 
     def test_a_share_evaluations_have_metric(self) -> None:
-        """A 股 9 只基金 metric 都从 snapshot 取到（2026-10-09 加 011612/020291/160422 3 只科创/创业宽基）。"""
+        """A 股 9 只基金 metric 都从 snapshot 取到（2026-10-09 加 011612/019857/023414 3 只科创/创业宽基）。"""
         evals = build_evaluations()
         a_share = [e for e in evals if e.subclass == SwensenClass.CN_EQUITY]
         assert len(a_share) == 9
@@ -611,7 +611,7 @@ class TestWeeklyRebalancePlan:
         # 2026-09-29 加 国外发达 3 个指数 watchlist（FOREIGN_DM_EQUITY 0 持仓，但想跟踪）
         # 第二十四轮（2026-09-29）加 000614 华安 DAX 联接 A → .GDAXI 从 watchlist 移到 FUND_INDEX_MAP
         # 总 actions 仍是 16（-1 watchlist +1 fund = 净 0 变化）
-        # 第二十五轮（2026-10-09）加 011612/020291/160422 3 只科创/创业宽基 → CN_EQUITY 6+3=9 只 → 4+3=7 ETF
+        # 第二十五轮（2026-10-09）加 011612/019857/023414 3 只科创/创业宽基 → CN_EQUITY 6+3=9 只 → 4+3=7 ETF
         # 总 actions = 16 + 3 = 19（liubo 2026-10-09）
         assert len(actions) == 19
 
@@ -735,9 +735,10 @@ class TestWeeklyRebalancePlan:
     def test_hstech_appears_with_013127(self) -> None:
         """HSTECH 恒生科技：2026-09-29 liubo 把 013127 转到大类资产。
 
-        仓位 = 25000 / 10000 = 2.50（>= 1）。
+        2026-09-29: 仓位 25000 / 10000 = 2.50 仓。
+        2026-10-09 liubo 加仓 +1 仓 → 仓位变 3.50 仓（>= 1 仓）。
         2026-10-09 理杏仁 CSV：PE 21.8289 / 分位 19.69% < 20% → 深价值例外 → ADD +1
-        （虽然仓位已经 2.50 仓远超 1 仓，但分位 < 20% 触发「已配足 + 深价值」分支）。
+        （虽然仓位已经 3.50 仓远超 1 仓，但分位 < 20% 触发「已配足 + 深价值」分支）。
         """
         actions = weekly_rebalance_plan()
         hstech_actions = [a for a in actions if a.etf_index_code == "HSTECH"]
@@ -745,10 +746,10 @@ class TestWeeklyRebalancePlan:
         hstech = hstech_actions[0]
         assert hstech.subclass == SwensenClass.HK_EQUITY
         assert hstech.fund_code == "013127"
-        # 仓位 2.50 >= 1 + 分位 19.69% < 20% → 深价值 ADD +1
+        # 仓位 3.50 >= 1 + 分位 19.69% < 20% → 深价值 ADD +1
         assert hstech.signal == PESignal.ADD
         assert hstech.change == Decimal("1")
-        assert hstech.current_position == Decimal("2.5")
+        assert hstech.current_position == Decimal("3.5")
         assert hstech.metric == ValuationMetric.PE_TTM
 
     def test_000614_tracks_gdaxi(self) -> None:
