@@ -15,8 +15,8 @@
 
 估值指标（liubo 2026-09-24 扩展 + 2026-10-12 拍板 REITs 改 DY）：
 - 股票类：PE-TTM
-- US REIT：DY（yfinance VNQ 代理 MSCI US REIT 算 DY-TTM + 5年价分位）
-- 中证 REITs：DY（akshare 932006 + yfinance 508000.SS 算 5年价分位）
+- US REIT：DY（yfinance VNQ 代理 MSCI US REIT 算 DY-TTM + 月度 DY-TTM 5Y 分位 → 估值分位）
+- 中证 REITs：DY（akshare 932006 拿当前 DY + yfinance 508000.SS 算月度 DY-TTM 5Y 分位 → 估值分位）
 
 spec REITs-DY（liubo 2026-10-12）之前：US REIT 用 P/FFO、中证 REITs 用 P/NAV。
 - 枚举值 P_FFO / P_NAV 仍保留以兼容旧代码 / 旧数据
@@ -61,13 +61,13 @@ _TEST_REIT_DY_DATA = {
     ".MSCI_US_REIT": (
         ValuationMetric.DY,
         Decimal("3.76"),   # 3.76% DY-TTM（VNQ 代理）
-        Decimal("0.42"),   # 5年价分位 42%
+        Decimal("0.42"),   # 5年估值分位 42%（低 = 便宜；原 DY 分位 58% 翻转）
         date(2026, 10, 9),
     ),
     "932006": (
         ValuationMetric.DY,
         Decimal("6.59"),   # 6.59% DY（中证 REITs 2026-09-16 最新）
-        Decimal("0.48"),   # 5年价分位 48%
+        Decimal("0.48"),   # 5年估值分位 48%（原 DY 分位 52% 翻转）
         date(2026, 9, 16),
     ),
 }

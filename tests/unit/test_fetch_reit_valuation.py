@@ -72,14 +72,16 @@ class TestREITValuation:
             index_code=".MSCI_US_REIT",
             metric="dy",
             value=Decimal("3.76"),
-            price_percentile_5y=Decimal("0.42"),
+            dy_percentile_5y=Decimal("0.58"),
+            valuation_percentile_5y=Decimal("0.42"),
             data_date=date(2026, 10, 9),
             source="yfinance VNQ",
         )
         assert s.index_code == ".MSCI_US_REIT"
         assert s.metric == "dy"
         assert s.value == Decimal("3.76")
-        assert s.price_percentile_5y == Decimal("0.42")
+        assert s.dy_percentile_5y == Decimal("0.58")
+        assert s.valuation_percentile_5y == Decimal("0.42")
         assert s.data_date == date(2026, 10, 9)
         assert s.error is None
 
@@ -89,13 +91,15 @@ class TestREITValuation:
             index_code="932006",
             metric="dy",
             value=None,
-            price_percentile_5y=None,
+            dy_percentile_5y=None,
+            valuation_percentile_5y=None,
             data_date=date.today(),
             source="akshare 932006 + yfinance 508000.SS",
             error="akshare 失败",
         )
         assert s.value is None
-        assert s.price_percentile_5y is None
+        assert s.dy_percentile_5y is None
+        assert s.valuation_percentile_5y is None
         assert s.error == "akshare 失败"
 
     def test_frozen(self) -> None:
@@ -104,7 +108,8 @@ class TestREITValuation:
             index_code=".MSCI_US_REIT",
             metric="dy",
             value=Decimal("3.76"),
-            price_percentile_5y=Decimal("0.42"),
+            dy_percentile_5y=Decimal("0.58"),
+            valuation_percentile_5y=Decimal("0.42"),
             data_date=date(2026, 10, 9),
             source="test",
         )
@@ -123,7 +128,8 @@ class TestSerialization:
                 index_code=".MSCI_US_REIT",
                 metric="dy",
                 value=Decimal("3.76"),
-                price_percentile_5y=Decimal("0.42"),
+                dy_percentile_5y=Decimal("0.58"),
+                valuation_percentile_5y=Decimal("0.42"),
                 data_date=date(2026, 10, 9),
                 source="yfinance VNQ",
             ),
@@ -131,7 +137,8 @@ class TestSerialization:
                 index_code="932006",
                 metric="dy",
                 value=Decimal("6.59"),
-                price_percentile_5y=Decimal("0.48"),
+                dy_percentile_5y=Decimal("0.52"),
+                valuation_percentile_5y=Decimal("0.48"),
                 data_date=date(2026, 9, 16),
                 source="akshare + yfinance",
             ),
@@ -145,7 +152,8 @@ class TestSerialization:
         assert set(out["indices"].keys()) == {".MSCI_US_REIT", "932006"}
         # value / percentile 序列化成 str（保持 Decimal 精度）
         assert out["indices"][".MSCI_US_REIT"]["value"] == "3.76"
-        assert out["indices"][".MSCI_US_REIT"]["price_percentile_5y"] == "0.42"
+        assert out["indices"][".MSCI_US_REIT"]["dy_percentile_5y"] == "0.58"
+        assert out["indices"][".MSCI_US_REIT"]["valuation_percentile_5y"] == "0.42"
 
     def test_save_and_load_round_trip(
         self,
@@ -167,7 +175,8 @@ class TestSerialization:
         for code, original in sample_snapshots.items():
             assert loaded[code].index_code == original.index_code
             assert loaded[code].value == original.value
-            assert loaded[code].price_percentile_5y == original.price_percentile_5y
+            assert loaded[code].dy_percentile_5y == original.dy_percentile_5y
+            assert loaded[code].valuation_percentile_5y == original.valuation_percentile_5y
             assert loaded[code].data_date == original.data_date
             assert loaded[code].source == original.source
             assert loaded[code].error == original.error
@@ -243,7 +252,8 @@ class TestFailurePaths:
         assert result.error is not None
         assert "ConnectionError" in result.error
         assert result.value is None
-        assert result.price_percentile_5y is None
+        assert result.dy_percentile_5y is None
+        assert result.valuation_percentile_5y is None
         assert result.index_code == ".MSCI_US_REIT"
 
     def test_fetch_cn_reit_handles_akshare_exception(

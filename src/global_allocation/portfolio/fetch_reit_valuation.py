@@ -3,15 +3,25 @@
 数据源：
 - US REIT：yfinance VNQ（Vanguard REIT ETF，跟踪 MSCI US REIT 接近）
   - 当前 DY-TTM = trailing 12M dividends / current close
-  - 5Y price percentile = 当前价在 5Y 日线收盘价序列里的分位
+  - 5Y DY 分位：月度 DY-TTM 序列（~60 个点），当前 DY 在序列里的位置
+  - 高 DY 分位 = 当前 DY 比历史高 = 便宜
 - CN REIT 932006：akshare stock_zh_index_value_csindex（最新 DY）
-  + yfinance 508000.SS（华夏 REITs ETF，5Y 日线）算价分位
+  + yfinance 508000.SS（华夏 REITs ETF）算月度 DY-TTM 5Y 分位
 
 输出：data/reit_valuation/YYYY-MM-DD.json
 失败：返回 None + log warning（不抛异常；周五 cron 跑失败也继续出报告）
 
 liubo 2026-10-12 拍板：放弃 P/FFO / P/NAV（NAREIT 月报 + 招商月报难抓、6 周未更新），
-改用股息率（DY）做 REITs 估值指标。每周五 cron 拉一次，周报显示「DY X.XX% / 5年价分位 Y% / 数据日期」。
+改用股息率（DY）做 REITs 估值指标。每周五 cron 拉一次。
+
+分位方向（重要）：
+- 高 DY = 便宜（price 被压低）
+- 低 DY = 贵（price 涨上去了）
+- JSON 里存两份：
+  - `dy_percentile_5y`：原始 DY 分位（高 = 便宜）— 用于展示
+  - `valuation_percentile_5y`：1 - dy_percentile（低 = 便宜）— 用于规则
+- pe_rebalance.py 用 valuation_percentile_5y 进 LIVE_REIT_SNAPSHOT_BY_INDEX，跟
+  PE/PS 一样走「低分位 = 便宜 → ADD」的规则（无需改 _evaluate_signal）
 """
 
 from __future__ import annotations
@@ -70,7 +80,8 @@ class REITValuation:
     - index_code: 内部代码（".MSCI_US_REIT" / "932006"）
     - metric: "dy"（股息率，percent number like 3.76）
     - value: 当前 DY（percent，3.76 = 3.76%）
-    - price_percentile_5y: 5年价分位（fraction 0.42 = 42%）
+    - dy_percentile_5y: 5Y DY 分位（fraction 0.75 = 75%；高 = DY 高 = 便宜）
+    - valuation_percentile_5y: 估值分位 = 1 - dy_percentile（低 = 便宜，跟 PE 一致）
     - data_date: 估值数据本身的日期（不是 fetch 日期）
     - source: 数据源说明
     - error: 抓取失败的错误信息（成功时为 None）
@@ -79,7 +90,8 @@ class REITValuation:
     index_code: str
     metric: str
     value: Decimal | None
-    price_percentile_5y: Decimal | None
+    dy_percentile_5y: Decimal | None
+    valuation_percentile_5y: Decimal | None
     data_date: date
     source: str
     error: str | None = None
@@ -101,14 +113,65 @@ def _percentile_rank(values: list[float], current: float) -> float:
     return leq / n
 
 
+def _compute_dy_series_percentile(
+    hist: object,
+) -> tuple[Decimal | None, Decimal | None, Decimal | None, "date | None"]:
+    """从 yfinance hist（带 Close + Dividends 列）算月度 DY-TTM 5Y 序列的分位。
+
+    Returns:
+        (current_dy, dy_percentile_5y, valuation_percentile_5y, data_date)
+        - current_dy: 当前 DY-TTM（percent number，3.76 = 3.76%）
+        - dy_percentile_5y: 当前 DY 在月度序列里的分位（高 = DY 高 = 便宜）
+        - valuation_percentile_5y: 1 - dy_percentile（低 = 便宜，跟 PE/PS 一致）
+        - data_date: 月度序列最后一个月末日期
+    """
+    import pandas as pd
+
+    if hist is None or hist.empty:
+        return None, None, None, None
+
+    divs = hist["Dividends"]
+    closes = hist["Close"]
+
+    # 月度重采样：每月末取 close
+    hist_m = closes.resample("ME").last().dropna()
+    if hist_m.empty:
+        return None, None, None, None
+
+    # 对每个月 t：sum dividends in (t-365, t] / close(t)
+    dy_series: list[float] = []
+    for t in hist_m.index:
+        cutoff = t - pd.Timedelta(days=365)
+        trailing = divs[(divs.index > cutoff) & (divs.index <= t)].sum()
+        close = hist_m.loc[t]
+        if close and close > 0:
+            dy_series.append((trailing / close) * 100)
+
+    if not dy_series:
+        return None, None, None, None
+
+    current_dy = dy_series[-1]
+    dy_pct = _percentile_rank(dy_series, current_dy)
+    # 估值分位：翻转（高 DY = 低估值 = 便宜 → 跟 PE/PS 规则一致）
+    val_pct = 1.0 - dy_pct
+
+    return (
+        Decimal(str(round(current_dy, 4))),
+        Decimal(str(round(dy_pct, 4))),
+        Decimal(str(round(val_pct, 4))),
+        hist_m.index[-1].date(),
+    )
+
+
 def fetch_us_reit() -> REITValuation:
-    """拉 US REIT（MSCI US REIT proxy: VNQ）的 DY + 5年价分位。
+    """拉 US REIT（MSCI US REIT proxy: VNQ）的 DY + 5Y DY 分位。
+
+    用 yfinance VNQ 5 年 daily history 算月度 DY-TTM 序列，再算当前 DY 的分位。
 
     失败 → 返回的 REITValuation.error 字段非空，value/percentile 为 None。
     """
     try:
         yf = _get_yf()
-        import pandas as pd
 
         t = yf.Ticker(US_REIT_PROXY)
         hist = t.history(period=f"{HISTORY_YEARS}y")
@@ -117,40 +180,44 @@ def fetch_us_reit() -> REITValuation:
                 index_code=".MSCI_US_REIT",
                 metric="dy",
                 value=None,
-                price_percentile_5y=None,
+                dy_percentile_5y=None,
+                valuation_percentile_5y=None,
                 data_date=date.today(),
                 source=f"yfinance {US_REIT_PROXY}",
                 error="yfinance 返回空数据",
             )
 
-        # 价分位：用过去 5Y daily close 算 current close 的分位
-        closes: list[float] = hist["Close"].dropna().tolist()
-        current_price = float(hist["Close"].iloc[-1])
-        price_pct = _percentile_rank(closes, current_price)
+        current_dy, dy_pct, val_pct, data_date = _compute_dy_series_percentile(hist)
 
-        # DY-TTM：过去 365 天 dividends / 当前价
-        # 兼容 pandas 新旧 API：直接用 .loc 过滤
-        cutoff = hist.index.max() - pd.Timedelta(days=365)
-        recent = hist.loc[hist.index >= cutoff]
-        trailing_divs = float(recent["Dividends"].sum())
-        dy_ttm_pct = (trailing_divs / current_price) * 100  # 百分数
+        if current_dy is None:
+            return REITValuation(
+                index_code=".MSCI_US_REIT",
+                metric="dy",
+                value=None,
+                dy_percentile_5y=None,
+                valuation_percentile_5y=None,
+                data_date=date.today(),
+                source=f"yfinance {US_REIT_PROXY}",
+                error="DY 序列算不出来（数据不足）",
+            )
 
-        latest_date = hist.index.max().date()
         return REITValuation(
             index_code=".MSCI_US_REIT",
             metric="dy",
-            value=Decimal(str(round(dy_ttm_pct, 4))),  # 3.7623 → 3.7623
-            price_percentile_5y=Decimal(str(round(price_pct, 4))),
-            data_date=latest_date,
+            value=current_dy,
+            dy_percentile_5y=dy_pct,
+            valuation_percentile_5y=val_pct,
+            data_date=data_date or date.today(),
             source=f"yfinance {US_REIT_PROXY}（Vanguard REIT ETF 代理 MSCI US REIT，"
-            f"trailing 12M dividends / close）",
+            f"trailing 12M dividends / close，月度 DY-TTM 序列算 5Y 分位）",
         )
     except Exception as e:
         return REITValuation(
             index_code=".MSCI_US_REIT",
             metric="dy",
             value=None,
-            price_percentile_5y=None,
+            dy_percentile_5y=None,
+            valuation_percentile_5y=None,
             data_date=date.today(),
             source=f"yfinance {US_REIT_PROXY}",
             error=f"{type(e).__name__}: {e}"[:200],
@@ -158,16 +225,21 @@ def fetch_us_reit() -> REITValuation:
 
 
 def fetch_cn_reit() -> REITValuation:
-    """拉 CN REIT（932006 中证 REITs）的 DY（akshare）+ 5年价分位（yfinance 508000.SS）。"""
+    """拉 CN REIT（932006 中证 REITs）的当前 DY（akshare）+ 5Y DY 分位（yfinance 508000.SS）。
+
+    当前 DY 用 akshare（更准，对应指数本身）；
+    5Y DY 分位用 508000.SS 月度 DY-TTM 序列（华夏 REITs ETF，代理 932006）。
+    """
     dy_value: Decimal | None = None
     dy_date: date | None = None
     dy_source = "akshare stock_zh_index_value_csindex(932006)"
     dy_error: str | None = None
 
-    price_pct: Decimal | None = None
-    price_date: date | None = None
-    price_source = f"yfinance {CN_REIT_PROXY}（华夏 REITs ETF 代理 932006）"
-    price_error: str | None = None
+    dy_pct: Decimal | None = None
+    val_pct: Decimal | None = None
+    pct_date: date | None = None
+    pct_source = f"yfinance {CN_REIT_PROXY}（华夏 REITs ETF 代理 932006，月度 DY-TTM 5Y 分位）"
+    pct_error: str | None = None
 
     # 1. 当前 DY（akshare）
     try:
@@ -176,66 +248,63 @@ def fetch_cn_reit() -> REITValuation:
         if df is None or df.empty or "股息率1" not in df.columns:
             dy_error = "akshare 返回空数据"
         else:
-            # 最新一行（已按日期升序，tail(1)）
             latest = df.tail(1).iloc[0]
-            dy_pct = float(latest["股息率1"])
-            if dy_pct != dy_pct:  # NaN
+            dy_pct_val = float(latest["股息率1"])
+            if dy_pct_val != dy_pct_val:  # NaN
                 dy_error = "akshare DY 字段为 NaN"
             else:
-                dy_value = Decimal(str(round(dy_pct, 4)))
-                # 日期字段是 'YYYY-MM-DD' 字符串
+                dy_value = Decimal(str(round(dy_pct_val, 4)))
                 dy_date = date.fromisoformat(str(latest["日期"]))
     except Exception as e:
         dy_error = f"akshare {type(e).__name__}: {e}"[:150]
 
-    # 2. 5年价分位（yfinance 508000.SS）
+    # 2. 5Y DY 分位（yfinance 508000.SS 月度 DY-TTM 序列）
     try:
         yf = _get_yf()
         t = yf.Ticker(CN_REIT_PROXY)
         hist = t.history(period=f"{HISTORY_YEARS}y")
         if hist.empty:
-            price_error = "yfinance 返回空数据"
+            pct_error = "yfinance 返回空数据"
         else:
-            closes: list[float] = hist["Close"].dropna().tolist()
-            current_price = float(hist["Close"].iloc[-1])
-            price_pct_dec = Decimal(str(round(_percentile_rank(closes, current_price), 4)))
-            price_pct = price_pct_dec
-            price_date = hist.index.max().date()
+            _, dy_pct, val_pct, pct_date = _compute_dy_series_percentile(hist)
+            if dy_pct is None:
+                pct_error = "DY 序列算不出来（数据不足）"
     except Exception as e:
-        price_error = f"yfinance {type(e).__name__}: {e}"[:150]
+        pct_error = f"yfinance {type(e).__name__}: {e}"[:150]
 
     # 拼装
-    if dy_value is None and price_pct is None:
-        error = f"akshare: {dy_error}; yfinance: {price_error}"
+    if dy_value is None and val_pct is None:
+        error = f"akshare: {dy_error}; yfinance: {pct_error}"
         return REITValuation(
             index_code="932006",
             metric="dy",
             value=None,
-            price_percentile_5y=None,
+            dy_percentile_5y=None,
+            valuation_percentile_5y=None,
             data_date=date.today(),
-            source=f"{dy_source} + {price_source}",
+            source=f"{dy_source} + {pct_source}",
             error=error,
         )
 
     # data_date 取两者中较新的（更接近"现在"）
-    candidates = [d for d in (dy_date, price_date) if d is not None]
+    candidates = [d for d in (dy_date, pct_date) if d is not None]
     final_date = max(candidates) if candidates else date.today()
 
-    # partial error: 哪个没拉到就标哪个
-    error_parts = []
+    error_parts: list[str] = []
     if dy_value is None:
         error_parts.append(f"DY 失败: {dy_error}")
-    if price_pct is None:
-        error_parts.append(f"价分位失败: {price_error}")
+    if val_pct is None:
+        error_parts.append(f"分位失败: {pct_error}")
     error_msg = "; ".join(error_parts) if error_parts else None
 
     return REITValuation(
         index_code="932006",
         metric="dy",
         value=dy_value,
-        price_percentile_5y=price_pct,
+        dy_percentile_5y=dy_pct,
+        valuation_percentile_5y=val_pct,
         data_date=final_date,
-        source=f"{dy_source} + {price_source}",
+        source=f"{dy_source} + {pct_source}",
         error=error_msg,
     )
 
@@ -252,9 +321,16 @@ def fetch_all() -> dict[str, REITValuation]:
 
 
 def to_json(snapshots: dict[str, REITValuation], fetched_at: datetime | None = None) -> dict:
-    """REITValuation → JSON 友好 dict。"""
+    """REITValuation → JSON 友好 dict。
+
+    输出字段：
+    - metric: "dy"
+    - value: 当前 DY（percent number 字符串）
+    - dy_percentile_5y: 原始 DY 分位（高 = 便宜）
+    - valuation_percentile_5y: 1 - dy_percentile（低 = 便宜）
+    - data_date, source, error
+    """
     if fetched_at is None:
-        # 北京时间
         bj = timezone(timedelta(hours=8))
         fetched_at = datetime.now(bj)
     return {
@@ -264,7 +340,12 @@ def to_json(snapshots: dict[str, REITValuation], fetched_at: datetime | None = N
             code: {
                 "metric": s.metric,
                 "value": str(s.value) if s.value is not None else None,
-                "price_percentile_5y": str(s.price_percentile_5y) if s.price_percentile_5y is not None else None,
+                "dy_percentile_5y": str(s.dy_percentile_5y) if s.dy_percentile_5y is not None else None,
+                "valuation_percentile_5y": (
+                    str(s.valuation_percentile_5y)
+                    if s.valuation_percentile_5y is not None
+                    else None
+                ),
                 "data_date": s.data_date.isoformat(),
                 "source": s.source,
                 "error": s.error,
@@ -293,8 +374,11 @@ def load_snapshot(path: Path) -> dict[str, REITValuation]:
             index_code=code,
             metric=entry["metric"],
             value=Decimal(entry["value"]) if entry.get("value") else None,
-            price_percentile_5y=Decimal(entry["price_percentile_5y"])
-            if entry.get("price_percentile_5y")
+            dy_percentile_5y=Decimal(entry["dy_percentile_5y"])
+            if entry.get("dy_percentile_5y")
+            else None,
+            valuation_percentile_5y=Decimal(entry["valuation_percentile_5y"])
+            if entry.get("valuation_percentile_5y")
             else None,
             data_date=date.fromisoformat(entry["data_date"]),
             source=entry["source"],
@@ -332,14 +416,20 @@ def run_fetch_cli() -> str:
             lines.append(f"  ✗ {code}: {s.error}")
         else:
             dy_str = f"{float(s.value):.2f}%" if s.value is not None else "—"
-            pct_str = (
-                f"{float(s.price_percentile_5y) * 100:.2f}%"
-                if s.price_percentile_5y is not None
+            # 显示 DY 原始分位（高 = 便宜）— 跟 card 一致
+            dy_pct_str = (
+                f"{float(s.dy_percentile_5y) * 100:.2f}%"
+                if s.dy_percentile_5y is not None
+                else "—"
+            )
+            val_pct_str = (
+                f"{float(s.valuation_percentile_5y) * 100:.2f}%"
+                if s.valuation_percentile_5y is not None
                 else "—"
             )
             lines.append(
-                f"  ✓ {code}: DY {dy_str} / 5Y价分位 {pct_str} / "
-                f"数据日期 {s.data_date.isoformat()}"
+                f"  ✓ {code}: DY {dy_str} / DY 5Y分位 {dy_pct_str} "
+                f"(估值分位 {val_pct_str}) / 数据日期 {s.data_date.isoformat()}"
             )
     return "\n".join(lines)
 
@@ -347,6 +437,7 @@ def run_fetch_cli() -> str:
 __all__ = [
     "DATA_DIR",
     "REITValuation",
+    "_compute_dy_series_percentile",
     "fetch_us_reit",
     "fetch_cn_reit",
     "fetch_all",

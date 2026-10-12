@@ -203,9 +203,9 @@ PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal | None, Decimal |
     ".FCHI": (ValuationMetric.PE_TTM, Decimal("17.31"), Decimal("0.719")),      # 法国 CAC 40（法国整体市场口径）
     # ── 新兴市场（PE-TTM）──
     ".MSCI_EM": (ValuationMetric.PE_TTM, Decimal("14.30"), Decimal("0.60")),   # MSCI Emerging Markets
-    # ── 美国 REITs（DY + 5年价分位，spec REITs-DY — liubo 2026-10-12 拍板；见 LIVE_REIT_SNAPSHOT_BY_INDEX）──
+    # ── 美国 REITs（DY + 5年估值分位，spec REITs-DY — liubo 2026-10-12 拍板；见 LIVE_REIT_SNAPSHOT_BY_INDEX）──
     # ".MSCI_US_REIT": 见 LIVE_REIT_SNAPSHOT_BY_INDEX（fetch_reit_valuation.py 注入）
-    # ── 国内 REITs（DY + 5年价分位，spec REITs-DY — liubo 2026-10-12 拍板）──
+    # ── 国内 REITs（DY + 5年估值分位，spec REITs-DY — liubo 2026-10-12 拍板）──
     # "932006": 见 LIVE_REIT_SNAPSHOT_BY_INDEX
     # ── 黄金（spec 099 — liubo 2026-10-08）──
     # 主指标存金价分位（给卡片展示用），调仓信号走 composite_score
@@ -217,9 +217,10 @@ PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal | None, Decimal |
 
 # LIVE_REIT_SNAPSHOT_BY_INDEX: REITs 指数的实时估值（spec REITs-DY — liubo 2026-10-12 拍板）
 # 来源：scripts/ 跑 fetch_reit_valuation.py → 写 JSON → load_latest_snapshot() 注入这里
-# 字段：index_code → (metric, value, price_percentile_5y, data_date)
+# 字段：index_code → (metric, value, valuation_percentile_5y, data_date)
 # - value: 股息率 percent number（3.76 = 3.76%，跟 akshare 输出一致）
-# - price_percentile_5y: 5年价分位 fraction（0.42 = 42%；yfinance 日线算）
+# - valuation_percentile_5y: 估值分位 fraction（0.42 = 42%；低 = 便宜，跟 PE/PS 一致）。
+#   原始 DY 分位（高 = 便宜）已翻转存进这个字段，JSON 里另存 dy_percentile_5y 给卡片展示用。
 # - data_date: 数据日期（不是 fetch 日期）
 #
 # 如果 load_latest_snapshot() 没找到文件（首次跑、JSON 还没生成），这里就是空 dict。
@@ -771,7 +772,9 @@ def load_live_reit_snapshot() -> dict[str, tuple[ValuationMetric, Decimal | None
     _path, snapshots = result
     for code, s in snapshots.items():
         # error 字段非空 → 当数据缺失处理（value=None, percentile=None）
-        if s.error and (s.value is None or s.price_percentile_5y is None):
+        # valuation_percentile_5y 是翻转后的估值分位（低 = 便宜，跟 PE/PS 一致），
+        # 直接进规则不用再翻。卡片展示用 dy_percentile_5y（高 = DY 高 = 便宜）。
+        if s.error and (s.value is None or s.valuation_percentile_5y is None):
             LIVE_REIT_SNAPSHOT_BY_INDEX[code] = (
                 ValuationMetric.DY,
                 None,
@@ -782,7 +785,7 @@ def load_live_reit_snapshot() -> dict[str, tuple[ValuationMetric, Decimal | None
         LIVE_REIT_SNAPSHOT_BY_INDEX[code] = (
             ValuationMetric.DY,
             s.value,
-            s.price_percentile_5y,
+            s.valuation_percentile_5y,
             s.data_date,
         )
     return LIVE_REIT_SNAPSHOT_BY_INDEX
