@@ -1639,8 +1639,10 @@ def cmd_pe_rebalance(
     默认打到 stdout；--send 通过飞书 OpenAPI 发卡片到话题 thread（每周五 cron 用）。
     --dry-run 只打印卡片 JSON 不真发。
 
-    数据源：hardcoded PE_SNAPSHOT_BY_INDEX + COST_BASIS_BY_CODE（spec 097 第十九轮）。
-    后续接 akshare fetcher 自动拉 PE 后会自动更新 snapshot。
+    数据源：
+    - 股票 / 黄金：hardcoded PE_SNAPSHOT_BY_INDEX + COST_BASIS_BY_CODE（spec 097 第十九轮）
+    - REITs（spec REITs-DY — liubo 2026-10-12 拍板）：LIVE_REIT_SNAPSHOT_BY_INDEX
+      每周五 cron 跑 `gap portfolio reit-fetch` 注入（akshare 932006 + yfinance VNQ/508000.SS）
     """
     from global_allocation.portfolio.pe_rebalance import (
         weekly_rebalance_plan,
@@ -1679,6 +1681,26 @@ def cmd_pe_rebalance(
         from global_allocation.portfolio.pe_rebalance import format_weekly_report
 
         console.print(format_weekly_report(actions))
+
+
+# ─── reit-fetch subcommand (spec REITs-DY — liubo 2026-10-12 拍板) ───
+
+
+@app.command("reit-fetch")
+def cmd_reit_fetch() -> None:
+    """拉 REITs 估值数据（DY + 5年价分位）→ 写 data/reit_valuation/YYYY-MM-DD.json。
+
+    数据源：
+    - US REIT (MSCI US REIT 代理: VNQ yfinance)
+    - CN REIT 932006 (akshare 股息率 + yfinance 508000.SS 5Y 价分位)
+
+    每周五 cron 在 pe-rebalance 之前跑（pe_rebalance_friday.sh）。
+    失败不抛异常，exit code 0（让周报仍能跑用 fallback）。
+    """
+    from global_allocation.portfolio.fetch_reit_valuation import run_fetch_cli
+
+    output = run_fetch_cli()
+    console.print(output)
 
 
 # ─── etf-rotation subcommand (liubo 2026-09-29 拍板：主观轮动 + 严格仓位管理) ───

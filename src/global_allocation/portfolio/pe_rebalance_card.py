@@ -77,6 +77,8 @@ METRIC_DISPLAY: dict[ValuationMetric, str] = {
     # spec 099 黄金 2 指标
     ValuationMetric.GOLD_HISTORICAL_PCT: "金价",         # value=SGE Au99.99 CNY/g
     ValuationMetric.GOLD_REAL_YIELD: "实际利率",          # value=FRED DFII10（fraction）
+    # spec REITs-DY — liubo 2026-10-12 拍板
+    ValuationMetric.DY: "DY",                            # value=股息率 percent number（3.76=3.76%）
 }
 
 
@@ -96,6 +98,7 @@ def _fmt_metric_value(metric: ValuationMetric, value: Decimal | None) -> str:
     """估值倍数 / 价格格式化：
     - PE / P-FFO: 'XX.XX'
     - P-NAV: 'XX.XXx'
+    - DY: 'X.XX%'（percent number，3.76 → "3.76%"）
     - 金价: 'XXX.XX CNY/g'
     - 实际利率: 'X.XX%'（fraction → percent）
     """
@@ -109,6 +112,11 @@ def _fmt_metric_value(metric: ValuationMetric, value: Decimal | None) -> str:
         # FRED DFII10（fraction: 0.0291 = 2.91%）
         pct = (value * Decimal("100")).quantize(Decimal("0.00"))
         return f"{pct}%"
+    if metric == ValuationMetric.DY:
+        # REITs 股息率（spec REITs-DY — liubo 2026-10-12 拍板）
+        # value 已经是 percent number（3.76 = 3.76%，跟 akshare 输出一致）
+        quantized = value.quantize(Decimal("0.00"))
+        return f"{quantized}%"
     quantized = value.quantize(Decimal("0.00"))
     if metric == ValuationMetric.P_NAV:
         return f"{quantized}x"
@@ -322,6 +330,24 @@ def build_pe_rebalance_card(
     if skipped_section is not None:
         elements.extend(skipped_section)
 
+    # REITs 数据日期（spec REITs-DY — liubo 2026-10-12 拍板）
+    # 卡片底部 note 里显示，让 liubo 知道卡片里的 DY 是哪天的数据
+    footer_parts = [
+        "spec 022 — 每周五自动评估估值分位（A 股/美股 PE-TTM / US REIT + 中证 REITs DY）"
+    ]
+    try:
+        from global_allocation.portfolio.pe_rebalance import get_live_reit_data_date
+
+        reit_date = get_live_reit_data_date()
+        if reit_date is not None:
+            days_old = (date.today() - reit_date).days
+            freshness = "今日" if days_old == 0 else f"{days_old} 天前"
+            footer_parts.append(
+                f"REITs DY 数据日期 {reit_date.isoformat()}（{freshness}，akshare 932006 + yfinance VNQ/508000.SS）"
+            )
+    except Exception:
+        pass  # 不影响卡片主显示
+
     card: dict[str, Any] = {
         "header": {
             "template": "blue",
@@ -334,7 +360,7 @@ def build_pe_rebalance_card(
         "footer": {
             "tag": "note",
             "elements": [
-                {"tag": "plain_text", "content": "spec 022 — 每周五自动评估估值分位（A 股/美股 PE-TTM / US REIT P/FFO / 中证 REITs P/NAV）"}
+                {"tag": "plain_text", "content": part} for part in footer_parts
             ],
         },
     }

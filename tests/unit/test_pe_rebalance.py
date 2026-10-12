@@ -13,10 +13,14 @@
 - 仓位 >= 1 + 分位 > 80% → REDUCE -1
 - 数据缺失 → SKIP
 
-估值指标（liubo 2026-09-24 扩展）：
+估值指标（liubo 2026-09-24 扩展 + 2026-10-12 拍板 REITs 改 DY）：
 - 股票类：PE-TTM
-- US REIT：P/FFO（MSCI/NAREIT 标准）
-- 中证 REITs：P/NAV（国内券商惯例）
+- US REIT：DY（yfinance VNQ 代理 MSCI US REIT 算 DY-TTM + 5年价分位）
+- 中证 REITs：DY（akshare 932006 + yfinance 508000.SS 算 5年价分位）
+
+spec REITs-DY（liubo 2026-10-12）之前：US REIT 用 P/FFO、中证 REITs 用 P/NAV。
+- 枚举值 P_FFO / P_NAV 仍保留以兼容旧代码 / 旧数据
+- 但 build_evaluations 现在走 LIVE_REIT_SNAPSHOT_BY_INDEX（不是 PE_SNAPSHOT_BY_INDEX）
 """
 
 from __future__ import annotations
@@ -31,6 +35,7 @@ from global_allocation.portfolio.pe_rebalance import (
     FUND_INDEX_MAP,
     INDEX_DISPLAY_NAME,
     INDEX_WATCHLIST,
+    LIVE_REIT_SNAPSHOT_BY_INDEX,
     PESignal,
     PE_SNAPSHOT_BY_INDEX,
     RebalanceAction,
@@ -44,6 +49,42 @@ from global_allocation.portfolio.pe_rebalance import (
     merge_by_etf,
     weekly_rebalance_plan,
 )
+
+
+# ─── autouse fixture：注入测试用 LIVE_REIT_SNAPSHOT_BY_INDEX（spec REITs-DY）───
+#
+# 模块加载时 load_live_reit_snapshot() 可能空（无 JSON）；测试需要 REITs 有数据才能验完整链路。
+# 用 autouse 让所有 test 默认注入，个别 test 需要"空"时显式 monkeypatch clear()。
+
+
+_TEST_REIT_DY_DATA = {
+    ".MSCI_US_REIT": (
+        ValuationMetric.DY,
+        Decimal("3.76"),   # 3.76% DY-TTM（VNQ 代理）
+        Decimal("0.42"),   # 5年价分位 42%
+        date(2026, 10, 9),
+    ),
+    "932006": (
+        ValuationMetric.DY,
+        Decimal("6.59"),   # 6.59% DY（中证 REITs 2026-09-16 最新）
+        Decimal("0.48"),   # 5年价分位 48%
+        date(2026, 9, 16),
+    ),
+}
+
+
+@pytest.fixture(autouse=True)
+def _inject_reit_snapshot() -> None:
+    """所有 test 默认注入测试用 REITs DY 数据。
+
+    需要测"无 snapshot"路径的 test 显式调用
+    `pr_mod.LIVE_REIT_SNAPSHOT_BY_INDEX.clear()` 即可。
+    """
+    from global_allocation.portfolio import pe_rebalance as pr_mod
+    pr_mod.LIVE_REIT_SNAPSHOT_BY_INDEX.update(_TEST_REIT_DY_DATA)
+    yield  # 让 test 跑
+    # 清理（防止 test 顺序影响）
+    pr_mod.LIVE_REIT_SNAPSHOT_BY_INDEX.clear()
 
 
 def _make_eval(
@@ -468,16 +509,40 @@ class TestBuildEvaluations:
             assert e.metric_percentile is not None
 
     def test_reits_have_metric(self) -> None:
-        """REITs 现在有指标（不再 SKIP；US 用 P/FFO，中证用 P/NAV）。"""
+        """REITs 用 DY（spec REITs-DY — liubo 2026-10-12 拍板）替代 P/FFO / P/NAV。
+
+        测试用 fixture 注入 LIVE_REIT_SNAPSHOT_BY_INDEX，验证 build_evaluations 走 live snapshot。
+        """
         evals = build_evaluations()
         cn_reit = [e for e in evals if e.subclass == SwensenClass.CN_REIT]
         us_reit = [e for e in evals if e.subclass == SwensenClass.US_REIT]
         assert len(cn_reit) == 1
         assert len(us_reit) == 1
-        assert cn_reit[0].metric == ValuationMetric.P_NAV
-        assert us_reit[0].metric == ValuationMetric.P_FFO
+        assert cn_reit[0].metric == ValuationMetric.DY
+        assert us_reit[0].metric == ValuationMetric.DY
         assert cn_reit[0].metric_value is not None
         assert us_reit[0].metric_value is not None
+
+    def test_reits_skip_without_live_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """没 LIVE_REIT_SNAPSHOT_BY_INDEX 时 REITs 走 SKIP（reason 提示跑 reit-fetch）。
+
+        spec REITs-DY — liubo 2026-10-12 拍板：REITs 不再硬编码在 PE_SNAPSHOT_BY_INDEX。
+        """
+        # 清空 LIVE_REIT_SNAPSHOT_BY_INDEX（fixture 默认有测试数据）
+        from global_allocation.portfolio import pe_rebalance as pr_mod
+        original = dict(pr_mod.LIVE_REIT_SNAPSHOT_BY_INDEX)
+        try:
+            pr_mod.LIVE_REIT_SNAPSHOT_BY_INDEX.clear()
+            evals = build_evaluations()
+            cn_reit = [e for e in evals if e.subclass == SwensenClass.CN_REIT]
+            us_reit = [e for e in evals if e.subclass == SwensenClass.US_REIT]
+            assert len(cn_reit) == 1
+            assert len(us_reit) == 1
+            # 没数据 → metric_value None → 评估时 SKIP
+            assert cn_reit[0].metric_value is None
+            assert us_reit[0].metric_value is None
+        finally:
+            pr_mod.LIVE_REIT_SNAPSHOT_BY_INDEX.update(original)
 
     def test_commodity_gold_has_composite_score(self) -> None:
         """商品（黄金）spec 099 加 2 指标综合分 → 不再 SKIP。
@@ -845,20 +910,33 @@ class TestPESnapshotData:
             assert Decimal("0") <= pct <= Decimal("1"), f"{idx} 分位 {pct} 超出 [0, 1]"
 
     def test_em_reit_snapshot_entries(self) -> None:
-        """MSCI EM / MSCI US REIT / 中证 REITs 都在。"""
+        """MSCI EM 在 PE_SNAPSHOT_BY_INDEX；REITs 移到 LIVE_REIT_SNAPSHOT_BY_INDEX（spec REITs-DY）。"""
         assert ".MSCI_EM" in PE_SNAPSHOT_BY_INDEX
-        assert ".MSCI_US_REIT" in PE_SNAPSHOT_BY_INDEX
-        assert "932006" in PE_SNAPSHOT_BY_INDEX
+        # spec REITs-DY — liubo 2026-10-12 拍板：REITs 不再硬编码
+        assert ".MSCI_US_REIT" not in PE_SNAPSHOT_BY_INDEX
+        assert "932006" not in PE_SNAPSHOT_BY_INDEX
+        # 但应该在 LIVE_REIT_SNAPSHOT_BY_INDEX（fixture 注入）
+        assert ".MSCI_US_REIT" in LIVE_REIT_SNAPSHOT_BY_INDEX
+        assert "932006" in LIVE_REIT_SNAPSHOT_BY_INDEX
 
-    def test_us_reit_uses_p_ffo_metric(self) -> None:
-        """MSCI US REIT 估值指标是 P/FFO。"""
-        metric, _, _ = PE_SNAPSHOT_BY_INDEX[".MSCI_US_REIT"]
-        assert metric == ValuationMetric.P_FFO
+    def test_us_reit_uses_dy_metric(self) -> None:
+        """MSCI US REIT 现在用 DY（spec REITs-DY — liubo 2026-10-12 拍板）。"""
+        metric, value, pct, _data_date = LIVE_REIT_SNAPSHOT_BY_INDEX[".MSCI_US_REIT"]
+        assert metric == ValuationMetric.DY
+        # value 应该是 percent number（3.76 = 3.76%）
+        assert value is not None
+        assert Decimal("1") < value < Decimal("20")  # 正常 DY 范围
+        assert pct is not None
+        assert Decimal("0") <= pct <= Decimal("1")
 
-    def test_cn_reit_uses_p_nav_metric(self) -> None:
-        """中证 REITs 估值指标是 P/NAV。"""
-        metric, _, _ = PE_SNAPSHOT_BY_INDEX["932006"]
-        assert metric == ValuationMetric.P_NAV
+    def test_cn_reit_uses_dy_metric(self) -> None:
+        """中证 REITs 用 DY。"""
+        metric, value, pct, _data_date = LIVE_REIT_SNAPSHOT_BY_INDEX["932006"]
+        assert metric == ValuationMetric.DY
+        assert value is not None
+        assert Decimal("1") < value < Decimal("20")
+        assert pct is not None
+        assert Decimal("0") <= pct <= Decimal("1")
 
     def test_a_share_uses_pe_ttm_metric(self) -> None:
         """A 股指数估值指标：

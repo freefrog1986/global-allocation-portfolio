@@ -25,7 +25,12 @@ touch "$LOCK_FILE"
 
 echo "[$(date +%FT%T)] 开始 PE-TTM 周调仓" >> "$LOG_FILE"
 
-# uv run gap portfolio pe-rebalance --send 通过飞书 OpenAPI 发卡片到话题 thread
+# 1. 先拉 REITs 估值（spec REITs-DY — liubo 2026-10-12 拍板）
+# 失败不阻断：report 仍跑（用上次 JSON 或 fallback SKIP）
+echo "[$(date +%FT%T)] 拉 REITs DY 数据" >> "$LOG_FILE"
+uv run gap portfolio reit-fetch >> "$LOG_FILE" 2>&1 || echo "[$(date +%FT%T)] REITs 拉取失败，继续跑 report" >> "$LOG_FILE"
+
+# 2. uv run gap portfolio pe-rebalance --send 通过飞书 OpenAPI 发卡片到话题 thread
 # topic root: om_x100b6410364be0b0c45b4dbfab88ab1 (botmux history 2026-09-24)
 TOPIC_ROOT="om_x100b6410364be0b0c45b4dbfab88ab1"
 uv run gap portfolio pe-rebalance --send --root "$TOPIC_ROOT" >> "$LOG_FILE" 2>&1

@@ -72,16 +72,22 @@ class ValuationMetric(str, Enum):
 
     spec 099 黄金：加 2 个黄金指标类型（GOLD_HISTORICAL_PCT + GOLD_REAL_YIELD），
     但黄金调仓走 composite_score（综合分 1-5）而不是单分位，所以 metric 字段只用于展示。
+
+    spec REITs-DY（liubo 2026-10-12 拍板）：REITs 改用股息率 DY 替代 P/FFO / P/NAV
+    （NAREIT 月报 + 招商月报难抓、6 周没更新；DY 数据易得且本质就是 REITs 估值核心）。
+    DY 当前值用 percent number 存（3.76 = 3.76%），跟 akshare 输出一致。
     """
 
     PE_TTM = "pe_ttm"  # 股票类（PE-TTM）
-    P_FFO = "p_ffo"    # US REIT（MSCI/NAREIT 标准）
-    P_NAV = "p_nav"    # 中证 REITs（国内券商惯例）
+    P_FFO = "p_ffo"    # US REIT（已废弃，liubo 2026-10-12 改 DY；保留以兼容旧 JSON）
+    P_NAV = "p_nav"    # 中证 REITs（已废弃，liubo 2026-10-12 改 DY；保留以兼容旧 JSON）
     # ── 科创 / 创业类（liubo 2026-10-09 拍板：科创 50 / 100 / 创业板 50 / 科创创业 50 改 PS）───
     PS_TTM = "ps_ttm"  # PS-TTM（市销率，营收估值，适合未盈利或盈利波动的成长股）
     # ── 黄金 2 指标（spec 099 — liubo 2026-10-08 拍板 A+B 综合分）───
     GOLD_HISTORICAL_PCT = "gold_historical_pct"  # SGE Au99.99 5 年分位
     GOLD_REAL_YIELD = "gold_real_yield"          # FRED DFII10 实际利率（fraction 0.0291 = 2.91%）
+    # ── REITs 股息率（spec REITs-DY — liubo 2026-10-12 拍板）───
+    DY = "dy"  # 股息率，percent number（3.76 = 3.76%；存 Decimal 不带 % 号）
 
 
 # 指标在卡片 / 报告里的人类可读名
@@ -92,6 +98,7 @@ METRIC_DISPLAY_NAME: dict[ValuationMetric, str] = {
     ValuationMetric.PS_TTM: "PS-TTM",  # liubo 2026-10-09 拍板科创 / 创业类指数改 PS 估值
     ValuationMetric.GOLD_HISTORICAL_PCT: "金价分位",
     ValuationMetric.GOLD_REAL_YIELD: "实际利率",
+    ValuationMetric.DY: "DY",  # 股息率（spec REITs-DY — liubo 2026-10-12）
 }
 
 
@@ -168,8 +175,8 @@ class RebalanceAction:
 #     - GDAXI 用 DAX 指数本身周频 2016 起
 #     - FCHI 用法国股市整体市场口径月频
 #   新兴市场: worldperatio + siblisresearch 2026-09-04（PE 14.3 / 分位 60%）
-#   US REIT: MSCI factsheet + NAREIT 2026-08-31（P/FFO 19.7 / 分位 60%）
-#   中证 REITs: 招商证券 2026-08-31（P/NAV 1.03 / 分位 34% — 指数只有 5 年历史）
+#   US REIT + 中证 REITs: 见 LIVE_REIT_SNAPSHOT_BY_INDEX（spec REITs-DY — liubo 2026-10-12 拍板，
+#     每周五 cron 跑 fetch_reit_valuation.py 注入；不再用陈旧 P/FFO / P/NAV 硬编码）
 #   HSI: hsi.com.hk / 百分位网 2026-09-28（PE 10.8557 / 分位 58.06%）
 #   HSTECH: 理杏仁 2026-10-09（PE 21.8289 / 分位 19.69%；触发 ADD +1 — 欠配 0.65 仓 + PE < 20%）
 #   baifenwei.com 2026-09-24 也提供 PE 分位（沪深300/科创50 等 A 股）作为交叉验证。
@@ -186,7 +193,7 @@ PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal | None, Decimal |
     "399673": (ValuationMetric.PS_TTM, Decimal("4.1510"), Decimal("0.2044")),   # 创业板 50
     # ── 美股（PE-TTM，理杏仁 2026-10-09）──
     ".INX": (ValuationMetric.PE_TTM, Decimal("26.1682"), Decimal("0.6214")),    # 标普 500
-    # .NDX: 理杏仁 2026-10-09 CSV 无数据 → entry 删除 → 5 只纳指 100 基金 SKIP（liubo 2026-10-09 拍板清空）
+    # .NDX: 理杏仁 2026-10-09 CSV 无数据 → entry 删除 → 5 只纳指 100 基金 SKIP（liubo 2026-10-09 拍板）
     ".OEX": (ValuationMetric.PE_TTM, Decimal("26.1682"), Decimal("0.6214")),    # 标普 100（INX 代理，2026-10-09 更新）
     # ── 港股（PE-TTM，理杏仁 2026-10-09）──
     "HSTECH": (ValuationMetric.PE_TTM, Decimal("21.8289"), Decimal("0.1969")),  # 恒生科技（理杏仁 2026-10-09，触发 ADD +1）
@@ -196,16 +203,30 @@ PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal | None, Decimal |
     ".FCHI": (ValuationMetric.PE_TTM, Decimal("17.31"), Decimal("0.719")),      # 法国 CAC 40（法国整体市场口径）
     # ── 新兴市场（PE-TTM）──
     ".MSCI_EM": (ValuationMetric.PE_TTM, Decimal("14.30"), Decimal("0.60")),   # MSCI Emerging Markets
-    # ── 美国 REITs（P/FFO，MSCI/NAREIT 标准）──
-    ".MSCI_US_REIT": (ValuationMetric.P_FFO, Decimal("19.70"), Decimal("0.60")),  # MSCI US REIT
-    # ── 国内 REITs（P/NAV，招商/中金标准）──
-    "932006": (ValuationMetric.P_NAV, Decimal("1.03"), Decimal("0.34")),       # 中证 REITs 指数
+    # ── 美国 REITs（DY + 5年价分位，spec REITs-DY — liubo 2026-10-12 拍板；见 LIVE_REIT_SNAPSHOT_BY_INDEX）──
+    # ".MSCI_US_REIT": 见 LIVE_REIT_SNAPSHOT_BY_INDEX（fetch_reit_valuation.py 注入）
+    # ── 国内 REITs（DY + 5年价分位，spec REITs-DY — liubo 2026-10-12 拍板）──
+    # "932006": 见 LIVE_REIT_SNAPSHOT_BY_INDEX
     # ── 黄金（spec 099 — liubo 2026-10-08）──
     # 主指标存金价分位（给卡片展示用），调仓信号走 composite_score
     # 综合分在 GOLD_SNAPSHOT 算好后 build_evaluations 填入 FundPEvaluation.composite_score
     # 2026-10-08 改：金价 907.50 + 5 年分位 61.58%（liubo 拍板用 5 年分位）
     "GOLD": (ValuationMetric.GOLD_HISTORICAL_PCT, Decimal("907.50"), Decimal("0.6158")),  # SGE Au99.99 5 年分位 2026-10-08
 }
+
+
+# LIVE_REIT_SNAPSHOT_BY_INDEX: REITs 指数的实时估值（spec REITs-DY — liubo 2026-10-12 拍板）
+# 来源：scripts/ 跑 fetch_reit_valuation.py → 写 JSON → load_latest_snapshot() 注入这里
+# 字段：index_code → (metric, value, price_percentile_5y, data_date)
+# - value: 股息率 percent number（3.76 = 3.76%，跟 akshare 输出一致）
+# - price_percentile_5y: 5年价分位 fraction（0.42 = 42%；yfinance 日线算）
+# - data_date: 数据日期（不是 fetch 日期）
+#
+# 如果 load_latest_snapshot() 没找到文件（首次跑、JSON 还没生成），这里就是空 dict。
+# build_evaluations() 在这种情况下会让 REITs 走 SKIP 路径 + reason 提示跑 reit-fetch。
+LIVE_REIT_SNAPSHOT_BY_INDEX: dict[
+    str, tuple[ValuationMetric, Decimal | None, Decimal | None, "date"]
+] = {}
 
 
 # 基金 → 跟踪指数代码 + 中文名映射
@@ -732,6 +753,48 @@ def _apply_cooldown(action: RebalanceAction, today: date) -> RebalanceAction:
     )
 
 
+# ─── REITs 实时 snapshot 加载（spec REITs-DY — liubo 2026-10-12 拍板）───
+
+
+def load_live_reit_snapshot() -> dict[str, tuple[ValuationMetric, Decimal | None, Decimal | None, date]]:
+    """从 data/reit_valuation/ 最新 JSON 读 REITs 实时估值，注入 LIVE_REIT_SNAPSHOT_BY_INDEX。
+
+    返回更新后的 LIVE_REIT_SNAPSHOT_BY_INDEX 引用（同时也写回 module-level 变量）。
+    """
+    from global_allocation.portfolio.fetch_reit_valuation import load_latest_snapshot
+
+    result = load_latest_snapshot()
+    if result is None:
+        # 没有可用快照 — 保持空 dict，build_evaluations 会让 REITs SKIP
+        return LIVE_REIT_SNAPSHOT_BY_INDEX
+
+    _path, snapshots = result
+    for code, s in snapshots.items():
+        # error 字段非空 → 当数据缺失处理（value=None, percentile=None）
+        if s.error and (s.value is None or s.price_percentile_5y is None):
+            LIVE_REIT_SNAPSHOT_BY_INDEX[code] = (
+                ValuationMetric.DY,
+                None,
+                None,
+                s.data_date,
+            )
+            continue
+        LIVE_REIT_SNAPSHOT_BY_INDEX[code] = (
+            ValuationMetric.DY,
+            s.value,
+            s.price_percentile_5y,
+            s.data_date,
+        )
+    return LIVE_REIT_SNAPSHOT_BY_INDEX
+
+
+def get_live_reit_data_date() -> date | None:
+    """LIVE_REIT_SNAPSHOT_BY_INDEX 里所有 REITs 的最大 data_date（卡片展示用）。"""
+    if not LIVE_REIT_SNAPSHOT_BY_INDEX:
+        return None
+    return max(d for _, _, _, d in LIVE_REIT_SNAPSHOT_BY_INDEX.values())
+
+
 def get_current_position(fund_code: str) -> Decimal:
     """从 COST_BASIS_BY_CODE 算当前仓位（cost / 10000, 单位 = 1 万 CNY）。
 
@@ -752,14 +815,21 @@ def build_evaluations() -> list[FundPEvaluation]:
     每只基金 1 个 FundPEvaluation（不合并 — 由 merge_by_etf 后续处理）。
     snapshot 缺数据的 → PE=None → evaluate_fund 返回 SKIP。
     黄金（spec 099）：额外从 GOLD_SNAPSHOT_BY_FUND 算 2 指标综合分填 composite_score。
+
+    REITs（spec REITs-DY — liubo 2026-10-12 拍板）：优先用 LIVE_REIT_SNAPSHOT_BY_INDEX
+    的 DY 数据；空则 SKIP（reason 提示跑 `gap portfolio reit-fetch`）。
     """
     out: list[FundPEvaluation] = []
     for fund_code, (subclass, index_code, fund_name) in FUND_INDEX_MAP.items():
-        snapshot = PE_SNAPSHOT_BY_INDEX.get(index_code)
-        if snapshot is None:
-            metric, value, pct = ValuationMetric.PE_TTM, None, None
+        # REITs 走 live snapshot，stock / 黄金走静态 PE_SNAPSHOT_BY_INDEX
+        if index_code in LIVE_REIT_SNAPSHOT_BY_INDEX:
+            metric, value, pct, data_date = LIVE_REIT_SNAPSHOT_BY_INDEX[index_code]
         else:
-            metric, value, pct = snapshot
+            snapshot = PE_SNAPSHOT_BY_INDEX.get(index_code)
+            if snapshot is None:
+                metric, value, pct = ValuationMetric.PE_TTM, None, None
+            else:
+                metric, value, pct = snapshot
         # 黄金算综合分（spec 099）
         composite = _compute_gold_composite(fund_code, value, pct)
         out.append(
@@ -992,6 +1062,10 @@ def format_weekly_report(actions: list[RebalanceAction], today: date | None = No
                     val_str = f"{float(a.metric_value):.2f}x"
                 elif a.metric == ValuationMetric.P_NAV:
                     val_str = f"{float(a.metric_value):.2f}x"
+                elif a.metric == ValuationMetric.DY:
+                    # spec REITs-DY — liubo 2026-10-12 拍板
+                    # value 已经是 percent number（3.76 = 3.76%）
+                    val_str = f"{float(a.metric_value):.2f}%"
                 elif a.metric == ValuationMetric.GOLD_HISTORICAL_PCT:
                     # 金价单位是 CNY/g，不是倍数
                     val_str = f"{float(a.metric_value):.2f} CNY/g"
@@ -1025,6 +1099,7 @@ __all__ = [
     "FundPEvaluation",
     "RebalanceAction",
     "PE_SNAPSHOT_BY_INDEX",
+    "LIVE_REIT_SNAPSHOT_BY_INDEX",
     "FUND_INDEX_MAP",
     "INDEX_DISPLAY_NAME",
     "INDEX_WATCHLIST",
@@ -1035,9 +1110,21 @@ __all__ = [
     "_evaluate_signal",
     "_apply_cooldown",
     "get_current_position",
+    "load_live_reit_snapshot",
+    "get_live_reit_data_date",
     "build_evaluations",
     "build_watchlist_evaluations",
     "merge_by_etf",
     "weekly_rebalance_plan",
     "format_weekly_report",
 ]
+
+
+# ─── 模块加载时自动注入 REITs 实时 snapshot ─────────────────
+# spec REITs-DY — liubo 2026-10-12 拍板
+# 没有 snapshot 文件 → LIVE_REIT_SNAPSHOT_BY_INDEX 保持空 dict（build_evaluations 走 SKIP）
+try:
+    load_live_reit_snapshot()
+except Exception:
+    # 加载失败（首次跑、文件系统问题等）→ 保持空，不影响其他指数评估
+    pass
