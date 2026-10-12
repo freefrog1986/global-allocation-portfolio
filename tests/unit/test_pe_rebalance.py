@@ -447,12 +447,46 @@ class TestCooldown:
         cooled = _apply_cooldown(action, today=date(2026, 9, 25))
         assert cooled.signal == PESignal.ADD  # 不变
 
+    def test_2026_10_09_built_etfs_in_cooldown(self) -> None:
+        """2026-10-09 新建仓的 000698 科创100 / 399673 创业板50 在 30 天冷却期内。
+
+        liubo 2026-10-09 拍板换 020291→019857（科创100，建仓 1 仓）+ 160422→023414（创业板50，
+        建仓 1 仓），都应该在 2026-11-08 之前冻结 ADD。修复 2026-10-12 用户报漏更新
+        LAST_REBALANCE_BY_ETF 的 bug — 没录入的话本周报虽然不显示 ADD（因为分位 20.44%/46.27%
+        都在 HOLD 范围），但下次分位跌破 20% 就会绕过冷却期错误触发。
+        """
+        from global_allocation.portfolio.pe_rebalance import (
+            _apply_cooldown,
+            _evaluate_signal,
+        )
+
+        for etf_code, etf_name in [("000698", "科创 100"), ("399673", "创业板 50")]:
+            eval_ = _make_eval(
+                etf_index_code=etf_code,
+                metric=ValuationMetric.PS_TTM,
+                metric_percentile=Decimal("0.10"),  # 模拟跌破 20% 深价值
+                current_position=Decimal("1"),       # 已配足 1 仓
+            )
+            action = _evaluate_signal(eval_)
+            assert action.signal == PESignal.ADD, f"{etf_name} 应该触发 ADD"
+
+            # 2026-10-12 距 2026-10-09 = 3 天 < 30天 → 转 HOLD（冷却期冻结）
+            cooled = _apply_cooldown(action, today=date(2026, 10, 12))
+            assert cooled.signal == PESignal.HOLD, f"{etf_name} 在冷却期内应被冻结为 HOLD"
+            assert "冷却期" in cooled.reason
+
+            # 2026-11-09 距 2026-10-09 = 31 天 > 30天 → 解冻，ADD 正常通过
+            cooled_pass = _apply_cooldown(action, today=date(2026, 11, 9))
+            assert cooled_pass.signal == PESignal.ADD, f"{etf_name} 冷却期已过应通过"
+
     def test_last_rebalance_dict_has_initial_entries(self) -> None:
-        """LAST_REBALANCE_BY_ETF 初始含 2026-09-24 两次调仓（A50 + 中证 REITs）。"""
+        """LAST_REBALANCE_BY_ETF 初始含 2026-09-24 两次调仓（A50 + 中证 REITs）+ 2026-10-09 新建仓 2 个（科创100/创业板50）。"""
         from global_allocation.portfolio.pe_rebalance import LAST_REBALANCE_BY_ETF
 
         assert LAST_REBALANCE_BY_ETF["930050"] == date(2026, 9, 24)
         assert LAST_REBALANCE_BY_ETF["932006"] == date(2026, 9, 24)
+        assert LAST_REBALANCE_BY_ETF["000698"] == date(2026, 10, 9)
+        assert LAST_REBALANCE_BY_ETF["399673"] == date(2026, 10, 9)
 
     def test_cooldown_days_constant_is_30(self) -> None:
         """COOLDOWN_DAYS = 30（月度调仓）。"""

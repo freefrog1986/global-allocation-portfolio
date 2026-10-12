@@ -320,6 +320,9 @@ INDEX_WATCHLIST: list[tuple[SwensenClass, str, str, ValuationMetric, Decimal, De
 LAST_REBALANCE_BY_ETF: dict[str, date] = {
     "930050": date(2026, 9, 24),  # 中证 A50 — liubo 2026-09-24 转 008505 → 014532
     "932006": date(2026, 9, 24),  # 中证 REITs — liubo 2026-09-24 转 008505 → 028277
+    # liubo 2026-10-09 新建仓（commit 664b6d6）：换 020291→019857（科创100）+ 160422→023414（创业板50）
+    "000698": date(2026, 10, 9),  # 科创 100 — liubo 2026-10-09 新建仓 1 仓
+    "399673": date(2026, 10, 9),  # 创业板 50 — liubo 2026-10-09 新建仓 1 仓
 }
 
 COOLDOWN_DAYS: int = 30  # 月度调仓最短间隔
