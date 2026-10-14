@@ -327,6 +327,94 @@ LAST_REBALANCE_BY_ETF: dict[str, date] = {
 
 COOLDOWN_DAYS: int = 30  # 月度调仓最短间隔
 
+# 持有期约束（liubo 2026-10-14 拍板）
+# REDUCE 信号必须等赎回费归零（最早购买日期 + 阈值天数 ≤ today）才能执行卖出。
+# 阈值两类（数据源：akshare 天天基金 fund_fee_em，2026-10-14 拉）：
+# 1. REDEMPTION_FEE_DAYS_BY_CODE：赎回费率表里首次出现 0% 的天数（如 730 = 2 年）
+# 2. HOLDING_PERIOD_DAYS_BY_CODE：「持有期」基金（赎回费 0% 但期内不可赎回，等于锁定期）：
+#    - 010742 南方宁悦一年持有期混合A → 365 天
+#    - 004534 汇添富双盈回报一年持有债A → 365 天
+#    - 010942 招商瑞乐6个月持有期混合A → 180 天
+#    锁定期内整笔无法赎回（不只是费率问题），所以阈值取持有期天数。
+# 3. PURCHASE_DATES_BY_CODE：每只基金的最早购买日期（liubo 后续录入）
+#    缺失 = 未知 → 约束不生效（保留原 REDUCE 信号）
+#    liubo 2026-10-14：「我这些资金都是什么时候买的，后边我会给你更新」
+# 4. 货基 004137 按现金处理（不适用）
+# 计算逻辑：days_held = today - earliest_purchase；threshold = max(REDEMPTION_FEE_DAYS, HOLDING_PERIOD_DAYS)
+#           days_held >= threshold 才能 REDUCE，否则转 HOLD
+REDEMPTION_FEE_DAYS_BY_CODE: dict[str, int] = {
+    # A 股 (9 宽基)
+    "013310": 30,   # 华夏科创创业50
+    "022434": 7,    # 南方中证A500
+    "017644": 365,  # 博道中证1000增强
+    "022424": 7,    # 广发中证A500
+    "014532": 180,  # 易方达MSCI中国A50
+    "022448": 7,    # 国泰中证A500联接
+    "011612": 30,   # 华夏科创50
+    "019857": 7,    # 博时上证科创100
+    "023414": 7,    # 工银创业板50
+    # 港股
+    "013127": 7,    # 汇添富恒生科技
+    # 美股 (7)
+    "519981": 5,    # 长信标普100
+    "018966": 7,    # 汇添富纳100
+    "539001": 90,   # 建信纳指100 QDII
+    "017641": 730,  # 摩根标普500 ← 2 年
+    "016452": 7,    # 南方纳100
+    "019172": 7,    # 摩根纳100
+    "019441": 30,   # 万家纳100
+    # 国外发达 + 新兴市场
+    "000614": 730,  # 华安德国DAX联接 ← 2 年
+    "378006": 2,    # 摩根新兴市场
+    # REITs (2)
+    "028277": 7,    # 华夏中证REITs
+    "160140": 730,  # 南方道琼斯美国REIT ← 2 年
+    # 国内利率债 (21, 排除 3 只持有期基金 010742/004534/010942)
+    "003547": 1,    # 鹏华丰禄
+    "000931": 30,   # 国寿安保尊益信用纯债
+    "007520": 30,   # 富安达富利纯债A
+    "006829": 30,   # 鹏扬利沣短债A
+    "008333": 1170, # 景顺长城弘利39个月定开债 ← 3.25 年
+    "015736": 180,  # 长盛盛裕纯债D
+    "017837": 7,    # 博时中债7-10年政金债
+    "001512": 730,  # 易方达中债3-5年期国债指数
+    "485119": 730,  # 工银信用纯债债券A
+    "010653": 7,    # 农银汇理金玉债券
+    "202103": 30,   # 南方多利增强债券A
+    "519753": 730,  # 交银安心收益债券A
+    "002490": 365,  # 金鹰元祺债券A
+    "008505": 30,   # 浙商中短债A
+    "004827": 30,   # 平安中短债
+    "007997": 30,   # 易方达年年恒秋一年定开债A
+    "110017": 730,  # 易方达增强回报债券A
+    "009625": 7,    # 天弘中债3-5年政策性金融债
+    "005690": 30,   # 中银安享债券A
+    "400030": 730,  # 东方添益债券
+    "008420": 180,  # 广发招泰A
+    # 美债 (6)
+    "100050": 90,   # 富国全球债券
+    "007360": 90,   # 易方达中短期美元债
+    "003385": 730,  # 工银全球美元债
+    "002286": 730,  # 中银美元债
+    "000290": 2,    # 鹏华全球高收益债
+    "501300": 2,    # 海富通全球收益债券
+    # 商品
+    "000216": 365,  # 华安黄金ETF联接A
+}
+
+# 持有期基金（0% 赎回费但锁定期内不可赎回）
+HOLDING_PERIOD_DAYS_BY_CODE: dict[str, int] = {
+    "010742": 365,  # 南方宁悦一年持有期混合A
+    "004534": 365,  # 汇添富双盈回报一年持有债A
+    "010942": 180,  # 招商瑞乐6个月持有期混合A
+}
+
+# 基金最早购买日期（liubo 2026-10-14 起逐步录入；缺失 = 未知 = 约束不生效）
+# 填充示例（等 liubo 给真实日期）：
+#   "013310": date(2026, 9, 22),
+#   "022434": date(2026, 9, 22),
+PURCHASE_DATES_BY_CODE: dict[str, date] = {}
+
 # 指数代码 → 指数中文名
 INDEX_DISPLAY_NAME: dict[str, str] = {
     "000510": "中证 A500",
@@ -415,7 +503,8 @@ def evaluate_fund(
     if today is None:
         today = date.today()
     action = _evaluate_signal(eval)
-    return _apply_cooldown(action, today)
+    action = _apply_cooldown(action, today)
+    return _check_holding_period(action, today)
 
 
 def _evaluate_signal(eval: FundPEvaluation) -> RebalanceAction:
@@ -755,6 +844,70 @@ def _apply_cooldown(action: RebalanceAction, today: date) -> RebalanceAction:
         metric_percentile=action.metric_percentile,
         current_position=action.current_position,
     )
+
+
+# ─── 持有期约束（liubo 2026-10-14 拍板）────────────────────
+
+
+def _holding_period_threshold_days(fund_code: str) -> int | None:
+    """单只基金的持有期阈值天数 = max(赎回费归零天数, 持有期天数)。
+
+    返回 None = 这只基金没收录（不应该发生，但兜底返回 None 让约束不生效）。
+    """
+    redeem_days = REDEMPTION_FEE_DAYS_BY_CODE.get(fund_code)
+    hold_days = HOLDING_PERIOD_DAYS_BY_CODE.get(fund_code)
+    if redeem_days is None and hold_days is None:
+        return None
+    return max(x for x in (redeem_days, hold_days) if x is not None)
+
+
+def _check_holding_period(action: RebalanceAction, today: date) -> RebalanceAction:
+    """持有期约束：REDUCE 必须等赎回费归零 + 持有期解锁才能执行卖出。
+
+    liubo 2026-10-14 拍板：
+    - 只检查 REDUCE（卖出）。ADD / BUILD 是买入，不涉及赎回费。
+    - 检查逻辑：days_held = today - earliest_purchase_date；threshold = 赎回费归零天数
+      或持有期天数（持有期基金锁定期内不可赎回）
+    - days_held < threshold → 转 HOLD（保留原 reason 提示）
+    - PURCHASE_DATES_BY_CODE 缺失这只基金 → 约束不生效（保留原 REDUCE，等 liubo 录入）
+    - 合并 ETF（fund_code 含 "+"）→ 每只都过才放行，任一没过都 HOLD
+
+    不变量：
+    - signal == HOLD 时 change == 0
+    """
+    if action.signal != PESignal.REDUCE:
+        return action
+
+    # 合并 ETF 拆开分别检查
+    codes = action.fund_code.split("+")
+    for code in codes:
+        purchase = PURCHASE_DATES_BY_CODE.get(code)
+        if purchase is None:
+            # 缺失购买日期 = 未知 = 约束不生效（保留原 REDUCE，等 liubo 录入）
+            continue
+        threshold = _holding_period_threshold_days(code)
+        if threshold is None:
+            continue
+        days_held = (today - purchase).days
+        if days_held < threshold:
+            return RebalanceAction(
+                fund_code=action.fund_code,
+                fund_name=action.fund_name,
+                subclass=action.subclass,
+                etf_index_code=action.etf_index_code,
+                etf_index_name=action.etf_index_name,
+                metric=action.metric,
+                signal=PESignal.HOLD,
+                change=Decimal("0"),
+                reason=(
+                    f"持有期约束：{code} 购买 {purchase.isoformat()} 距今 {days_held} 天 "
+                    f"< {threshold} 天（{days_held}/{threshold} 天，REDUCE 冻结）"
+                ),
+                metric_value=action.metric_value,
+                metric_percentile=action.metric_percentile,
+                current_position=action.current_position,
+            )
+    return action
 
 
 # ─── REITs 实时 snapshot 加载（spec REITs-DY — liubo 2026-10-12 拍板）───
@@ -1111,10 +1264,15 @@ __all__ = [
     "INDEX_WATCHLIST",
     "LAST_REBALANCE_BY_ETF",
     "COOLDOWN_DAYS",
+    "REDEMPTION_FEE_DAYS_BY_CODE",
+    "HOLDING_PERIOD_DAYS_BY_CODE",
+    "PURCHASE_DATES_BY_CODE",
     "SUBCLASS_DISPLAY_NAME",
     "evaluate_fund",
     "_evaluate_signal",
     "_apply_cooldown",
+    "_check_holding_period",
+    "_holding_period_threshold_days",
     "get_current_position",
     "load_live_reit_snapshot",
     "get_live_reit_data_date",

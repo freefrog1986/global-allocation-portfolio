@@ -495,6 +495,246 @@ class TestCooldown:
         assert COOLDOWN_DAYS == 30
 
 
+# ─── 持有期约束（liubo 2026-10-14 拍板）────────────────────
+
+
+class TestHoldingPeriodConstraint:
+    """REDUCE 必须等赎回费归零（最早购买日期 + 阈值天数 ≤ today）才能执行。
+
+    数据来源：akshare 天天基金 fund_fee_em（2026-10-14 拉）。
+    阈值 = max(REDEMPTION_FEE_DAYS_BY_CODE, HOLDING_PERIOD_DAYS_BY_CODE)
+    PURCHASE_DATES_BY_CODE 缺失 = 未知 = 约束不生效（保留原 REDUCE）。
+    """
+
+    def test_reduce_within_holding_period_becomes_hold(self) -> None:
+        """持有期内 REDUCE → 转 HOLD。"""
+        from global_allocation.portfolio.pe_rebalance import (
+            PURCHASE_DATES_BY_CODE,
+            _check_holding_period,
+        )
+        from datetime import date as _date
+
+        # 000216 黄金赎回费 365 天归零，假设今天 - 1 年 = 2025-10-14 还差 1 天
+        PURCHASE_DATES_BY_CODE["000216"] = _date(2025, 10, 15)
+        try:
+            eval_ = _make_eval(
+                fund_code="000216",
+                etf_index_code="GOLD",
+                metric=ValuationMetric.GOLD_HISTORICAL_PCT,
+                metric_percentile=Decimal("0.90"),  # > 80% 触发 REDUCE
+                current_position=Decimal("1"),
+            )
+            # 走 _evaluate_signal 跳过 composite_score（黄金走综合分路径不直接 REDUCE）
+            # 改用普通 PE 路径：518981 长信标普100 赎回费 5 天归零
+            PURCHASE_DATES_BY_CODE["519981"] = _date(2026, 10, 12)  # 3 天前
+            eval2 = _make_eval(
+                fund_code="519981",
+                etf_index_code=".OEX",
+                metric_percentile=Decimal("0.90"),
+                current_position=Decimal("1"),
+            )
+            from global_allocation.portfolio.pe_rebalance import _evaluate_signal
+            action = _evaluate_signal(eval2)
+            assert action.signal == PESignal.REDUCE
+
+            # 持有期 5 天，购买 3 天前 → 距今 3 < 5 → 冻结
+            cooled = _check_holding_period(action, today=_date(2026, 10, 15))
+            assert cooled.signal == PESignal.HOLD
+            assert "持有期约束" in cooled.reason
+        finally:
+            PURCHASE_DATES_BY_CODE.pop("000216", None)
+            PURCHASE_DATES_BY_CODE.pop("519981", None)
+
+    def test_reduce_after_holding_period_passes(self) -> None:
+        """持有期已过 → REDUCE 正常通过。"""
+        from global_allocation.portfolio.pe_rebalance import (
+            PURCHASE_DATES_BY_CODE,
+            _check_holding_period,
+            _evaluate_signal,
+        )
+        from datetime import date as _date
+
+        PURCHASE_DATES_BY_CODE["519981"] = _date(2026, 10, 1)  # 14 天前
+        try:
+            eval_ = _make_eval(
+                fund_code="519981",
+                etf_index_code=".OEX",
+                metric_percentile=Decimal("0.90"),
+                current_position=Decimal("1"),
+            )
+            action = _evaluate_signal(eval_)
+            assert action.signal == PESignal.REDUCE
+
+            # 14 天 > 5 天阈值 → 通过
+            passed = _check_holding_period(action, today=_date(2026, 10, 15))
+            assert passed.signal == PESignal.REDUCE
+        finally:
+            PURCHASE_DATES_BY_CODE.pop("519981", None)
+
+    def test_reduce_without_purchase_date_passes_through(self) -> None:
+        """PURCHASE_DATES_BY_CODE 缺失这只基金 → 约束不生效，保留原 REDUCE。"""
+        from global_allocation.portfolio.pe_rebalance import (
+            PURCHASE_DATES_BY_CODE,
+            _check_holding_period,
+            _evaluate_signal,
+        )
+        from datetime import date as _date
+
+        # 确保 519981 不在 dict 里
+        PURCHASE_DATES_BY_CODE.pop("519981", None)
+        eval_ = _make_eval(
+            fund_code="519981",
+            etf_index_code=".OEX",
+            metric_percentile=Decimal("0.90"),
+            current_position=Decimal("1"),
+        )
+        action = _evaluate_signal(eval_)
+        assert action.signal == PESignal.REDUCE
+
+        passed = _check_holding_period(action, today=_date(2026, 10, 15))
+        assert passed.signal == PESignal.REDUCE  # 不变
+
+    def test_holding_period_fund_blocks_reduce(self) -> None:
+        """持有期基金（010942 招商瑞乐 180 天）锁定期内 REDUCE 冻结。"""
+        from global_allocation.portfolio.pe_rebalance import (
+            PURCHASE_DATES_BY_CODE,
+            _check_holding_period,
+            _evaluate_signal,
+        )
+        from datetime import date as _date
+
+        # 010942 持有期 180 天，购买 30 天前 → 距今 30 < 180
+        PURCHASE_DATES_BY_CODE["010942"] = _date(2026, 9, 14)
+        try:
+            eval_ = _make_eval(
+                fund_code="010942",
+                etf_index_code="中证全债",  # 占位
+                metric_percentile=Decimal("0.90"),
+                current_position=Decimal("1"),
+            )
+            action = _evaluate_signal(eval_)
+            assert action.signal == PESignal.REDUCE
+
+            cooled = _check_holding_period(action, today=_date(2026, 10, 14))
+            assert cooled.signal == PESignal.HOLD
+            assert "180 天" in cooled.reason
+        finally:
+            PURCHASE_DATES_BY_CODE.pop("010942", None)
+
+    def test_merged_etf_all_codes_must_pass(self) -> None:
+        """合并 ETF（fund_code 含 "+"）→ 任一子基金没过都 HOLD。"""
+        from global_allocation.portfolio.pe_rebalance import (
+            PURCHASE_DATES_BY_CODE,
+            _check_holding_period,
+        )
+        from datetime import date as _date
+
+        # 中证 A500 合并 3 只：022434 7 天 / 022424 7 天 / 022448 7 天
+        # 022434 持有 30 天（解锁），022448 才持有 3 天（冻结）
+        PURCHASE_DATES_BY_CODE["022434"] = _date(2026, 9, 1)
+        PURCHASE_DATES_BY_CODE["022424"] = _date(2026, 9, 1)
+        PURCHASE_DATES_BY_CODE["022448"] = _date(2026, 10, 1)  # 13 天前
+        try:
+            action = _make_eval(
+                fund_code="022434+022424+022448",
+                etf_index_code="000510",
+                metric_percentile=Decimal("0.90"),
+                current_position=Decimal("2.65"),
+            ).__class__(  # 借用 FundPEvaluation，再转 RebalanceAction
+                **{},
+            ) if False else None
+
+            # 构造一个 REDUCE RebalanceAction
+            from global_allocation.portfolio.pe_rebalance import RebalanceAction
+            action = RebalanceAction(
+                fund_code="022434+022424+022448",
+                fund_name="中证A500 合并",
+                subclass=SwensenClass.CN_EQUITY,
+                etf_index_code="000510",
+                etf_index_name="中证A500",
+                metric=ValuationMetric.PE_TTM,
+                signal=PESignal.REDUCE,
+                change=Decimal("-1"),
+                reason="test",
+                metric_value=Decimal("15.42"),
+                metric_percentile=Decimal("0.90"),
+                current_position=Decimal("2.65"),
+            )
+
+            # 022448 持有 13 天，阈值 7 天 → 通过
+            # 实际上都通过，所有子基金都满足
+            passed = _check_holding_period(action, today=_date(2026, 10, 14))
+            assert passed.signal == PESignal.REDUCE
+
+            # 现在让 022448 不满足：改为 3 天前
+            PURCHASE_DATES_BY_CODE["022448"] = _date(2026, 10, 11)  # 3 天前 < 7 天
+            held = _check_holding_period(action, today=_date(2026, 10, 14))
+            assert held.signal == PESignal.HOLD
+            assert "022448" in held.reason
+        finally:
+            PURCHASE_DATES_BY_CODE.pop("022434", None)
+            PURCHASE_DATES_BY_CODE.pop("022424", None)
+            PURCHASE_DATES_BY_CODE.pop("022448", None)
+
+    def test_non_reduce_signals_skip_holding_period_check(self) -> None:
+        """ADD / BUILD / HOLD / SKIP 不走持有期检查（不是卖出）。"""
+        from global_allocation.portfolio.pe_rebalance import (
+            PURCHASE_DATES_BY_CODE,
+            _check_holding_period,
+        )
+        from datetime import date as _date
+
+        PURCHASE_DATES_BY_CODE["000216"] = _date(2026, 10, 13)  # 1 天前
+        try:
+            # ADD 信号（深价值，1 仓 + < 20%）
+            from global_allocation.portfolio.pe_rebalance import RebalanceAction
+            add_action = RebalanceAction(
+                fund_code="000216",
+                fund_name="华安黄金",
+                subclass=SwensenClass.COMMODITY,
+                etf_index_code="GOLD",
+                etf_index_name="黄金",
+                metric=ValuationMetric.GOLD_HISTORICAL_PCT,
+                signal=PESignal.ADD,
+                change=Decimal("1"),
+                reason="深价值加仓",
+                metric_value=Decimal("907.50"),
+                metric_percentile=Decimal("0.10"),
+                current_position=Decimal("1"),
+            )
+            result = _check_holding_period(add_action, today=_date(2026, 10, 14))
+            assert result.signal == PESignal.ADD  # 不变，ADD 不查持有期
+        finally:
+            PURCHASE_DATES_BY_CODE.pop("000216", None)
+
+    def test_threshold_uses_max_of_redemption_and_holding(self) -> None:
+        """_holding_period_threshold_days 取赎回费归零天数和持有期天数的最大值。"""
+        from global_allocation.portfolio.pe_rebalance import _holding_period_threshold_days
+
+        # 510742 持有期 365 天 + 赎回费 0% → 阈值 365
+        assert _holding_period_threshold_days("010742") == 365
+        # 010942 持有期 180 天 → 阈值 180
+        assert _holding_period_threshold_days("010942") == 180
+        # 000216 赎回费 365 天 → 阈值 365
+        assert _holding_period_threshold_days("000216") == 365
+        # 017641 赎回费 730 天 → 阈值 730
+        assert _holding_period_threshold_days("017641") == 730
+        # 未知基金 → None
+        assert _holding_period_threshold_days("999999") is None
+
+    def test_redemption_fee_dict_has_49_funds(self) -> None:
+        """REDEMPTION_FEE_DAYS_BY_CODE 收录 49 只普通基金（52 总 - 3 持有期 - 1 货基 - 待核对 004137/其他）。
+
+        数据源：akshare 天天基金 fund_fee_em（2026-10-14 拉）。
+        """
+        from global_allocation.portfolio.pe_rebalance import (
+            REDEMPTION_FEE_DAYS_BY_CODE,
+            HOLDING_PERIOD_DAYS_BY_CODE,
+        )
+        assert len(REDEMPTION_FEE_DAYS_BY_CODE) == 49
+        assert len(HOLDING_PERIOD_DAYS_BY_CODE) == 3
+
+
 # ─── get_current_position ─────────────────────────────
 
 
