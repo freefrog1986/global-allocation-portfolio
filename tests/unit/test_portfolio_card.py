@@ -196,9 +196,21 @@ class TestBuildPortfolioCard:
         assert not first_line.startswith("**我的实盘 9 月**")
         assert first_line.startswith("**生成时间**")
 
-    def test_no_holdings_raises(self, journal: PortfolioJournal) -> None:
-        with pytest.raises(ValueError, match="持仓"):
-            build_portfolio_card(journal)
+    def test_no_holdings_falls_back_to_cost_basis(self, journal: PortfolioJournal) -> None:
+        # 第二十二轮（liubo 2026-10-16）：holdings 为空时不再抛异常，
+        # 改走 fallback：Section 1 = 持仓成本表（cost_basis.py + breakdown.py）
+        card = build_portfolio_card(journal)
+        elements = card["elements"]
+        # 第一个元素应是"持仓成本"note（fallback header）
+        first_note = elements[0]
+        assert first_note["tag"] == "note"
+        assert "持仓成本" in first_note["elements"][0]["content"]
+        # 应包含 cost_basis table（4 列：class/count/cost/weight）
+        tables = [el for el in elements if el.get("tag") == "table"]
+        assert any(
+            {"count", "cost", "weight"} <= set(t.get("columns", [{}])[0].keys()) | {c["name"] for c in t.get("columns", [])}
+            for t in tables
+        )
 
     def test_title_override(self, journal: PortfolioJournal) -> None:
         _seed(journal)

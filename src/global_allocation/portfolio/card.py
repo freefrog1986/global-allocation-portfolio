@@ -11,6 +11,12 @@
 - Section 3 仍是大类资产估值（A 股 / 港股 / 美股 combined 模式）
 
 第二十一轮（spec 098）：Section 3 — 大类资产估值（A 股 + 港股 + 美股 combined）。
+
+第二十二轮（liubo 2026-10-16 拍板）：Section 1 改成"持仓成本"为主 ——
+- 当 journal 有 holdings（市值可算）→ 显示 持仓表（分类 / 市值 / 占比 / 目标 / 偏离）
+- 当 journal holdings 为空 → fallback 到 持仓成本表（分类 / 成本 / 基金数 / 占比）
+  （cost_basis.py + breakdown.py 拼出，不依赖 akshare 拉实时价）
+- 任何时候都跟一段"最近调仓记录" note（git log 5 条 commit 摘要）
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ import json
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 
 from global_allocation.portfolio.breakdown import SwensenClass, compute_breakdown, get_subclass
 from global_allocation.portfolio.journal import PortfolioJournal
@@ -223,6 +230,145 @@ def _build_holdings_table(
             {"name": "delta", "display_name": "偏离", "data_type": "text", "width": "auto"},
         ],
         "rows": rows,
+    }
+
+
+# ─── 第二十二轮（liubo 2026-10-16）：持仓成本表 + 最近调仓 ───
+#
+# 当 journal holdings 为空（DB 没灌基金/流水）时，Section 1 改成"持仓成本"为主：
+# - 持仓成本表：基于 cost_basis.py + breakdown.py，按子类聚合（11 行 × 4 列）
+# - 最近调仓：基于 git log（5 条 commit 摘要 + 日期 + 类型）
+#
+# 为什么这么改（liubo 2026-10-16 反馈）：
+# - cost_basis.py 已经有 52 只基金的累计买入总金额（604143.47 + 校准 +1661 = 605804.47）
+# - 用户拍板"我的成本和每次的调仓你不是都知道吗" → 数据来源 = cost_basis + git log
+# - 不依赖 akshare 拉实时市值（有时 akshare 不稳或基金当天净值没更新）
+
+
+def _build_cost_basis_section() -> list[dict[str, object]]:
+    """Section 1 fallback — 持仓成本表 + 最近调仓记录（spec liubo 2026-10-16）。
+
+    数据来源：
+    - cost_basis.py（COST_BASIS_BY_CODE + SUBCLASS_BY_CODE）→ 每只基金的累计成本 + 子类
+    - git log（subprocess）→ 最近 5 条 commit 摘要
+
+    列：分类 / 基金数 / 累计成本(¥) / 占比
+    按 SwensenClass 枚举顺序展示 11 个子类（cost_basis 只覆盖有数据的子类；
+    空的子类不渲染 — 跟 holdings 表"含 count=0"展示不同，原因是 cost 视角更聚焦"已建仓"）。
+
+    注意：004137 货币基金按现金处理，不进 cost_basis（CASH_LIKE_CODES），
+    所以 CASH 子类 cost=0 → 不渲染。
+    """
+    from global_allocation.portfolio.breakdown import DISPLAY_NAME, SUBCLASS_BY_CODE
+    from global_allocation.portfolio.cost_basis import COST_BASIS_BY_CODE
+
+    # 按子类聚合
+    by_sub: dict[SwensenClass, tuple[int, Decimal]] = {}
+    for code, cost in COST_BASIS_BY_CODE.items():
+        sub = SUBCLASS_BY_CODE.get(code)
+        if sub is None:
+            continue
+        cnt, total = by_sub.get(sub, (0, Decimal("0")))
+        by_sub[sub] = (cnt + 1, total + cost)
+
+    total_cost = sum((c for _, c in by_sub.values()), Decimal("0"))
+    rows: list[dict[str, object]] = []
+    for sub in SwensenClass:
+        if sub not in by_sub:
+            continue
+        cnt, cost = by_sub[sub]
+        weight_pct = float(cost / total_cost * 100) if total_cost > 0 else 0.0
+        rows.append(
+            {
+                "class": DISPLAY_NAME[sub],
+                "count": f"{cnt}",
+                "cost": f"{float(cost):,.2f}",
+                "weight": f"{weight_pct:.2f}%",
+            }
+        )
+
+    cost_table: dict[str, object] = {
+        "columns": [
+            {"name": "class", "display_name": "分类", "data_type": "text", "width": "auto"},
+            {"name": "count", "display_name": "基金数", "data_type": "text", "width": "auto"},
+            {"name": "cost", "display_name": "累计成本(¥)", "data_type": "text", "width": "auto"},
+            {"name": "weight", "display_name": "成本占比", "data_type": "text", "width": "auto"},
+        ],
+        "rows": rows,
+    }
+
+    # summary div：生成时间 + 总成本 + 总基金数
+    n_funds = len(COST_BASIS_BY_CODE)
+    summary_text = (
+        f"**生成时间**：{datetime.now().strftime('%Y-%m-%d %H:%M')}  \n"
+        f"**总成本**：{float(total_cost):,.2f} CNY  \n"
+        f"**基金数**：{n_funds} 只（含按现金处理 1 只）"
+    )
+
+    elements: list[dict[str, object]] = [
+        {"tag": "note", "elements": [{"tag": "plain_text", "content": "持仓成本"}]},
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": summary_text},
+        },
+        {"tag": "hr"},
+        {"tag": "table", **cost_table},
+    ]
+
+    # 最近调仓记录（git log 5 条）
+    rebalance_section = _build_rebalance_history(limit=5)
+    if rebalance_section:
+        elements.append({"tag": "hr"})
+        elements.append(rebalance_section)
+
+    return elements
+
+
+def _build_rebalance_history(limit: int = 5) -> dict[str, object] | None:
+    """最近 N 条调仓/调参 commit 摘要（git log）。
+
+    来源：`git log --pretty=format:"%h %ai %s" -N`（仅本项目仓库的 commit）
+
+    返回：一个 div（lark_md），内容 = N 行 commit 摘要
+    - 格式：`{date} {short_hash} {commit_message}`
+    - 截断 commit message 到 80 字符（飞书 div 一行太长会换行不优雅）
+
+    注：用 subprocess.run(列表参数，不传 shell)避免命令注入。
+    """
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(Path(__file__).resolve().parents[3]),
+             "log", "--pretty=format:%h %ai %s", f"-{limit}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+        lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+
+    if not lines:
+        return None
+
+    bullets = []
+    for ln in lines:
+        # 格式: "{hash} {YYYY-MM-DD HH:MM:SS +ZZZZ} {subject}"
+        parts = ln.split(" ", 3)
+        if len(parts) < 4:
+            continue
+        short_hash, date_str, _, subject = parts
+        # 截断日期到 YYYY-MM-DD
+        date_short = date_str[:10]
+        subject_short = subject[:80]
+        bullets.append(f"- {date_short} `{short_hash}` {subject_short}")
+
+    content = "**最近调仓 / 调参记录**（git log）：\n" + "\n".join(bullets)
+    return {
+        "tag": "div",
+        "text": {"tag": "lark_md", "content": content},
     }
 
 
@@ -1080,6 +1226,8 @@ def _build_region_strategy_note(
     - 占比 > 目标 → "不再投入"（仓位纪律优先）
     - 占比 ≤ 目标 + 有估值 → 偏低估/正常/偏高估三档
     - 占比 ≤ 目标 + 无估值 → "占比 ≤ 目标（等估值）"
+    - 持仓数据缺失（journal.compute_holdings()=空）→ "持仓数据缺失"（第二十二轮 liubo 2026-10-16）
+      此时跳过策略判断，只给估值综合分的解读
 
     spec 097 第二十一轮（liubo 2026-09-24）：region_target 改用
     DEFAULT_POSITION_ALLOCATION.target_weight(subclass)，不再走动态缩放公式。
@@ -1091,6 +1239,24 @@ def _build_region_strategy_note(
 
     region_weight = float(region_row["weight"]) * 100
     region_target_pct = float(DEFAULT_POSITION_ALLOCATION.target_weight(subclass)) * 100
+    holdings_empty = not journal.compute_holdings()
+
+    # 第二十二轮（liubo 2026-10-16）：持仓数据缺失时只显示估值综合分，
+    # 不展示占比/目标/策略（避免"占比 0%"误导）
+    if holdings_empty:
+        if scores:
+            text = (
+                f"**📌 {region_label}估值综合分 {composite_verdict_str}。"
+                f"（持仓数据缺失，等录入后展示占比/目标）**"
+            )
+        else:
+            text = f"**📌 {region_label}持仓数据缺失，等录入后展示。**"
+        strategy_note: dict[str, object] = {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": text},
+        }
+        return strategy_note, False
+
     over_target = region_weight > region_target_pct
 
     if scores:
@@ -1109,7 +1275,7 @@ def _build_region_strategy_note(
         reason = "无估值数据"
 
     text = f"**📌 {region_label}占比 {region_weight:.1f}%，目标 {region_target_pct:.1f}%。{strategy}（{reason}）**"
-    strategy_note: dict[str, object] = {
+    strategy_note = {
         "tag": "div",
         "text": {"tag": "lark_md", "content": text},
     }
@@ -1261,27 +1427,31 @@ def build_portfolio_card(
     """
     actual_title = title or "实盘周报"
     holdings = journal.compute_holdings()
-    if not holdings:
-        raise ValueError("没有持仓，无法生成卡片")
 
-    elements: list[dict[str, object]] = [
-        # Section 1: 实盘持仓
-        {
-            "tag": "note",
-            "elements": [{"tag": "plain_text", "content": "实盘持仓"}],
-        },
-        {
-            "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                "content": _build_summary(journal, actual_title),
+    if holdings:
+        # 正常路径：DB 有持仓流水 → 显示市值/占比/目标/偏离
+        elements: list[dict[str, object]] = [
+            # Section 1: 实盘持仓
+            {
+                "tag": "note",
+                "elements": [{"tag": "plain_text", "content": "实盘持仓"}],
             },
-        },
-        {"tag": "hr"},
-        {"tag": "chart", "chart_spec": _build_breakdown_bar(journal)},
-        {"tag": "hr"},
-        {"tag": "table", **_build_holdings_table(journal)},
-    ]
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": _build_summary(journal, actual_title),
+                },
+            },
+            {"tag": "hr"},
+            {"tag": "chart", "chart_spec": _build_breakdown_bar(journal)},
+            {"tag": "hr"},
+            {"tag": "table", **_build_holdings_table(journal)},
+        ]
+    else:
+        # fallback 路径（liubo 2026-10-16）：DB holdings 为空时 → 持仓成本表
+        # 数据来源：cost_basis.py + breakdown.py + git log（不依赖 akshare 拉市值）
+        elements = _build_cost_basis_section()
 
     # Section 3: 大类资产估值（spec 098 第二十一轮新增）
     valuation_section = _build_valuation_section(journal)
