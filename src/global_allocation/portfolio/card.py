@@ -357,12 +357,15 @@ def _build_cost_basis_section() -> list[dict[str, object]]:
         "rows": rows,
     }
 
-    # summary div：生成时间 + 总成本 + 总基金数
-    n_funds = len(COST_BASIS_BY_CODE)
+    # summary div：生成时间 + 总成本 + 大类资产数
+    # 第二十九轮（liubo 2026-10-17 反馈）：改"基金数"为"大类资产数"——
+    # 用户视角下"52 只"太细节，关心的是"我覆盖了几大类资产"（10 类 = A 股/港股/美股/国外发达/
+    # 新兴市场/国内 REITs/美国 REITs/国内利率债/美债/商品；现金 004137 不算）。
+    n_classes = len(by_sub)  # 有基金进 COST_BASIS_BY_CODE 的大类数（004137 在 CASH_LIKE_CODES 不进）
     summary_text = (
         f"**生成时间**：{datetime.now().strftime('%Y-%m-%d %H:%M')}  \n"
         f"**总成本**：{float(total_cost):,.2f} CNY  \n"
-        f"**基金数**：{n_funds} 只（含按现金处理 1 只）"
+        f"**大类资产数**：{n_classes} 类"
     )
 
     elements: list[dict[str, object]] = [
@@ -444,13 +447,11 @@ def _build_per_fund_section() -> list[dict[str, object]]:
     }
 
     n_add = n_reduce = n_build = n_hold = n_skip = 0
-    total_cost = Decimal("0")
 
     rows: list[dict[str, object]] = []
     for _, code, cost in items:
         fund_name = get_fund_name(code) or f"基金 {code}"
         cost_str = f"{float(cost):,.2f}" if cost > 0 else "—"
-        total_cost += cost
 
         action = by_code.get(code)
         if action is None:
@@ -520,10 +521,11 @@ def _build_per_fund_section() -> list[dict[str, object]]:
             "advice": advice,
         })
 
-    # summary div — 速读本周动作 + 持仓总成本
+    # summary div — 速读本周动作（第二十九轮 liubo 2026-10-17 反馈：
+    # 删掉「总成本」行 — Section 1 已经展示总成本了，Section 2 不重复。
+    # 保留「基金数」+「本周操作」（加仓 N / 建仓 N / 减仓 N））
     summary_parts = [
         f"**基金数**：{len(rows)} 只  ",
-        f"**总成本**：{float(total_cost):,.2f} CNY",
     ]
     op_parts = []
     if n_add:
