@@ -955,22 +955,22 @@ def get_live_reit_data_date() -> date | None:
 
 
 def get_current_position(fund_code: str) -> Decimal:
-    """从 COST_BASIS_BY_CODE 算当前仓位（cost / per-fund 1 仓单位）。
+    """从 COST_BASIS_BY_CODE 算当前仓位（cost / per-index 1 仓单位）。
 
-    仓位单位：
+    仓位单位（liubo 2026-10-17 第二十八轮反馈："跟踪同一 ETF 指数的仓位应该共享"）：
     - 全局默认：1 仓 = 10000 CNY（2026-09-24 拍板"成本 = 仓位单位"，0.65 仓 = 6500 元）
-    - per-fund 覆盖：5 只定投基金 1 仓 = 定投累计目标（liubo 2026-10-17 反馈）
-      - 000614 DAX 定投累计 10000
-      - 016452 南方纳100 定投累计 1800
-      - 019172 摩根纳100 定投累计 2000
-      - 019441 万家纳100 定投累计 2000
-      - 000216 黄金 定投累计 7500（"为了凑一仓"——liubo 原话）
+    - per-index 覆盖：跟踪同一 ETF 的基金共用同一个单位
+      - GOLD 1 仓 = 7500（"为了凑一仓"——liubo 2026-10-17 第二十七轮反馈，仅 000216 1 只）
+      - .NDX 1 仓 = 10000（5 只定投基金 018966/539001/016452/019172/019441 合并 = 0.882 仓）
+      - .GDAXI 1 仓 = 10000（000614；跟全局一样）
     - 未知基金 / 现金类（004137）→ 返回 0
     """
     cost = COST_BASIS_BY_CODE.get(fund_code)
     if cost is None:
         return Decimal("0")
-    unit = get_position_unit(fund_code)
+    index_info = FUND_INDEX_MAP.get(fund_code)
+    index_code = index_info[1] if index_info is not None else ""
+    unit = get_position_unit(index_code)
     return cost / unit
 
 

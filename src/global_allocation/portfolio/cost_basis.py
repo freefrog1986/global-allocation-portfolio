@@ -141,32 +141,36 @@ CASH_LIKE_CODES: frozenset[str] = frozenset({
 })
 
 
-# ─── Per-fund 1 仓 单位（liubo 2026-10-17 第二十七轮反馈：000216 黄金 1 仓 = 7500 而不是 10000）───
+# ─── Per-index 1 仓 单位（liubo 2026-10-17 第二十八轮反馈："跟踪同一 ETF 指数的仓位应该共享"）───
 #
 # 2026-09-24 拍板的全局规则：1 仓 = 10000 CNY（cost / 10000 = 仓位）。
-# 但 5 只定投基金的"1 仓"对用户来说 = 定投累计目标，因为：
-# - 000216 黄金：定投累计 7500 = 1 仓（"为了凑一仓" — liubo 2026-10-17 反馈原文）
-# - 000614 DAX：定投累计 10000 = 1 仓（凑巧跟全局单位一样）
-# - 016452/019172/019441 NDX 3 只：定投累计 1800/2000/2000 = 各自 1 仓
 #
-# 所以这 5 只基金的"current_position"应该 = cost / 定投累计 而非 cost / 10000。
-# 结果：5 只基金都显示"满仓（1 仓）"，调仓建议 = HOLD（除非深价值例外）。
+# 第二十八轮（2026-10-17）liubo 反馈：
+#   "016452、019172、019441 这三个虽然是不同的基金，但是都是跟踪纳斯达克 100，
+#    所以他们 3 个加一起是 1800+2000+2000，不够一仓"
 #
-# 不是定投的基金 1 仓 = 10000（全局默认）。
-POSITION_UNIT_BY_CODE: dict[str, Decimal] = {
-    # code: 1 仓的 CNY 数（per-fund 覆盖；不在表里的走全局 10000）
-    "000614": Decimal("10000"),  # 华安 DAX 定投累计 10000
-    "016452": Decimal("1800"),   # 南方纳100 定投累计 1800
-    "019172": Decimal("2000"),   # 摩根纳100 定投累计 2000
-    "019441": Decimal("2000"),   # 万家纳100 定投累计 2000
-    "000216": Decimal("7500"),   # 华安黄金 定投累计 7500（"为了凑一仓"）
+# → 跟踪同一 ETF 的基金仓位必须共享 1 仓单位（不能 per-fund 各自 1 仓然后相加）。
+#   NDX 5 只（018966/539001/016452/019172/019441）合并 = (2020+1000+1800+2000+2000)/10000
+#   = 0.882 仓（合并展示），不再各自 HOLD。
+#
+# 例外：GOLD 指数 1 仓 = 7500 而不是 10000，因为：
+#   000216 华安黄金定投累计 7500 = 1 仓（"为了凑一仓"——liubo 2026-10-17 第二十七轮反馈）。
+#   GOLD 只有 1 只基金，per-index 等同 per-fund。
+#
+# .GDAXI 000614 也是 1 仓 = 10000（跟全局一样，不需 per-index 覆盖）。
+POSITION_UNIT_BY_INDEX_CODE: dict[str, Decimal] = {
+    # etf_index_code: 1 仓的 CNY 数（per-index 覆盖；不在表里的走全局 10000）
+    "GOLD": Decimal("7500"),  # 华安黄金 定投累计 7500（"为了凑一仓"——liubo 2026-10-17 第二十七轮反馈）
 }
 DEFAULT_POSITION_UNIT: Decimal = Decimal("10000")  # 1 仓 = 1 万 CNY（全局默认）
 
 
-def get_position_unit(fund_code: str) -> Decimal:
-    """查某只基金的 1 仓 CNY 数（per-fund 覆盖；未覆盖走全局默认 10000）。"""
-    return POSITION_UNIT_BY_CODE.get(fund_code, DEFAULT_POSITION_UNIT)
+def get_position_unit(etf_index_code: str) -> Decimal:
+    """查某 ETF 指数的 1 仓 CNY 数（per-index 覆盖；未覆盖走全局默认 10000）。
+
+    跟踪同一 ETF 的所有基金共用同一个单位（liubo 2026-10-17 第二十八轮反馈）。
+    """
+    return POSITION_UNIT_BY_INDEX_CODE.get(etf_index_code, DEFAULT_POSITION_UNIT)
 
 
 # 合计：626454.47 元（52 只大类资产配置组合里的基金；2026-10-17 改 5 只 DCA 基金 cost = 累计目标
@@ -200,7 +204,7 @@ __all__ = [
     "COST_BASIS_BY_CODE",
     "CASH_LIKE_CODES",
     "TOTAL_COST_CNY",
-    "POSITION_UNIT_BY_CODE",
+    "POSITION_UNIT_BY_INDEX_CODE",
     "DEFAULT_POSITION_UNIT",
     "get_cost_basis",
     "get_position_unit",

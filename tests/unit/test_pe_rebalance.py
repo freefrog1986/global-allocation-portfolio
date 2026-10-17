@@ -765,31 +765,67 @@ class TestGetCurrentPosition:
 
 
 class TestGetCurrentPositionDingtouOverride:
-    """第二十七轮（liubo 2026-10-17 反馈："000216 黄金 定投累计 7500 = 1 仓，凑一仓"）。
+    """第二十八轮（liubo 2026-10-17 反馈："跟踪同一 ETF 指数的仓位应该共享"）。
 
-    5 只定投基金的 1 仓单位 per-fund 覆盖（不再走全局 10000）：
-    - 000614 DAX cost=10000 / 1 仓=10000 → 1 仓
-    - 016452 南方纳100 cost=1800 / 1 仓=1800 → 1 仓
-    - 019172 摩根纳100 cost=2000 / 1 仓=2000 → 1 仓
-    - 019441 万家纳100 cost=2000 / 1 仓=2000 → 1 仓
-    - 000216 黄金 cost=7500 / 1 仓=7500 → 1 仓
+    per-index 1 仓单位（不再 per-fund）：
+    - .NDX 1 仓 = 10000（全局；5 只 NDX 定投基金合并展示，3 只 = 0.58 仓）
+    - .GDAXI 1 仓 = 10000（跟全局一样；000614 cost=10000 = 1 仓）
+    - GOLD 1 仓 = 7500（"为了凑一仓"——liubo 第二十七轮反馈；000216 cost=7500 = 1 仓）
+
+    关键修复：之前 per-fund 各自 1 仓 → 5 只 NDX 合并显示 5 仓（错）；
+    现在 per-index 共用 10000 → 3 只合并 0.58 仓，5 只合并 0.882 仓（对）。
     """
 
-    def test_dingtou_funds_all_position_equals_1(self) -> None:
-        """5 只定投基金 都 = 1 仓（因为 cost = 定投累计 = 1 仓单位）。"""
-        for code in ("000614", "016452", "019172", "019441", "000216"):
-            pos = get_current_position(code)
-            assert pos == Decimal("1"), (
-                f"{code} 应是 1 仓（cost = 定投累计 = 1 仓单位），"
-                f"实际 {pos}"
-            )
+    def test_gold_per_index_override_makes_000216_full_position(self) -> None:
+        """000216 黄金：cost=7500, 1 仓（GOLD）=7500 → 1 仓（满仓）。
 
-    def test_000216_gold_7500_equals_1_cang(self) -> None:
-        """000216 黄金：cost=7500, 1 仓=7500 → 1 仓（liubo "凑一仓"原话）。
-
-        关键修复：之前用全局 10000 → 0.75 仓 → 调仓建议「加仓」；现在用 per-fund 7500 → 1 仓 → HOLD。
+        per-index 覆盖：GOLD 1 仓 = 7500（仅 1 只基金 000216）。
         """
         assert get_current_position("000216") == Decimal("1")
+
+    def test_000614_dax_cost_equals_global_unit(self) -> None:
+        """000614 DAX：cost=10000 / 全局 10000 = 1 仓（不是 per-index 覆盖）。
+
+        .GDAXI 不在 POSITION_UNIT_BY_INDEX_CODE 里 → 走默认 10000；碰巧跟 cost 一样。
+        """
+        assert get_current_position("000614") == Decimal("1")
+
+    def test_ndx_dingtou_funds_share_per_index_unit(self) -> None:
+        """.NDX 5 只定投基金共用 per-index 10000 单价。
+
+        liubo 第二十八轮反馈：
+        "016452、019172、019441 这三个虽然是不同的基金，但是都是跟踪纳斯达克 100，
+         所以他们 3 个加一起是 1800+2000+2000，不够一仓"
+        → 0.18 + 0.20 + 0.20 = 0.58 仓（3 只）；或 0.18 + 0.20 + 0.20 + 0.202 + 0.10 = 0.882 仓（5 只）。
+        """
+        # 3 只新增定投基金
+        assert get_current_position("016452") == Decimal("0.18")  # 1800 / 10000
+        assert get_current_position("019172") == Decimal("0.20")  # 2000 / 10000
+        assert get_current_position("019441") == Decimal("0.20")  # 2000 / 10000
+        # 2 只老 NDX 基金
+        assert get_current_position("018966") == Decimal("0.202")  # 2020 / 10000
+        assert get_current_position("539001") == Decimal("0.10")   # 1000 / 10000
+
+    def test_ndx_merged_position_equals_0_882(self) -> None:
+        """.NDX 5 只基金 merge_by_etf 后 = 0.882 仓（"不够一仓"）。
+
+        liubo 反馈原文："他们 3 个加一起是 1800+2000+2000，不够一仓"
+        验：merge_by_etf 把 5 只按 .NDX index_code 合一组，position 求和。
+        """
+        from global_allocation.portfolio.pe_rebalance import (
+            build_evaluations,
+            merge_by_etf,
+        )
+        evals = build_evaluations()
+        ndx_evals = [e for e in evals if e.etf_index_code == ".NDX"]
+        assert len(ndx_evals) == 5
+        merged = merge_by_etf(evals)
+        ndx_merged = next(m for m in merged if m.etf_index_code == ".NDX")
+        # 1800 + 2000 + 2000 + 2020 + 1000 = 8820 / 10000 = 0.882
+        assert ndx_merged.current_position == Decimal("0.882")
+        # 5 只 fund_code 都串在合并组的 fund_code 里
+        for code in ("018966", "539001", "016452", "019172", "019441"):
+            assert code in ndx_merged.fund_code
 
     def test_non_dingtou_funds_still_use_global_10000(self) -> None:
         """非定投基金还是 cost / 10000（全局默认不变）。"""
@@ -800,7 +836,7 @@ class TestGetCurrentPositionDingtouOverride:
         """000216 黄金 signal = HOLD（满仓 + 综合分 2.5 在 2.0-4.0 区间）。
 
         之前 cost=7500 / 全局 10000 = 0.75 仓 → 欠配 + score 2.5 < 3.0 → ADD；
-        改完 cost/7500 = 1 仓 → 满仓 + score 2.5 (2.0-4.0) → HOLD。
+        改完 per-index GOLD 7500 = 1 仓 → 满仓 + score 2.5 (2.0-4.0) → HOLD。
         """
         from global_allocation.portfolio.pe_rebalance import weekly_rebalance_plan
         actions = weekly_rebalance_plan()

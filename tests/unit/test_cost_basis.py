@@ -177,39 +177,54 @@ class TestGetCostBasis:
         assert get_cost_basis("") is None
 
 
-class TestPositionUnitByCode:
-    """第二十七轮（liubo 2026-10-17 反馈）：5 只定投基金 1 仓 = 定投累计目标。
+class TestPositionUnitByIndexCode:
+    """第二十八轮（liubo 2026-10-17 反馈："跟踪同一 ETF 指数的仓位应该共享"）。
 
-    5 只定投基金 per-fund 覆盖（不走全局 10000）：
-    - 000614 DAX 定投累计 10000
-    - 016452 南方纳100 定投累计 1800
-    - 019172 摩根纳100 定投累计 2000
-    - 019441 万家纳100 定投累计 2000
-    - 000216 黄金 定投累计 7500（"为了凑一仓"——liubo 原话）
+    改为 per-index 单位（不再 per-fund）— 跟踪同一 ETF 的所有基金共用同一单位：
+    - GOLD 1 仓 = 7500（仅 000216 华安黄金 1 只；"为了凑一仓"——liubo 第二十七轮）
+    - .NDX 1 仓 = 10000（5 只 NDX 定投基金 018966/539001/016452/019172/019441
+      合并 = (2020+1000+1800+2000+2000)/10000 = 0.882 仓；liubo 第二十八轮）
+    - .GDAXI 1 仓 = 10000（仅 000614 华安 DAX 联接 A；跟全局一样）
+    - 其他指数 1 仓 = 10000（全局默认）
     """
 
-    def test_5_dingtou_funds_have_position_unit_override(self) -> None:
+    def test_only_gold_has_position_unit_override(self) -> None:
+        """per-index 覆盖只剩 GOLD 1 个（5 只定投基金合并后只 GOLD 需要 per-index 覆盖）。
+
+        016452/019172/019441 之前 per-fund 各自 1 仓导致 NDX 合并到 5 仓（错），现在
+        用全局 10000 → 合并 0.882 仓。
+        000614 之前 per-fund 10000 跟全局一样，现在挪走（不需 per-index 覆盖）。
+        000216 黄金 7500 保留为 per-index GOLD 覆盖（"为了凑一仓"）。
+        """
         from global_allocation.portfolio.cost_basis import (
-            POSITION_UNIT_BY_CODE,
+            POSITION_UNIT_BY_INDEX_CODE,
             get_position_unit,
         )
-        assert len(POSITION_UNIT_BY_CODE) == 5
-        # 每只定投基金 1 仓 = 定投累计
-        assert get_position_unit("000614") == Decimal("10000")
-        assert get_position_unit("016452") == Decimal("1800")
-        assert get_position_unit("019172") == Decimal("2000")
-        assert get_position_unit("019441") == Decimal("2000")
-        assert get_position_unit("000216") == Decimal("7500")
+        assert len(POSITION_UNIT_BY_INDEX_CODE) == 1
+        assert "GOLD" in POSITION_UNIT_BY_INDEX_CODE
+        assert get_position_unit("GOLD") == Decimal("7500")
 
-    def test_non_dingtou_funds_use_global_10000(self) -> None:
-        """非定投基金 1 仓 = 全局 10000。"""
+    def test_ndx_uses_global_10000(self) -> None:
+        """.NDX 1 仓 = 10000（全局；5 只定投基金合并 = 0.882 仓而不是 5 仓）。
+
+        liubo 第二十八轮反馈原文：
+        "016452、019172、019441 这三个虽然是不同的基金，但是都是跟踪纳斯达克 100，
+         所以他们 3 个加一起是 1800+2000+2000，不够一仓"
+        """
         from global_allocation.portfolio.cost_basis import get_position_unit
-        # 股票 / REITs / 债 / 现金 全部走全局 10000
-        assert get_position_unit("013310") == Decimal("10000")  # 华夏科创创业 50
-        assert get_position_unit("013127") == Decimal("10000")  # 汇添富恒生科技
-        assert get_position_unit("028277") == Decimal("10000")  # 华夏中证REITs
-        assert get_position_unit("008505") == Decimal("10000")  # 浙商中短债
-        assert get_position_unit("999999") == Decimal("10000")  # 未知基金也走默认
+        assert get_position_unit(".NDX") == Decimal("10000")
+        # .GDAXI 也走全局 10000（跟 000614 cost 10000 巧合一致）
+        assert get_position_unit(".GDAXI") == Decimal("10000")
+        # 其他常见指数
+        assert get_position_unit("000510") == Decimal("10000")  # A500
+        assert get_position_unit(".INX") == Decimal("10000")    # 标普 500
+        assert get_position_unit("HSTECH") == Decimal("10000")  # 恒生科技
+
+    def test_unknown_index_uses_global_default(self) -> None:
+        """未知 ETF 指数也走默认 10000。"""
+        from global_allocation.portfolio.cost_basis import get_position_unit
+        assert get_position_unit("") == Decimal("10000")
+        assert get_position_unit("UNKNOWN_IDX") == Decimal("10000")
 
     def test_default_position_unit_is_10000(self) -> None:
         """全局默认 1 仓 = 10000 CNY（spec 022 2026-09-24 拍板不变）。"""
