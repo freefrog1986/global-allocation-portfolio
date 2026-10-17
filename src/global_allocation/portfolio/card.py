@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -237,7 +238,14 @@ def _build_holdings_table(
 #
 # 当 journal holdings 为空（DB 没灌基金/流水）时，Section 1 改成"持仓成本"为主：
 # - 持仓成本表：基于 cost_basis.py + breakdown.py，按子类聚合（11 行 × 4 列）
-# - 最近调仓：基于 git log（5 条 commit 摘要 + 日期 + 类型）
+# - 调仓纪录：独立 section（位置在 Section 1 和 Section 2 之间），从 git log 过滤出
+#   真实调仓 commit（建仓/加仓/减仓/转换/砍仓/校准/对账/赎回/卖出），过滤掉
+#   调参/规则（估值改/拍板/卡片/fallback/docs/spec/注释/备注/同步 CSV/框架/适配）
+#
+# 为什么这样过滤（liubo 2026-10-17 反馈"调仓纪录，不要写调仓规则的纪录"）：
+# - 调仓规则 commit = 规则调整/估值方法改动/卡片 UI 改动等，不算实际调仓动作
+# - 真实调仓 = 实际发生的加仓/减仓/换基/建仓/转换/成本校准
+# - 用户看"调仓纪录"是为了知道"我实际调过什么"，不是"调仓规则改了什么"
 #
 # 为什么这么改（liubo 2026-10-16 反馈）：
 # - cost_basis.py 已经有 52 只基金的累计买入总金额（604143.47 + 校准 +1661 = 605804.47）
@@ -315,32 +323,56 @@ def _build_cost_basis_section() -> list[dict[str, object]]:
         {"tag": "table", **cost_table},
     ]
 
-    # 最近调仓记录（git log 5 条）
-    rebalance_section = _build_rebalance_history(limit=5)
-    if rebalance_section:
-        elements.append({"tag": "hr"})
-        elements.append(rebalance_section)
-
     return elements
 
 
-def _build_rebalance_history(limit: int = 5) -> dict[str, object] | None:
-    """最近 N 条调仓/调参 commit 摘要（git log）。
+# ─── 第二十二轮（liubo 2026-10-17）：调仓纪录 section（独立，1-2 之间）───
+#
+# 关键词白名单：识别真实调仓 commit（按 subject 包含的关键词/模式）
+# - "校准/对账/转换/砍/新建仓/赎回/卖出/清仓/加仓" 等明确动作词
+# - "加 0xxxxx 基金代码"（6 位数字）= 加基金 = 建仓
+# - "扩 N 只 / 加 N 只" = 扩/加 N 只基金
+# - "调整" + 6 位基金代码 = 基金调整（建/加/减/换）
+#
+# 不在白名单 = 视为调参/规则/卡片/docs，过滤掉（不展示给用户看）
 
-    来源：`git log --pretty=format:"%h %ai %s" -N`（仅本项目仓库的 commit）
+_REBALANCE_KEYWORDS: tuple[str, ...] = (
+    # 关键词带空格避免误命中（"赎回费" 属于调仓规则，不是真实调仓）
+    "校准", "对账", "转换", "砍", "新建仓", "建仓", "赎回 ", "卖出 ", "清仓",
+    "加仓 ", "+1 仓", "−1 仓", "-1 仓",
+)
 
-    返回：一个 div（lark_md），内容 = N 行 commit 摘要
-    - 格式：`{date} {short_hash} {commit_message}`
-    - 截断 commit message 到 80 字符（飞书 div 一行太长会换行不优雅）
+def _is_rebalance_subject(subject: str) -> bool:
+    """判断 commit subject 是否是真实调仓（白名单匹配）。"""
+    for marker in _REBALANCE_KEYWORDS:
+        if marker in subject:
+            return True
+    # 加 0xxxxx 基金代码（6 位数字开头）= 加基金
+    if re.search(r"加\s*?\d{6}", subject):
+        return True
+    # 扩 N 只 / 加 N 只 模式
+    if re.search(r"[扩加]\s*?\d+\s*?只", subject):
+        return True
+    # "调整" + 6 位基金代码 = 调仓（建/加/减/换）
+    if "调整" in subject and re.search(r"\d{6}", subject):
+        return True
+    return False
 
-    注：用 subprocess.run(列表参数，不传 shell)避免命令注入。
+
+def _build_rebalance_records_section(limit: int = 10) -> list[dict[str, object] | None]:
+    """Section 1.5 — 调仓纪录（liubo 2026-10-17 加在 1 和 2 之间）。
+
+    从 git log 抓最近 N*3 条 commit，按 _is_rebalance_subject 过滤出真实调仓，
+    取前 limit 条渲染成 lark_md div。无调仓 commit → 返回空 list（不渲染）。
+
+    抓 N*3 是因为按经验，调仓 commit 占比 ~1/3，多抓点保证 limit 条都能拿到。
     """
     import subprocess
 
     try:
         proc = subprocess.run(
             ["git", "-C", str(Path(__file__).resolve().parents[3]),
-             "log", "--pretty=format:%h %ai %s", f"-{limit}"],
+             "log", "--pretty=format:%h %ai %s", f"-{limit * 3}"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -348,28 +380,41 @@ def _build_rebalance_history(limit: int = 5) -> dict[str, object] | None:
         )
         lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
-        return None
+        return []
 
     if not lines:
-        return None
+        return []
 
-    bullets = []
+    bullets: list[str] = []
     for ln in lines:
         # 格式: "{hash} {YYYY-MM-DD HH:MM:SS +ZZZZ} {subject}"
         parts = ln.split(" ", 3)
         if len(parts) < 4:
             continue
         short_hash, date_str, _, subject = parts
-        # 截断日期到 YYYY-MM-DD
+        if not _is_rebalance_subject(subject):
+            continue
         date_short = date_str[:10]
         subject_short = subject[:80]
         bullets.append(f"- {date_short} `{short_hash}` {subject_short}")
+        if len(bullets) >= limit:
+            break
 
-    content = "**最近调仓 / 调参记录**（git log）：\n" + "\n".join(bullets)
-    return {
-        "tag": "div",
-        "text": {"tag": "lark_md", "content": content},
-    }
+    if not bullets:
+        return []
+
+    content = "**调仓纪录**（git log，过滤掉调参/规则/卡片/docs）：\n" + "\n".join(bullets)
+    return [
+        {
+            "tag": "note",
+            "elements": [{"tag": "plain_text", "content": "调仓纪录"}],
+        },
+        {"tag": "hr"},
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": content},
+        },
+    ]
 
 
 # ─── Per-fund 估值指标策略（spec 098 第二十七轮）───
@@ -548,7 +593,13 @@ def _build_fund_valuation_section(
         if (sub := get_subclass(h.fund.code)) is not None and sub in target_subclass_set
     ]
     if not region_funds:
-        return []
+        # 第二十二轮（liubo 2026-10-17）fallback：holdings 为空时，
+        # 直接从 fund_valuations 表 + SUBCLASS_BY_CODE 拿有估值的基金渲染 per-fund 表
+        # 数据源：fund_valuations（PE/PE分位/股息率/ROE 同比）+ breakdown.SUBCLASS_BY_CODE（子类）
+        # 当前仓位列 = "数据缺失"（无 holdings 数据）→ adjust 列 = "—"
+        return _build_fund_valuation_section_fallback(
+            journal, target_subclass_set,
+        )
 
     fund_codes = [h.fund.code for h in region_funds]
     fvs_by_code = journal.db.list_latest_fund_valuations_for_codes(fund_codes)
@@ -584,6 +635,62 @@ def _build_fund_valuation_section(
         "rows": rows,
     }
 
+    return [
+        {"tag": "hr"},
+        {"tag": "table", **table},
+    ]
+
+
+def _build_fund_valuation_section_fallback(
+    journal: PortfolioJournal,
+    target_subclass_set: set[SwensenClass],
+) -> list[dict[str, object]]:
+    """holdings 为空时，从 fund_valuations 表直接读 + SUBCLASS_BY_CODE 分类（liubo 2026-10-17）。
+
+    用 list_latest_fund_valuations_for_codes 传所有 cost_basis.py 已知的 52 只基金 code，
+    拿到 fund_code → FundValuation 映射，再按 SUBCLASS_BY_CODE 过滤出该 region 的基金。
+
+    fund_name 没存到 fund_valuations 表，用 fund_code 当显示（用户能认就行）。
+
+    返回：[hr, table] 或 []（无 fund_valuations 数据时）。
+    """
+    from global_allocation.portfolio.breakdown import SUBCLASS_BY_CODE
+    from global_allocation.portfolio.cost_basis import COST_BASIS_BY_CODE
+
+    # 拿所有 cost_basis 已知基金的最新估值
+    all_codes = list(COST_BASIS_BY_CODE.keys())
+    fvs_by_code = journal.db.list_latest_fund_valuations_for_codes(all_codes)
+
+    # 按 SUBCLASS_BY_CODE 过滤出该 region 的基金
+    region_fvs: list[FundValuation] = []
+    for code, fv in fvs_by_code.items():
+        sub = SUBCLASS_BY_CODE.get(code)
+        if sub is not None and sub in target_subclass_set:
+            region_fvs.append(fv)
+
+    if not region_fvs:
+        return []
+
+    # 按 fund_code 排序（稳定显示顺序）
+    region_fvs.sort(key=lambda fv: fv.fund_code)
+
+    rows: list[dict[str, object]] = []
+    for fv in region_fvs:
+        idx_code = fv.index_code or ""
+        strategy = INDEX_VERDICT_STRATEGY.get(idx_code, "broad")
+        verdict = _per_fund_verdict(fv, strategy)
+        advice = _per_fund_recommendation(verdict)
+        # fallback 没市值数据 → position="数据缺失"，adjust="—"
+        rows.append(_format_fund_row(
+            fv.fund_code, fv.fund_code,  # name 字段没存到表，用 code 顶上
+            fv, strategy, verdict, advice, "数据缺失", "—",
+        ))
+
+    columns = _fund_columns()
+    table: dict[str, object] = {
+        "columns": columns,
+        "rows": rows,
+    }
     return [
         {"tag": "hr"},
         {"tag": "table", **table},
@@ -1450,8 +1557,15 @@ def build_portfolio_card(
         ]
     else:
         # fallback 路径（liubo 2026-10-16）：DB holdings 为空时 → 持仓成本表
-        # 数据来源：cost_basis.py + breakdown.py + git log（不依赖 akshare 拉市值）
+        # 数据来源：cost_basis.py + breakdown.py（不依赖 akshare 拉市值）
         elements = _build_cost_basis_section()
+
+    # Section 1.5: 调仓纪录（liubo 2026-10-17）— 在 Section 1 和 Section 2 之间
+    # 数据来源：git log，按 _is_rebalance_subject 过滤掉调参/规则/卡片/docs
+    rebalance_section = _build_rebalance_records_section(limit=10)
+    if rebalance_section:
+        elements.append({"tag": "hr"})
+        elements.extend(rebalance_section)
 
     # Section 3: 大类资产估值（spec 098 第二十一轮新增）
     valuation_section = _build_valuation_section(journal)

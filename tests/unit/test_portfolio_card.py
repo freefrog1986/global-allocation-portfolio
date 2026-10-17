@@ -155,6 +155,10 @@ class TestBuildPortfolioCard:
             - delta：投资子类 "{+/-N} 份"；现金 "区间内/低于下限/高于上限"
 
         合计：1 note + 1 div + 2 hr + 1 chart + 1 table = 6 个元素 + footer
+        + 第二十二轮（liubo 2026-10-17）调仓纪录 section：
+        + 1 note + 1 div + 1 hr（跨 section 分隔）= +3 个元素
+
+        无估值总计：2 note + 2 div + 3 hr + 1 chart + 1 table = 9 + footer
         """
         _seed(journal)
         card = build_portfolio_card(journal, title="我的实盘")
@@ -168,9 +172,11 @@ class TestBuildPortfolioCard:
         hrs = [e for e in card["elements"] if e.get("tag") == "hr"]
         assert len(charts) == 1
         assert len(tables) == 1
-        assert len(divs) == 1
-        assert len(notes) == 1
-        assert len(hrs) == 2
+        # 第二十二轮（liubo 2026-10-17）：多 1 个 div（调仓纪录 section）+ 1 note + 2 hr
+        # （跨调仓纪录 section 分隔 1，调仓纪录 section 内 1）
+        assert len(divs) == 2
+        assert len(notes) == 2
+        assert len(hrs) == 4
 
     def test_summary_includes_total_and_return(self, journal: PortfolioJournal) -> None:
         _seed(journal)
@@ -1009,27 +1015,27 @@ class TestValuationSection:
         assert len(tables) == 3, f"期望 3 张表，实际 {len(tables)}（飞书 ≤5 上限）"
 
     def test_hr_count_with_combined_section(self, journal: PortfolioJournal) -> None:
-        """combined section 渲染后整张卡片的 hr 数 = 5（baseline 2 + combined section 加 3）。
+        """combined section 渲染后整张卡片的 hr 数 = 7（baseline 4 + combined section 加 3）。
 
-        无估值时 2 hr（Section 1 柱状图前后）。
+        无估值时 4 hr（Section 1 内 2 + 跨调仓纪录 1 + 调仓纪录内 1）。
         渲染 combined section 后多 3 hr：
         - 跨 Section 2 分隔（1，build_portfolio_card 加）
         - combined section note 后（1，_build_valuation_section 加）
         - combined per-fund 表前（1，_build_valuation_section 加）
         """
         _seed(journal)
-        # 无估值：2 hr
+        # 无估值：4 hr（Section 1 内 2 + 跨调仓纪录 1 + 调仓纪录内 1）
         card_no_val = build_portfolio_card(journal)
         hrs_no_val = sum(1 for e in card_no_val["elements"] if e.get("tag") == "hr")
-        assert hrs_no_val == 2
+        assert hrs_no_val == 4
 
-        # 有估值：2 + 3 = 5 hr
+        # 有估值：4 + 3 = 7 hr
         _seed_valuation_today(journal)
         _seed_a_share_funds(journal)
         _seed_fund_valuations(journal)
         card_with_val = build_portfolio_card(journal)
         hrs_with_val = sum(1 for e in card_with_val["elements"] if e.get("tag") == "hr")
-        assert hrs_with_val == 5
+        assert hrs_with_val == 7
 
 
 class TestOrdering:
@@ -1047,23 +1053,26 @@ class TestOrdering:
             for e in card["elements"]
             if e.get("tag") in {"note", "div", "chart", "table"}
         ]
+        # 第二十二轮（liubo 2026-10-17）：增加调仓纪录 section（note + div）在 1 和 2 之间
         assert tags == [
             "note",  # Section 1 header "实盘持仓"
             "div",   # Section 1 summary
             "chart", # Section 1 柱状图
             "table", # Section 1 持仓表（5 列：含 target/delta，整数仓位模型）
+            "note",  # Section 1.5 header "调仓纪录"
+            "div",   # Section 1.5 调仓 commit 列表
         ]
 
     def test_hr_count_and_position(self, journal: PortfolioJournal) -> None:
-        """第二十一轮：2 个 hr（Section 1 柱状图前后），无 Section 2 跨 section 分隔。
+        """第二十二轮（liubo 2026-10-17）：4 个 hr（Section 1 内 2 + 跨调仓纪录 section 分隔 1 + 调仓纪录内 1）。
 
-        之前第二十轮 4 个 hr（Section 1 柱状图前后 + 跨 Section 2 分隔 + Section 2 表格前）
-        第二十一轮删除 Section 2 后只剩 2 个 intra-section hr。
+        之前第二十一轮 2 个 hr（Section 1 柱状图前后），无 Section 2 跨 section 分隔。
+        新增调仓纪录 section 后多 2 个 hr：build_portfolio_card 加 1，调仓纪录 section 内 1。
         """
         _seed(journal)
         card = build_portfolio_card(journal)
         hrs = [e for e in card["elements"] if e.get("tag") == "hr"]
-        assert len(hrs) == 2
+        assert len(hrs) == 4
 
     def test_first_element_is_section_header_note(self, journal: PortfolioJournal) -> None:
         """第一个元素是 note 标签（section header），内容是"实盘持仓"。
