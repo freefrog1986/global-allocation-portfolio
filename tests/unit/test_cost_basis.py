@@ -43,14 +43,13 @@ class TestCostBasisByCode:
         assert len(COST_BASIS_BY_CODE) == 52
 
     def test_total_matches_sum(self) -> None:
-        """总和等于 liubo 算出的 605804.47（52 只；2026-10-09 三笔转换净 0 + 14 只基金校准 +1661）。
-        2026-09-22 第十九轮时为 579162.86；2026-09-24 因 028277 bump 到 10000 多了 0.61；
-        2026-09-29 卖出 019524 -20 + 加 013127 +25000 → 604143.47。
-        2026-10-09 三笔转换净 0 + 14 只基金成本校准 +1661 → 605804.47。
+        """总和等于 liubo 算出的 626454.47（52 只；2026-10-17 liubo 反馈"把定投的总成本算上去"，
+        5 只 DCA 基金 cost 改为累计目标 +20650：000614 0→10000, 016452 60→1800, 019172 40→2000,
+        019441 40→2000, 000216 2510→7500；2026-10-09 之前是 605804.47）。
         """
         total = sum(COST_BASIS_BY_CODE.values())
         assert total == TOTAL_COST_CNY
-        assert TOTAL_COST_CNY == Decimal("605804.47")
+        assert TOTAL_COST_CNY == Decimal("626454.47")
 
     def test_specific_a_share_amounts(self) -> None:
         """9 只 A 股宽基（第十九轮加 022448 后 6 只 + 2026-10-09 加 3 只科创/创业）。"""
@@ -72,16 +71,19 @@ class TestCostBasisByCode:
         assert COST_BASIS_BY_CODE["013127"] == Decimal("35000")  # 汇添富恒生科技 ETF 联接发起式(QDII)A（2026-10-09 加仓）
 
     def test_specific_us_amounts(self) -> None:
-        """7 只美股宽基（标普500/标普100 + 5 只纳100；第二十二轮 liubo 2026-09-29 卖出 019524）。"""
+        """7 只美股宽基（标普500/标普100 + 5 只纳100；第二十二轮 liubo 2026-09-29 卖出 019524）。
+        2026-10-17 3 只 NDX 联接/QDII (016452/019172/019441) cost 改为 DCA 累计目标而非"已买"快照。
+        """
         assert COST_BASIS_BY_CODE["519981"] == Decimal("3620")   # 长信标普100
         assert COST_BASIS_BY_CODE["018966"] == Decimal("2020")   # 汇添富纳100
         assert COST_BASIS_BY_CODE["539001"] == Decimal("1000")   # 建信纳100（QDII 场外）
         assert COST_BASIS_BY_CODE["017641"] == Decimal("50")     # 摩根标普500
-        assert COST_BASIS_BY_CODE["016452"] == Decimal("60")     # 南方纳100（第十九轮补回；2026-10-09 校准）
+        # 2026-10-17 改：DCA 累计目标（不是已买快照）
+        assert COST_BASIS_BY_CODE["016452"] == Decimal("1800")    # 南方纳100（DCA ¥10/天 → 累计 1800）
         # 019524 已卖出（2026-09-29 liubo 卖出 20 元，收回现金）
         assert "019524" not in COST_BASIS_BY_CODE
-        assert COST_BASIS_BY_CODE["019172"] == Decimal("40")     # 摩根纳指100 QDII 人民币A（DCA 第二十轮加；2026-10-09 校准 ¥40 已买）
-        assert COST_BASIS_BY_CODE["019441"] == Decimal("40")     # 万家纳指100 发起式 QDII A（DCA 第二十一轮加，双只备份；2026-10-09 校准 ¥40 已买）
+        assert COST_BASIS_BY_CODE["019172"] == Decimal("2000")    # 摩根纳指100 QDII 人民币A（DCA ¥10/天 → 累计 2000）
+        assert COST_BASIS_BY_CODE["019441"] == Decimal("2000")    # 万家纳指100 发起式 QDII A（DCA ¥10/天 → 累计 2000）
 
     def test_sold_fund_removed(self) -> None:
         """019524 已卖出（2026-09-29 liubo），不在 COST_BASIS_BY_CODE。"""
@@ -106,9 +108,12 @@ class TestCostBasisByCode:
             assert code not in COST_BASIS_BY_CODE, f"{code} 已砍"
 
     def test_other_subclass_amounts(self) -> None:
-        """国外发达（第二十四轮加 000614 DAX 联接）/ 新兴市场 / REITs / 国内利率债 / 美债 / 商品。"""
+        """国外发达 / 新兴市场 / REITs / 国内利率债 / 美债 / 商品。
+        2026-10-17 改 2 只 DCA 基金 cost = 累计目标：000614 (0→10000), 000216 (2510→7500)。
+        """
         assert "457001" not in COST_BASIS_BY_CODE  # 已移到 ETF 轮动组合
-        assert COST_BASIS_BY_CODE["000614"] == Decimal("0")    # 华安 DAX 联接 A（DCA 进行中，第二十四轮加）
+        # 2026-10-17 改：DCA 累计目标 10000
+        assert COST_BASIS_BY_CODE["000614"] == Decimal("10000")  # 华安 DAX 联接 A（DCA 累计 10000 目标）
         assert COST_BASIS_BY_CODE["378006"] == Decimal("5310")   # 摩根全球新兴市场（2026-10-09 校准）
         assert COST_BASIS_BY_CODE["028277"] == Decimal("10000")  # 华夏中证REITs全收益（2026-09-24 +4999.39 凑 1 仓，bump 到 10000 避免 Decimal 噪声）
         assert COST_BASIS_BY_CODE["160140"] == Decimal("5000")   # 南方道琼斯美国精选REIT
@@ -117,7 +122,8 @@ class TestCostBasisByCode:
         assert COST_BASIS_BY_CODE["100050"] == Decimal("6000")   # 富国全球债券
         assert COST_BASIS_BY_CODE["007360"] == Decimal("55000")  # 易方达中短期美元债
         assert COST_BASIS_BY_CODE["003385"] == Decimal("15000")  # 工银全球美元债
-        assert COST_BASIS_BY_CODE["000216"] == Decimal("2510")   # 华安黄金ETF联接A
+        # 2026-10-17 改：DCA 累计目标 7500
+        assert COST_BASIS_BY_CODE["000216"] == Decimal("7500")    # 华安黄金ETF联接A（DCA ¥250-1000/周一 → 累计 7500）
 
     def test_unlocked_short_bond_funds(self) -> None:
         """第十九轮解锁：008505/004827 不再按现金，进 cost_basis。

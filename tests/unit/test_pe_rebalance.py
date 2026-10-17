@@ -960,9 +960,10 @@ class TestWeeklyRebalancePlan:
         457001 2026-09-22 转 ETF 轮动组合后 FOREIGN_DM_EQUITY 子类 0 只基金。
         liubo 2026-09-29 拍板：跟踪 3 个国外发达指数方便建仓决策。
         第二十四轮（2026-09-29）liubo 加 000614 华安 DAX 联接 A → .GDAXI 从 watchlist 移到 fund map。
+        2026-10-17 liubo 反馈"把定投的总成本算上去"——000614 cost 改为累计目标 10000 = 1 仓满仓 → HOLD。
         当前 snapshot（guchacha.com 2026-09-22）：
         - .N225  日经 225: PE 19.21 / 分位 69.8% → HOLD（空仓 + 分位 >= 50% → 等便宜）
-        - .GDAXI 德国 DAX: PE 16.90 / 分位 47.1% → BUILD（空仓 + 分位 < 50% → 建仓，via 000614）
+        - .GDAXI 德国 DAX: PE 16.90 / 分位 47.1% → HOLD（满仓 + 分位 47.1% → 不动；2026-10-17 改 cost=10000）
         - .FCHI  法国 CAC 40: PE 17.31 / 分位 71.9% → HOLD（同 .N225）
         """
         actions = weekly_rebalance_plan()
@@ -978,9 +979,9 @@ class TestWeeklyRebalancePlan:
         assert by_idx[".N225"].signal == PESignal.HOLD
         assert by_idx[".N225"].metric_percentile == Decimal("0.698")
         assert by_idx[".N225"].fund_code == "(.N225)"  # 仍是 watchlist
-        # 关键：DAX 实际分位 47.1% < 50% → BUILD（之前 hardcode 写 53% → HOLD 漏报）
-        # 第二十四轮：.GDAXI 现在由 000614 跟踪（不再是 watchlist 项）
-        assert by_idx[".GDAXI"].signal == PESignal.BUILD
+        # 关键：DAX 实际分位 47.1% < 50%，但 000614 cost 改为累计目标 10000 = 1 仓满仓 → HOLD
+        # 2026-10-17 改：之前 cost=0 是"未开始"状态 → BUILD，现在 cost=累计 → 满仓 → HOLD
+        assert by_idx[".GDAXI"].signal == PESignal.HOLD
         assert by_idx[".GDAXI"].metric_percentile == Decimal("0.471")
         assert by_idx[".GDAXI"].fund_code == "000614"  # 来自 FUND_INDEX_MAP，不是 watchlist
         assert by_idx[".FCHI"].signal == PESignal.HOLD
@@ -1096,7 +1097,7 @@ class TestWeeklyRebalancePlan:
 
         liubo 2026-09-29 决定走场外基金（513030 场内 DAX ETF 有溢价），
         用支付宝慧定投：每周三扣款 250-1000 元/周（平均 500），目标累计 10000 CNY = 1 仓（满额自动暂停）。
-        当前 cost_basis = 0（DCA 未开始），仓位 0 + 分位 47.1% < 50% → BUILD。
+        2026-10-17 liubo 反馈"把定投的总成本算上去"——cost_basis 改为累计目标 10000 = 1 仓满仓 → HOLD。
 
         watchlist 的 .GDAXI 项已移除（被 fund 000614 替代，避免重复计算）。
         actions 里 .GDAXI 只有 1 个 action（来自 000614）。
@@ -1107,8 +1108,9 @@ class TestWeeklyRebalancePlan:
         a = gdaxi[0]
         assert a.fund_code == "000614"
         assert a.subclass == SwensenClass.FOREIGN_DM_EQUITY
-        assert a.signal == PESignal.BUILD  # 仓位 0 + 分位 47.1% < 50%
-        assert a.current_position == Decimal("0")
+        # 2026-10-17 改：cost=10000 = 1 仓满仓 + 分位 47.1% < 50% → HOLD（满仓即使便宜也不加仓）
+        assert a.signal == PESignal.HOLD
+        assert a.current_position == Decimal("1")  # 1 仓满仓（DCA 累计 10000 = 1 仓）
         assert a.metric_percentile == Decimal("0.471")
         assert a.metric == ValuationMetric.PE_TTM
         # .GDAXI 不在 watchlist 里了

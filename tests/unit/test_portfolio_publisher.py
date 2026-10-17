@@ -66,11 +66,25 @@ class TestPublishPortfolioReport:
         assert "header" in parsed
         assert "elements" in parsed
 
-    def test_dry_run_no_holdings_raises(
+    def test_dry_run_no_holdings_falls_back_to_cost_basis(
         self, journal: PortfolioJournal, creds: FeishuCredentials
     ) -> None:
-        with pytest.raises(ValueError, match="持仓"):
-            publish_portfolio_report(journal, credentials=creds, dry_run=True)
+        """空 holdings 不再 raise（spec liubo 2026-10-16 — 走 fallback 路径：成本 by 大类）。
+
+        之前的行为（raise ValueError）已被 fallback 替代，因为用户要看周报即使
+        DB 还没初始化（成本快照从 cost_basis.py 拿，不依赖 DB holdings）。
+        """
+        import json
+        result = publish_portfolio_report(journal, credentials=creds, dry_run=True)
+        assert isinstance(result, str)
+        parsed = json.loads(result)
+        assert "header" in parsed
+        # fallback 路径：Section 1 = 持仓成本 by 大类
+        assert any(
+            el.get("tag") == "table"
+            and "class" in [c["name"] for c in el.get("columns", [])]
+            for el in parsed["elements"]
+        ), "fallback 路径应渲染「持仓成本 by 大类」表"
 
     def test_actual_send_calls_lark(
         self, seeded_journal: PortfolioJournal, creds: FeishuCredentials

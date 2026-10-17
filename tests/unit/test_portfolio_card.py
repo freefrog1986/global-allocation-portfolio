@@ -1148,6 +1148,114 @@ class TestDcaRecordsSection:
             )
 
 
+class TestCostBasisByClassAggregation:
+    """第二十六轮（liubo 2026-10-17 反馈"国外发达不应该是 0"）：Section 1 fallback
+    持仓成本 by 大类 聚合 必须正确 — DCA 基金的 cost 应该是累计目标，不是"已买"快照。
+
+    关键断言（liubo 2026-10-17 拍板）：
+    - 国外发达市场股票：count=1（000614 DAX 联接），cost=10000（DCA 累计目标）
+    - 美股股票：cost 包含 3 只 NDX DCA 累计（016452=1800, 019172=2000, 019441=2000）
+    - 商品：cost=7500（000216 黄金 DCA 累计目标）
+    - 11 大类全覆盖：A 股 / 港股 / 美股 / 国外发达 / 新兴市场 / 国内 REITs / 美国 REITs /
+      国内利率债 / 美债 / 商品（现金 004137 走 CASH_LIKE_CODES 不渲染）
+    """
+
+    def test_foreign_dm_aggregation_includes_dca_target(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """国外发达：count=1, cost=10000（不是 0/不是已买快照）。"""
+        card = build_portfolio_card(journal)
+        cost_table = self._get_cost_basis_table(card)
+        fdm_row = next(
+            (r for r in cost_table["rows"] if r["class"] == "国外发达市场股票"),
+            None,
+        )
+        assert fdm_row is not None, "Section 1 应有「国外发达市场股票」行"
+        assert fdm_row["count"] == "1", (
+            f"国外发达 count 应是 1（含 000614 DAX），实际 {fdm_row['count']}"
+        )
+        assert fdm_row["cost"] == "10,000.00", (
+            f"国外发达 cost 应是 10000（DCA 累计目标），实际 {fdm_row['cost']}。"
+            "liubo 反馈'国外发达不应该是 0，应该是 1'——cost 应该是 DCA 累计 10000"
+        )
+
+    def test_us_equity_aggregation_includes_ndx_dca_targets(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """美股股票：cost 应包含 3 只 NDX DCA 累计（1800+2000+2000=5800）加上其他 4 只。"""
+        card = build_portfolio_card(journal)
+        cost_table = self._get_cost_basis_table(card)
+        us_row = next(
+            (r for r in cost_table["rows"] if r["class"] == "美股股票"),
+            None,
+        )
+        assert us_row is not None
+        # 美股 7 只合计：3620 + 2020 + 1000 + 50 + 1800 + 2000 + 2000 = 12490
+        assert us_row["cost"] == "12,490.00", (
+            f"美股 cost 应是 12490（含 3 只 NDX DCA 累计），实际 {us_row['cost']}"
+        )
+        assert us_row["count"] == "7", "美股应有 7 只基金"
+
+    def test_commodity_aggregation_uses_dca_target(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """商品：000216 黄金 cost=7500（DCA 累计目标，不是已买 2510 快照）。"""
+        card = build_portfolio_card(journal)
+        cost_table = self._get_cost_basis_table(card)
+        comm_row = next(
+            (r for r in cost_table["rows"] if r["class"] == "商品"),
+            None,
+        )
+        assert comm_row is not None
+        assert comm_row["cost"] == "7,500.00", (
+            f"商品 cost 应是 7500（DCA 累计），实际 {comm_row['cost']}"
+        )
+
+    def test_all_10_subclasses_covered(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """10 大类全覆盖（11 大类减现金 004137 — CASH_LIKE_CODES 不渲染）。"""
+        card = build_portfolio_card(journal)
+        cost_table = self._get_cost_basis_table(card)
+        classes = {r["class"] for r in cost_table["rows"]}
+        expected = {
+            "A 股股票", "港股", "美股股票", "国外发达市场股票", "新兴市场股票",
+            "国内 REITs", "美国 REITs", "国内利率债", "美债", "商品",
+        }
+        assert classes == expected, (
+            f"Section 1 缺大类：{expected - classes}；多余：{classes - expected}"
+        )
+
+    def test_total_cost_matches_cost_basis_sum(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """Section 1 总成本 = TOTAL_COST_CNY（626454.47）— 摘要 div 用千位分隔符格式。"""
+        from global_allocation.portfolio.cost_basis import TOTAL_COST_CNY
+        card = build_portfolio_card(journal)
+        # 找总成本摘要 div（含「总成本」字样）
+        summary_text = ""
+        for el in card["elements"]:
+            if el.get("tag") == "div":
+                summary_text = el.get("text", {}).get("content", "")
+                if "总成本" in summary_text:
+                    break
+        # 摘要格式："**总成本**：626,454.47 CNY"（千位分隔符）
+        expected = f"{float(TOTAL_COST_CNY):,.2f}"
+        assert expected in summary_text, (
+            f"摘要里应有总成本 {expected}（千位分隔符格式），实际：{summary_text}"
+        )
+
+    def _get_cost_basis_table(self, card: dict) -> dict:
+        """找 Section 1 的「持仓成本 by 大类」表（columns 含 class + count）。"""
+        for t in card["elements"]:
+            if t.get("tag") != "table":
+                continue
+            cols = [c["name"] for c in t.get("columns", [])]
+            if "class" in cols and "count" in cols:
+                return t
+        raise AssertionError("找不到「持仓成本 by 大类」表")
+
+
 class TestRemovedSections:
     """spec 096/097 移除的部分必须真的没了（第十九轮：Section 2 + Section 3 也都删了）。"""
 
