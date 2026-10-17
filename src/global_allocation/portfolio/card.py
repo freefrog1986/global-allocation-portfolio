@@ -51,13 +51,17 @@ _CROSS_PORTFOLIO_EXCLUDE_CODES: frozenset[str] = frozenset({
 # 例：016452 南方纳100 → "10 元 / 每天 / 累计 1800"
 # 不写「已买 ¥X」（已经买入了多少他不关心）。
 # 数据源：cost_basis.py 注释里的 DCA 设定。
+# liubo 2026-10-17 反馈 — 金额列显示 3 个值：定投额 / 频率 / 总目标
+# 例：016452 南方纳100 → "10 元 / 每天 / 累计 1800"
+# 不写「已买 ¥X」（已经买入了多少他不关心）。
+# 数据源：liubo 2026-10-17 提供的天天基金 DCA 计划详情截图（不是 commit 注释）。
 _DCA_SCHEDULE_BY_CODE: dict[str, dict[str, str]] = {
     # code: {"per": 定投额, "cycle": 频率, "total": 总目标}
-    "016452": {"per": "10 元", "cycle": "每天", "total": "1800"},          # 南方纳100（DCA ¥10/天 → 累计 1800）
-    "019172": {"per": "10 元", "cycle": "每天", "total": "2000"},          # 摩根纳斯达克100(QDII)人民币A（DCA ¥10/天 → 累计 2000）
-    "019441": {"per": "10 元", "cycle": "每天", "total": "2000"},          # 万家纳斯达克100发起式(QDII)A（DCA ¥10/天 → 累计 2000）
-    "000614": {"per": "250-1000 元", "cycle": "每周（均值 500）", "total": "10000"},  # 华安德国(DAX)联接(QDII)A（慧定投）
-    "000216": {"per": "500 元", "cycle": "每周一", "total": "—"},           # 华安黄金ETF联接A（每周一 +500，无固定目标）
+    "016452": {"per": "10 元", "cycle": "每天", "total": "1800"},          # 南方纳100（DCA ¥10/天 → 累计 1800 暂停）
+    "019172": {"per": "10 元", "cycle": "每天", "total": "2000"},          # 摩根纳斯达克100(QDII)人民币A（DCA ¥10/天 → 累计 2000 暂停）
+    "019441": {"per": "10 元", "cycle": "每天", "total": "2000"},          # 万家纳斯达克100发起式(QDII)A（DCA ¥10/天 → 累计 2000 暂停）
+    "000614": {"per": "250-1000 元", "cycle": "每周三", "total": "10000"},  # 华安德国(DAX)联接(QDII)A（慧定投 250-1000/周三 → 累计 10000 暂停）
+    "000216": {"per": "250-1000 元", "cycle": "每周一", "total": "7500"},   # 华安黄金ETF联接A（慧定投 250-1000/周一 → 累计 7500 暂停）
 }
 
 
@@ -364,6 +368,188 @@ def _build_cost_basis_section() -> list[dict[str, object]]:
     return elements
 
 
+# ─── 第二十三轮（liubo 2026-10-17 拍板）：per-fund 持仓成本 + 估值 + 调仓建议 ───
+#
+# 用户原话（飞书 2026-10-17 反馈）：
+# "第二部分呢，我是需要具体到每一只基金，然后这只基金现在是成本是多少？
+#  然后这个然后这个就是它的估值是什么情况？然后我调仓的建议是什么？
+#  这个就是帮我理解说我现在是不是需要进行一些调仓的操作？"
+#
+# 4 列：基金 / 持仓成本 / 估值 / 调仓建议
+# 数据源：
+# - 持仓成本：COST_BASIS_BY_CODE（52 只全列；cost=0 显示 "—"，不写 0.00）
+# - 估值 + 调仓建议：weekly_rebalance_plan() 的 RebalanceAction
+#   - 19 只 + 3 watchlist 在 FUND_INDEX_MAP（股票/REITs/黄金），有 metric
+#   - 剩下 30 只左右（中短债/美债/现金）→ 估值 "—"，调仓建议 "不动"
+#   - NDX 5 只（NDX 指数估值数据缺失）→ metric_value=None → 估值 "—"，advice 标 "跳过（数据缺失）"
+# 排序：SwensenClass 枚举顺序（A 股 → 港股 → 美股 → 国外发达 → 新兴市场 → 国内 REITs → 美国 REITs → 国内利率债 → 美债 → 商品 → 现金）+ fund_code
+# 不在 COST_BASIS_BY_CODE 但在 actions 里的（watchlist 的 3 个指数 HSI/N225/FCHI）→ 不渲染（无成本可显示）
+
+
+def _build_per_fund_section() -> list[dict[str, object]]:
+    """Section 2: per-fund 持仓成本 + 估值 + 调仓建议（liubo 2026-10-17 拍板）。
+
+    列：基金 | 持仓成本(¥) | 估值 | 调仓建议
+    """
+    from global_allocation.portfolio.breakdown import SUBCLASS_BY_CODE
+    from global_allocation.portfolio.cost_basis import COST_BASIS_BY_CODE
+    from global_allocation.portfolio.pe_rebalance import (
+        METRIC_DISPLAY_NAME,
+        PESignal,
+        RebalanceAction,
+        ValuationMetric,
+        weekly_rebalance_plan,
+    )
+
+    actions: list[RebalanceAction] = weekly_rebalance_plan()
+    # 个别 code → action（处理 merge_by_etf 把 3 只 A500 合并成 "022434+022424+022448"）
+    by_code: dict[str, RebalanceAction] = {}
+    for a in actions:
+        if "+" in a.fund_code:
+            # 合并组 — 每只组内基金都映射到同一个 action
+            for sub_code in a.fund_code.split("+"):
+                by_code[sub_code] = a
+        else:
+            by_code[a.fund_code] = a
+
+    # 11 个 SwensenClass 按枚举顺序排（DISPLAY_NAME 里 "A 股股票" / "港股" / ... 跟用户认知一致）
+    subclass_order = {s: i for i, s in enumerate(SwensenClass)}
+
+    # 按 (subclass_order, fund_code) 排序后逐只基金构建 row
+    items: list[tuple[int, str, Decimal]] = []
+    for code, cost in COST_BASIS_BY_CODE.items():
+        sub = SUBCLASS_BY_CODE.get(code)
+        if sub is None:
+            continue  # 没映射的基金不进表（理论上不应该有，COST_BASIS_BY_CODE 跟 SUBCLASS_BY_CODE 对齐）
+        items.append((subclass_order[sub], code, cost))
+    items.sort()
+
+    # 信号 → 中文显示
+    signal_display = {
+        PESignal.ADD: "加仓",
+        PESignal.REDUCE: "减仓",
+        PESignal.BUILD: "建仓",
+        PESignal.HOLD: "不动",
+        PESignal.SKIP: "跳过",
+    }
+
+    n_add = n_reduce = n_build = n_hold = n_skip = 0
+    total_cost = Decimal("0")
+
+    rows: list[dict[str, object]] = []
+    for _, code, cost in items:
+        fund_name = get_fund_name(code) or f"基金 {code}"
+        cost_str = f"{float(cost):,.2f}" if cost > 0 else "—"
+        total_cost += cost
+
+        action = by_code.get(code)
+        if action is None:
+            # 没在 FUND_INDEX_MAP（大多是债/现金）— 没估值指标，调仓建议按"不动"
+            valuation = "—"
+            advice = "不动"
+            n_hold += 1
+        else:
+            # 估值列
+            if action.metric_value is None:
+                valuation = "—"
+            else:
+                metric_name = METRIC_DISPLAY_NAME.get(action.metric, action.metric.value)
+                if action.metric == ValuationMetric.GOLD_HISTORICAL_PCT:
+                    # 金价：CNY/g 格式
+                    val_str = f"{float(action.metric_value):.2f}"
+                    valuation = f"{metric_name} {val_str} CNY/g"
+                elif action.metric == ValuationMetric.GOLD_REAL_YIELD:
+                    # 实际利率：fraction → percent
+                    val_str = f"{float(action.metric_value) * 100:.2f}%"
+                    valuation = f"{metric_name} {val_str}"
+                elif action.metric == ValuationMetric.DY:
+                    # DY：percent number
+                    val_str = f"{float(action.metric_value):.2f}%"
+                    valuation = f"{metric_name} {val_str}"
+                elif action.metric == ValuationMetric.P_NAV:
+                    val_str = f"{float(action.metric_value):.2f}x"
+                    valuation = f"{metric_name} {val_str}"
+                else:
+                    # PE-TTM / P/FFO / PS-TTM
+                    val_str = f"{float(action.metric_value):.2f}"
+                    valuation = f"{metric_name} {val_str}"
+                if action.metric_percentile is not None:
+                    pct = float(action.metric_percentile) * 100
+                    valuation = f"{valuation} / 分位 {pct:.2f}%"
+
+            # 调仓建议列
+            sig_text = signal_display.get(action.signal, action.signal.value)
+            if action.signal == PESignal.SKIP:
+                # 跳过：列 "跳过（数据缺失）" / "跳过（无估值指标）" / "跳过（冷却期）"
+                # reason 里通常是 reason 全文 — 取第一个括号或句号前的部分做简短显示
+                short_reason = action.reason.split("（")[0].split("。")[0].strip()
+                if len(short_reason) > 14:
+                    short_reason = short_reason[:14] + "…"
+                advice = f"跳过（{short_reason}）" if short_reason else "跳过"
+                n_skip += 1
+            else:
+                # 加仓/减仓/建仓/不动 — 列信号 + 简短 reason
+                # reason 太长截前 30 字
+                short_reason = action.reason
+                if len(short_reason) > 30:
+                    short_reason = short_reason[:30] + "…"
+                advice = f"{sig_text}（{short_reason}）" if short_reason else sig_text
+                if action.signal == PESignal.ADD:
+                    n_add += 1
+                elif action.signal == PESignal.REDUCE:
+                    n_reduce += 1
+                elif action.signal == PESignal.BUILD:
+                    n_build += 1
+                else:
+                    n_hold += 1
+
+        rows.append({
+            "fund": f"{fund_name} ({code})",
+            "cost": cost_str,
+            "valuation": valuation,
+            "advice": advice,
+        })
+
+    # summary div — 速读本周动作 + 持仓总成本
+    summary_parts = [
+        f"**基金数**：{len(rows)} 只  ",
+        f"**总成本**：{float(total_cost):,.2f} CNY",
+    ]
+    op_parts = []
+    if n_add:
+        op_parts.append(f"加仓 {n_add}")
+    if n_reduce:
+        op_parts.append(f"减仓 {n_reduce}")
+    if n_build:
+        op_parts.append(f"建仓 {n_build}")
+    if op_parts:
+        summary_parts.append(f"**本周操作**：{' / '.join(op_parts)}")
+    elif n_skip or n_hold:
+        summary_parts.append(f"**本周**：{' / '.join(filter(None, ['跳过 ' + str(n_skip) if n_skip else '', '不动 ' + str(n_hold) if n_hold else '']))}")
+
+    summary_text = "  \n".join(summary_parts)
+
+    per_fund_table: dict[str, object] = {
+        "columns": [
+            {"name": "fund", "display_name": "基金", "data_type": "text", "width": "auto"},
+            {"name": "cost", "display_name": "持仓成本(¥)", "data_type": "text", "width": "auto"},
+            {"name": "valuation", "display_name": "估值", "data_type": "text", "width": "auto"},
+            {"name": "advice", "display_name": "调仓建议", "data_type": "text", "width": "auto"},
+        ],
+        "rows": rows,
+    }
+
+    return [
+        {"tag": "hr"},
+        {"tag": "note", "elements": [{"tag": "plain_text", "content": "持仓与调仓建议"}]},
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": summary_text},
+        },
+        {"tag": "table", **per_fund_table},
+    ]
+
+
 # ─── 第二十二轮（liubo 2026-10-17）：调仓纪录 section（独立，1-2 之间）───
 #
 # 关键设计：解析 commit body 而不是 subject（liubo 2026-10-17 反馈）：
@@ -514,8 +700,103 @@ def _resolve_action(line: str, subject: str) -> str:
     return "调仓"
 
 
+def _format_amount_with_units(amount: str) -> str:
+    """把 {N 仓} 或 {X 元} 表达标准化为 "N 仓 / X 元" 双值。
+
+    liubo 2026-10-17 反馈「我都想要」 — 1 万 = 1 仓，要么都显示，不能只一个。
+    "你不要只显示金额，也不要只显示仓位。都想"。
+
+    公式：1 仓 = 1 万 CNY = 10,000 元（spec 022/097 整数仓位模型）。
+
+    规则：
+    - "—" / 空 → 保持
+    - DCA 3-value 格式（"10 元 / 每天 / 累计 1800"）→ 保持（频率+目标，不在 仓 范畴）
+    - "已买 ¥X" → 保持（DCA 兜底，¥X 是当前累计进度）
+    - "净 +N 元" cost 校准（liubo 标的记账差）→ 保持（不是仓位概念）
+    - "建仓 N 仓 / X 元"（已含两者）→ 标准化为 "N 仓 / X 元"（去 "建仓" + 换 CNY/¥ 为 元）
+    - "±N 仓"（纯 仓）→ "N 仓 / X 元"（方向走 action 列，amount 不带 ±）
+    - "X 元 / CNY / 万 / ¥X"（纯 元）→ "N 仓 / X 元"（前面补 仓数）
+    """
+    if not amount or amount == "—":
+        return amount
+    # DCA 3-value 格式（含 " / 累计 "） → 不动
+    if " / 累计 " in amount:
+        return amount
+    # 已买 ¥X（DCA 兜底）→ 不动
+    if "已买" in amount:
+        return amount
+    # 净 +N 元 / 净 -N 元 (cost 校准，不是仓位) → 不动
+    if "净" in amount and "仓" not in amount and ("元" in amount or "CNY" in amount or "¥" in amount):
+        return amount
+    # 已含两者（"建仓 1 仓 / 10000 CNY" / "0.5 仓 / 5000 元"）→ 标准化
+    if "仓" in amount and re.search(r"\d", amount) and (
+        re.search(r"\d[\d,.]*\s*(元|CNY|¥|￥|万)", amount) is not None
+    ):
+        # 标准化：去 "建仓" 词 + CNY 换成 "元"，数字加千分位逗号
+        cleaned = re.sub(r"建仓\s*", "", amount)
+        # 替换 "N\s*CNY" → "N,NNN 元"（千分位）
+        def _add_thousands(m: re.Match[str]) -> str:
+            n = float(m.group(1))
+            if n == int(n):
+                return f"{int(n):,} 元"
+            return f"{n:,} 元"
+        cleaned = re.sub(r"(\d+(?:\.\d+)?)\s*CNY", _add_thousands, cleaned)
+        # 也对纯 "N 元" 加千分位（如果 N >= 1000）
+        def _add_thousands_yuan(m: re.Match[str]) -> str:
+            n = float(m.group(1))
+            if n >= 1000 and n == int(n):
+                return f"{int(n):,} 元"
+            return m.group(0)
+        cleaned = re.sub(r"(\d+)\s*元", _add_thousands_yuan, cleaned)
+        # 压缩多余空格但保留单空格
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned
+    # 纯 ±N 仓（"+1 仓" / "-1 仓" / "0.5 仓"）
+    仓_match = re.match(r"^([+\-−])?\s*(\d+(?:\.\d+)?)\s*仓\s*$", amount)
+    if 仓_match:
+        n = float(仓_match.group(2))
+        元 = n * 10000
+        if 元 == int(元):
+            元_str = f"{int(元):,}"
+        else:
+            元_str = f"{元:,.2f}"
+        return f"{n:g} 仓 / {元_str} 元"
+    # 纯 X 元 / CNY / 万（数字在前）
+    元_match = re.search(r"(\d+(?:\.\d+)?)\s*(元|万|CNY)", amount)
+    if 元_match:
+        n = float(元_match.group(1))
+        unit = 元_match.group(2)
+        if unit == "万":
+            n = n * 10000
+        仓 = n / 10000
+        if 仓 == int(仓):
+            仓_str = f"{int(仓)} 仓"
+        else:
+            仓_str = f"{仓:g} 仓"
+        # 标准化原 amount：CNY → 元，千分位逗号对齐
+        # 把 "10000" / "10,000" 规范成 "10,000"（带千分位）
+        normalized_num = f"{int(n):,}" if n == int(n) else f"{n:,}"
+        if unit == "万":
+            normalized = f"{normalized_num} 元"  # 万 → 转成元
+        else:
+            normalized = f"{normalized_num} 元"
+        return f"{仓_str} / {normalized}"
+    # 纯 ¥X / ￥X（数字在后）
+    符号_match = re.search(r"[¥￥]\s*(\d+(?:\.\d+)?)", amount)
+    if 符号_match:
+        n = float(符号_match.group(1))
+        仓 = n / 10000
+        if 仓 == int(仓):
+            仓_str = f"{int(仓)} 仓"
+        else:
+            仓_str = f"{仓:g} 仓"
+        return f"{仓_str} / ¥{int(n) if n == int(n) else n:g}"
+    # 其他（含 "成本 20 收回现金" / "净 +N 元" / "净+N" 等特殊表达）→ 保持
+    return amount
+
+
 def _resolve_amount(line: str) -> str:
-    """从 `- ` 行提取金额显示。
+    """从 `- ` 行提取金额显示，最后过一道 _format_amount_with_units 标准化为 "N 仓 / X 元"。
 
     优先级：
     1. 括号里的金额描述（"已买 ¥60" / "+40" / "10000 元，转换 8379 份" / "成本 20 收回现金"）
@@ -545,7 +826,7 @@ def _resolve_amount(line: str) -> str:
             continue
         cleaned = seg.strip()
         # 截断 30 字符（飞书 table 列宽有限）
-        return cleaned[:30]
+        return _format_amount_with_units(cleaned[:30])
 
     # 优先级 2：行内 "建仓 N 仓 = X CNY" 格式
     build_match = re.search(
@@ -553,21 +834,23 @@ def _resolve_amount(line: str) -> str:
         line,
     )
     if build_match and build_match.group(2):
-        return f"建仓 {build_match.group(1)} 仓 / {build_match.group(2).strip()}"
+        return _format_amount_with_units(
+            f"建仓 {build_match.group(1)} 仓 / {build_match.group(2).strip()}"
+        )
 
     # 优先级 3：行内 ±N 仓（加减仓）
     posn_match = re.search(r"([+\-−])\s*(\d+)\s*仓", line)
     if posn_match:
         sign = "+" if posn_match.group(1) == "+" else "-"
-        return f"{sign}{posn_match.group(2)} 仓"
+        return _format_amount_with_units(f"{sign}{posn_match.group(2)} 仓")
 
     # 优先级 4：行内 ¥/CNY/元 数字
     money_match = re.search(r"[¥￥]\s*\d[\d,]*(?:\.\d+)?(?:\s*(?:元|万|CNY))?", line)
     if money_match:
-        return money_match.group(0).strip()
+        return _format_amount_with_units(money_match.group(0).strip())
     cny_match = re.search(r"\d[\d,]*(?:\.\d+)?\s*CNY", line)
     if cny_match:
-        return cny_match.group(0).strip()
+        return _format_amount_with_units(cny_match.group(0).strip())
 
     return "—"
 
@@ -722,7 +1005,9 @@ def _parse_conversion_rows(stripped: str) -> list[RebalanceRow]:
         # 优先取 "10000 元" 这种金额描述
         money_match = re.search(r"\d[\d,]*(?:\.\d+)?\s*(?:元|万|CNY|¥|￥)", seg)
         if money_match:
-            amount = money_match.group(0).strip()
+            # 转换行也要走标准化 — liubo 2026-10-17 反馈「我都想要」：
+            # 转出 10000 元 → "1 仓 / 10000 元"（方向走 action 列 "转出"）
+            amount = _format_amount_with_units(money_match.group(0).strip())
 
     return [
         RebalanceRow(date="", fund=from_name, action="转出", amount=amount),
@@ -2015,9 +2300,14 @@ def build_portfolio_card(
       - 删除 Section 2（大类资产策略）— 持仓表的 target/delta 列已包含超类信息
       - Section 3 改名 "估值与操作" — combined 模式（A 股 + 港股 + 美股）
       - 持仓表 target/delta 列改用整数仓位模型
+    第二十三轮（liubo 2026-10-17 拍板）：
+      - 删 估值与操作（spec 098 combined 模式那 4 张表）— 用户已经不需要
+      - 新 Section 2: per-fund 持仓成本 + 估值 + 调仓建议（52 行）
+      - Section 1.5（调仓记录）→ 升为 Section 3
+      - 任何 path（DB 有/无 holdings）都加 Section 2（per-fund 是用户最关心的视角）
 
-    元素总数（无估值）：1 note + 1 div + 3 hr + 1 chart + 1 table = 7 + footer。
-    元素总数（有估值）：2 note + 1 div + 4 hr + 1 chart + 3 table = 11 + footer。
+    元素总数（DB 空 / fallback）：2 note + 2 div + 5 hr + 2 table = 11 + footer
+    元素总数（DB 有 holdings）：3 note + 2 div + 5 hr + 1 chart + 2 table = 13 + footer
     """
     actual_title = title or "实盘周报"
     holdings = journal.compute_holdings()
@@ -2047,19 +2337,17 @@ def build_portfolio_card(
         # 数据来源：cost_basis.py + breakdown.py（不依赖 akshare 拉市值）
         elements = _build_cost_basis_section()
 
-    # Section 1.5: 调仓纪录（liubo 2026-10-17）— 在 Section 1 和 Section 2 之间
+    # Section 2: per-fund 持仓成本 + 估值 + 调仓建议（liubo 2026-10-17 拍板 — 替换 估值与操作）
+    # 数据：COST_BASIS_BY_CODE（52 只成本）+ weekly_rebalance_plan() 的 RebalanceAction
+    elements.extend(_build_per_fund_section())
+
+    # Section 3: 调仓纪录（liubo 2026-10-17 拍板保留）— 在 Section 2 之后
     # 数据来源：git log，按 _is_rebalance_subject 过滤掉调参/规则/卡片/docs
     # limit=20 是因为一个 commit 可能拆出多行（如 8597945 14 只基金 / 9e70495 3 笔转换）
     rebalance_section = _build_rebalance_records_section(limit=20)
     if rebalance_section:
         elements.append({"tag": "hr"})
         elements.extend(rebalance_section)
-
-    # Section 3: 大类资产估值（spec 098 第二十一轮新增）
-    valuation_section = _build_valuation_section(journal)
-    if valuation_section:
-        elements.append({"tag": "hr"})
-        elements.extend(valuation_section)
 
     card: dict[str, object] = {
         "header": {
