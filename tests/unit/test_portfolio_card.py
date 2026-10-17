@@ -685,16 +685,16 @@ class TestRebalanceRecordsSection:
                 f"指数代码 399673 被当成基金: {fund!r}"
             )
 
-    def test_dca_action_with_schedule_for_dollar_cost_funds(
+    def test_dca_action_with_total_and_cycle_for_dollar_cost_funds(
         self, journal: PortfolioJournal,
     ) -> None:
-        """DCA (定投) 行的 action 应是 "定投"（不是 "校准"），金额列附定投频率。
+        """DCA (定投) 行的 action 是 "定投"，金额列只显示「总金额 / 周期」。
 
-        liubo 2026-10-17 反馈 — 南方纳100 / 摩根纳指100 / 万家纳指100 是 DCA 定投，
-        不是成本校准。amount 列写清楚 "已买 ¥X / ¥10/天"。
+        liubo 2026-10-17 反馈 — 金额列只写「总金额 / 周期」（如 "¥1800 / 每天"），
+        不写「已买 ¥X」（已经买入了多少他不关心）。
 
         三个基金 (016452 / 019172 / 019441) 在 _DCA_SCHEDULE_BY_CODE 里都有
-        "¥10/天" schedule。
+        "¥<total> / <cycle>" schedule。
         """
         from global_allocation.portfolio.card import _DCA_SCHEDULE_BY_CODE
 
@@ -713,17 +713,29 @@ class TestRebalanceRecordsSection:
             assert row["action"] == "定投", (
                 f"DCA 行 action 应该是 '定投'，实际 '{row['action']}'（{row['fund']}）"
             )
-            assert "已买" in row["amount"], (
-                f"DCA 行 amount 应该有 '已买'，实际 '{row['amount']}'（{row['fund']}）"
+            # 不应出现 "已买"（已买入多少他不关心）
+            assert "已买" not in row["amount"], (
+                f"DCA 行 amount 不应有 '已买'（liubo 2026-10-17 反馈不关心已买多少），"
+                f"实际 '{row['amount']}'（{row['fund']}）"
             )
-            # 任意一个 schedule 必须出现
-            assert any(
-                schedule in row["amount"]
-                for schedule in _DCA_SCHEDULE_BY_CODE.values()
-            ), (
-                f"DCA 行 amount 应该有 schedule 信息（如 '¥10/天'），实际 "
-                f"'{row['amount']}'（{row['fund']}）"
-            )
+            # 金额应该直接等于 _DCA_SCHEDULE_BY_CODE 里对应 fund 的 schedule
+            fund_to_schedule = {
+                "南方纳100": _DCA_SCHEDULE_BY_CODE["016452"],
+                "摩根纳斯达克100指数(QDII)人民币A": _DCA_SCHEDULE_BY_CODE["019172"],
+                "万家纳斯达克100指数发起式(QDII)A": _DCA_SCHEDULE_BY_CODE["019441"],
+            }
+            for prefix, schedule in fund_to_schedule.items():
+                if prefix in row["fund"]:
+                    assert row["amount"] == schedule, (
+                        f"DCA 行 amount 应该是 schedule '{schedule}'，"
+                        f"实际 '{row['amount']}'（{row['fund']}）"
+                    )
+                    # schedule 应该有「总金额 / 周期」格式
+                    assert "/" in schedule, (
+                        f"_DCA_SCHEDULE_BY_CODE[{prefix}] 应该有 '/' 分隔，"
+                        f"实际 '{schedule}'"
+                    )
+                    break
 
     def test_pure_cost_calibration_rows_filtered(
         self, journal: PortfolioJournal,
@@ -864,6 +876,7 @@ class TestRebalanceRecordsSection:
         校准过滤）的核心逻辑。
         """
         from global_allocation.portfolio.card import (
+            _DCA_SCHEDULE_BY_CODE,
             _is_conversion_line,
             _parse_conversion_rows,
             _parse_rebalance_line,
@@ -877,8 +890,14 @@ class TestRebalanceRecordsSection:
         assert parsed.action == "定投", (
             f"DCA 行 action 应该是 '定投'，实际 '{parsed.action}'"
         )
-        assert "已买" in parsed.amount, (
-            f"DCA 行 amount 应有 '已买'，实际 '{parsed.amount}'"
+        # liubo 2026-10-17 反馈：金额列只写「总金额 / 周期」，
+        # 不写「已买 ¥X」（已经买入了多少他不关心）
+        assert "已买" not in parsed.amount, (
+            f"DCA 行 amount 不应有 '已买'，实际 '{parsed.amount}'"
+        )
+        assert parsed.amount == _DCA_SCHEDULE_BY_CODE["016452"], (
+            f"DCA 行 amount 应该是 schedule '¥1800 / 每天'，"
+            f"实际 '{parsed.amount}'"
         )
 
         # === 2. 转换行 ===

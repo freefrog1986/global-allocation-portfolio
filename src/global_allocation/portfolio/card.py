@@ -46,14 +46,16 @@ _CROSS_PORTFOLIO_EXCLUDE_CODES: frozenset[str] = frozenset({
     "025682",   # 红利策略基金
 })
 
-# 定投计划 (DCA) — 显示在调仓纪录的"金额"列（liubo 2026-10-17 反馈"把这写清楚就好"）
-# 数据源：cost_basis.py 注释里的 DCA 设定。飞书表格列宽有限，只放"定投 ¥X/周"短描述。
+# 定投计划 (DCA) — 显示在调仓纪录的"金额"列
+# liubo 2026-10-17 反馈 — 金额列写「总金额 / 周期」（如 "¥1800 / 每天"），
+# 不写「已买 ¥X」（已经买入了多少他不关心）。
+# 数据源：cost_basis.py 注释里的 DCA 设定。
 _DCA_SCHEDULE_BY_CODE: dict[str, str] = {
-    "016452": "¥10/天",        # 南方纳100（成本基础注释：DCA ¥10/天 → 1800）
-    "019172": "¥10/天",        # 摩根纳斯达克100指数(QDII)人民币A（DCA ¥10/天 → 2000 CNY）
-    "019441": "¥10/天",        # 万家纳斯达克100指数发起式(QDII)A（DCA ¥10/天 → 2000 CNY）
-    "000614": "¥250-1000/周",  # 华安德国(DAX)联接(QDII)A（支付宝慧定投）
-    "000216": "¥500/周",       # 华安黄金ETF联接A（每周一 +500，docs/099 备注）
+    "016452": "¥1800 / 每天",              # 南方纳100（DCA ¥10/天 → 累计 1800）
+    "019172": "¥2000 / 每天",              # 摩根纳斯达克100(QDII)人民币A（DCA ¥10/天 → 累计 2000）
+    "019441": "¥2000 / 每天",              # 万家纳斯达克100发起式(QDII)A（DCA ¥10/天 → 累计 2000）
+    "000614": "¥10000 / 每周（均值 ¥500）",  # 华安德国(DAX)联接(QDII)A（慧定投 250-1000/周）
+    "000216": "¥500 / 每周一",              # 华安黄金ETF联接A（每周一 +500）
 }
 from global_allocation.portfolio.journal import PortfolioJournal
 from global_allocation.portfolio.models import (
@@ -642,13 +644,15 @@ def _parse_rebalance_line(line: str, subject: str) -> RebalanceRow | None:
             return _parse_conversion_rows(stripped)
         action = "定投"
         fund = _resolve_fund_display(stripped)
-        amount = _resolve_amount(stripped)
-        # liubo 2026-10-17 反馈 "把这写清楚就好" — 加上定投频率信息
+        # liubo 2026-10-17 反馈 — 金额列只写「总金额 / 周期」，
+        # 不写「已买 ¥X」（已经买入了多少他不关心）。
+        # 数据从 _DCA_SCHEDULE_BY_CODE 拿（cost_basis.py 注释里的 DCA 设定）。
         line_codes = re.findall(r"(?<!\d)\d{6}", stripped)
-        if line_codes:
-            dca_schedule = _DCA_SCHEDULE_BY_CODE.get(line_codes[0])
-            if dca_schedule and amount.startswith("已买"):
-                amount = f"{amount} / {dca_schedule}"
+        if line_codes and line_codes[0] in _DCA_SCHEDULE_BY_CODE:
+            amount = _DCA_SCHEDULE_BY_CODE[line_codes[0]]
+        else:
+            # 兜底：基金不在 DCA mapping → 用 commit body 的金额（避免信息丢失）
+            amount = _resolve_amount(stripped)
         return RebalanceRow(date="", fund=fund, action=action, amount=amount)
 
     # 转换也拆 2 行（DCA 的转换行也走这里）
