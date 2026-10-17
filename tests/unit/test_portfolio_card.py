@@ -159,8 +159,10 @@ class TestBuildPortfolioCard:
         合计：1 note + 1 div + 2 hr + 1 chart + 1 table = 6 个元素 + footer
         + 第二十二轮（liubo 2026-10-17）调仓纪录 section（表格版）：
         + 1 note + 1 hr（跨 section 分隔）+ 1 hr（section 内）+ 1 table = +4 个元素
+        + 第二十五轮（liubo 2026-10-17 第二轮反馈）定投纪录 section（跟调仓分开 2 张表）：
+        + 1 note + 1 hr（跨 section 分隔）+ 1 hr（section 内）+ 1 table = +4 个元素
 
-        无估值总计：2 note + 1 div + 4 hr + 1 chart + 2 table = 10 + footer
+        无估值总计：4 note + 1 div + 7 hr + 1 chart + 4 table = 17 + footer
         """
         _seed(journal)
         card = build_portfolio_card(journal, title="我的实盘")
@@ -173,12 +175,14 @@ class TestBuildPortfolioCard:
         notes = [e for e in card["elements"] if e.get("tag") == "note"]
         hrs = [e for e in card["elements"] if e.get("tag") == "hr"]
         assert len(charts) == 1
-        # 第二十二轮：2 张 table（持仓表 + 调仓纪录表）
-        assert len(tables) == 2
-        # 第二十二轮：调仓纪录改 table 后少 1 个 div（之前是 div，现在是 table）
-        assert len(divs) == 1
-        assert len(notes) == 2
-        assert len(hrs) == 4
+        # 第二十五轮：4 张 table（持仓聚合表 + per-fund + 调仓记录 + 定投记录）
+        assert len(tables) == 4
+        # 第二十五轮：4 个 section 都有 note（持仓 + per-fund + 调仓记录 + 定投记录）
+        assert len(notes) == 4
+        # 第二十五轮：Section 1 summary + Section 2 summary = 2 个 div（Section 3 + 4 是 table）
+        assert len(divs) == 2
+        # 第二十五轮：7 个 hr（Section 1 内 2 + Section 2 入口 1 + Section 3 入口 1 + Section 3 内 1 + Section 4 入口 1 + Section 4 内 1）
+        assert len(hrs) == 7
 
     def test_summary_includes_total_and_return(self, journal: PortfolioJournal) -> None:
         _seed(journal)
@@ -573,19 +577,50 @@ class TestRebalanceRecordsSection:
     - 多基金 commit body 的每条 `- ` 行 → 单独一行（不再把多只基金挤一起）
     - 金额从 commit body 提取（建仓 N 仓 / ¥X / N 元 / +N 等）
     - 不再有 "—" 占位符：fallback 用 "基金 <code>"
+    - 第二十五轮（liubo 2026-10-17 第二轮反馈）：调仓和定投分开 2 张表
+      - 本 class 只看「调仓纪录」表（action != "定投"）
+      - 「定投纪录」表在 TestDcaRecordsSection
     """
 
     def _get_rebalance_table(
         self, journal: PortfolioJournal,
     ) -> dict[str, object]:
+        """调仓纪录表：4 列 (date/fund/action/amount)，行 action != "定投"。
+
+        第二十五轮：DCA 拆到独立表后，调仓表是第一个含 action/amount 的表
+        （per-fund 表也有 action 但列名不同 — fund/cost/valuation/advice）。
+        """
         _seed(journal)
         card = build_portfolio_card(journal)
-        tables = [e for e in card["elements"] if e.get("tag") == "table"]
-        for t in tables:
+        for t in card["elements"]:
+            if t.get("tag") != "table":
+                continue
             cols = [c["name"] for c in t.get("columns", [])]
-            if "action" in cols and "amount" in cols:
+            if "date" in cols and "action" in cols and "amount" in cols:
                 return t
         raise AssertionError("找不到调仓纪录 table")
+
+    def _get_dca_table(
+        self, journal: PortfolioJournal,
+    ) -> dict[str, object]:
+        """定投纪录表：4 列 (date/fund/action/amount)，行 action == "定投"。
+
+        第二十五轮：DCA 拆出来后，调仓表 + 定投表 都是 4 列 (date/fund/action/amount)。
+        区分：调仓表是第一个，DCA 表是第二个（按元素顺序）。
+        """
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        candidates = []
+        for t in card["elements"]:
+            if t.get("tag") != "table":
+                continue
+            cols = [c["name"] for c in t.get("columns", [])]
+            if "date" in cols and "action" in cols and "amount" in cols:
+                candidates.append(t)
+        # 第一个 = 调仓纪录；第二个 = 定投纪录
+        if len(candidates) >= 2:
+            return candidates[1]
+        raise AssertionError("找不到定投纪录 table（DCA 表可能为空）")
 
     def test_fund_column_uses_chinese_name_not_code(
         self, journal: PortfolioJournal,
@@ -697,10 +732,12 @@ class TestRebalanceRecordsSection:
 
         格式：「10 元 / 每天 / 累计 1800」。
         不写「已买 ¥X」（已经买入了多少他不关心）。
+
+        第二十五轮（liubo 2026-10-17 第二轮反馈）：DCA 拆到独立表，本测试查 _get_dca_table。
         """
         from global_allocation.portfolio.card import _DCA_SCHEDULE_BY_CODE
 
-        table = self._get_rebalance_table(journal)
+        table = self._get_dca_table(journal)
         # 按 fund 列找 DCA 行
         dca_rows = [
             r for r in table["rows"]
@@ -997,6 +1034,86 @@ class TestRebalanceRecordsSection:
         )
 
 
+class TestDcaRecordsSection:
+    """第二十五轮（liubo 2026-10-17 第二轮反馈）— 定投纪录 section 独立成 1 张表。
+
+    「调仓是调仓，定投是定投」 — 调仓（DCA 之外的动作）和定投分开 2 张表展示。
+
+    数据流：
+    - 复用 _collect_rebalance_rows() 抓的同一份 git log（避免 2 次 git 调用）
+    - 按 action 字段分流：action == "定投" → 本表，其他 → 调仓记录表
+    - 4 列 (date / fund / action / amount) 跟调仓记录表 schema 一致
+    - amount 列 = "X 元 / Y / 累计 Z" 3 段（per / cycle / total）
+    """
+
+    def test_dca_table_exists_and_separate_from_rebalance(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """DCA 表存在且与调仓表分开（2 张独立的 4 列表）。"""
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        candidates = []
+        for t in card["elements"]:
+            if t.get("tag") != "table":
+                continue
+            cols = [c["name"] for c in t.get("columns", [])]
+            if "date" in cols and "action" in cols and "amount" in cols:
+                candidates.append(t)
+        # 应该有 2 张：(1) 调仓记录 + (2) 定投记录
+        assert len(candidates) >= 2, (
+            f"调仓 + 定投 应该分 2 张表，实际 {len(candidates)} 张"
+        )
+        # 2 张表的列名相同（schema 一致）
+        for t in candidates[:2]:
+            cols = [c["name"] for c in t["columns"]]
+            assert cols == ["date", "fund", "action", "amount"], (
+                f"表列名应是 [date, fund, action, amount]，实际 {cols}"
+            )
+
+    def test_dca_table_only_has_dca_action_rows(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """DCA 表只显示 action == "定投" 的行，不混入调仓行。"""
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        # 取第二张 4 列表（DCA 表）
+        candidates = [
+            t for t in card["elements"]
+            if t.get("tag") == "table"
+            and "date" in [c["name"] for c in t.get("columns", [])]
+            and "action" in [c["name"] for c in t.get("columns", [])]
+            and "amount" in [c["name"] for c in t.get("columns", [])]
+        ]
+        if len(candidates) < 2:
+            pytest.skip("DCA 表为空")
+        dca_table = candidates[1]
+        for row in dca_table["rows"]:
+            assert row["action"] == "定投", (
+                f"DCA 表不应有 action != '定投' 的行："
+                f"fund={row['fund']!r} action={row['action']!r}"
+            )
+
+    def test_rebalance_table_excludes_dca_rows(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """调仓记录表不显示 action == "定投" 的行（已拆到 DCA 表）。"""
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        candidates = [
+            t for t in card["elements"]
+            if t.get("tag") == "table"
+            and "date" in [c["name"] for c in t.get("columns", [])]
+            and "action" in [c["name"] for c in t.get("columns", [])]
+            and "amount" in [c["name"] for c in t.get("columns", [])]
+        ]
+        rebalance_table = candidates[0]  # 第一张 = 调仓记录
+        for row in rebalance_table["rows"]:
+            assert row["action"] != "定投", (
+                f"调仓记录表不应有 action == '定投' 的行（DCA 已拆出去）："
+                f"fund={row['fund']!r} amount={row['amount']!r}"
+            )
+
+
 class TestRemovedSections:
     """spec 096/097 移除的部分必须真的没了（第十九轮：Section 2 + Section 3 也都删了）。"""
 
@@ -1089,405 +1206,6 @@ class TestRemovedSections:
                     assert elem.get("content") != "大类资产策略"
 
 
-class TestValuationSection:
-    """Section 3: 大类资产估值（spec 098.4 combined 模式 — 飞书 ≤5 table 限制）。
-
-    spec 098 演进：
-    - 第二十一轮：新增 Section 3（A 股 4 指标 + 综合分 + per-fund 表）
-    - 第二十二轮：加综合分（4 票简单平均）
-    - 098.2：港股估值跟 A 股平行（多 1 region）
-    - 098.3：美股估值再起一个 region（3 个 region）
-    - 098.4（liubo 2026-09-20）：合并 3 region 表 — 1 张 combined 指标表（5 列）+ 1 张
-      combined per-fund 表（11 列），加上持仓 + 策略 = 4 张表，符合飞书 ≤5 table 限制。
-
-    渲染结构：
-    - note header "估值与操作"
-    - hr
-    - combined 指标表（5 列 × N 行，N = region 数 × (4 指标 + 1 综合)）
-      - 列：区域 / 指标 / 当前 / 评估 / 阈值
-      - 综合分行 region 列 = "—"
-    - 3 个 strategy_note div（按 region 顺序，region 完全空时跳过）
-    - hr + combined per-fund 表（11 列 × N 行，N = 所有 region 持仓数之和）
-      - 列：区域 / 基金 / 指数 / PE / PE分位 / 股息率 / ROE同比 / 评估 / 建议 / 当前仓位 / 加减仓建议
-
-    边界：
-    - 全部 region 完全空（DB 没任何估值）→ Section 整段不渲染（返回 []）
-    - 单个 region 完全空 → 该 region 行不出现在 combined 表（不渲染空行）
-    - 股债利差 / 美股股债利差用 signed format（+/-），其他指标用 unsigned format
-    """
-
-    def _get_combined_indicator_table(self, journal: PortfolioJournal) -> dict[str, object]:
-        """5 列 combined 估值表（region / indicator / value / verdict / threshold）。"""
-        _seed(journal)
-        card = build_portfolio_card(journal)
-        tables = [e for e in card["elements"] if e.get("tag") == "table"]
-        for t in tables:
-            col_names = [c["name"] for c in t["columns"]]
-            if col_names == ["region", "indicator", "value", "verdict", "threshold"]:
-                return t
-        raise AssertionError("combined 估值表未找到（5 列 region/indicator/value/verdict/threshold）")
-
-    def _get_combined_per_fund_table(self, journal: PortfolioJournal) -> dict[str, object] | None:
-        """11 列 combined per-fund 表。"""
-        _seed(journal)
-        card = build_portfolio_card(journal)
-        tables = [e for e in card["elements"] if e.get("tag") == "table"]
-        for t in tables:
-            col_names = [c["name"] for c in t["columns"]]
-            if col_names == [
-                "region", "fund", "index", "pe", "pe_pct", "dy", "roe_yoy",
-                "verdict", "advice", "position", "adjust",
-            ]:
-                return t
-        return None
-
-    def test_combined_section_header_present(self, journal: PortfolioJournal) -> None:
-        """combined section 标题"估值与操作"必须存在（spec 098.4 — 3 region 合并）。"""
-        _seed(journal)
-        _seed_valuation_today(journal)
-        card = build_portfolio_card(journal)
-        found = False
-        for e in card["elements"]:
-            if e.get("tag") == "note":
-                for elem in e.get("elements", []):
-                    if elem.get("content") == "估值与操作":
-                        found = True
-        assert found, "combined section 标题「估值与操作」必须存在"
-
-    def test_no_per_region_headers_when_combined(self, journal: PortfolioJournal) -> None:
-        """combined 模式下不渲染 per-region headers（"A 股估值与操作" 等都不应存在）。
-
-        旧 per-region 模式：每个 region 一个 header note
-        新 combined 模式：1 个统一 header "估值与操作"
-        """
-        _seed(journal)
-        _seed_valuation_today(journal)
-        _seed_hk_valuation_today(journal)
-        _seed_us_valuation_today(journal)
-        card = build_portfolio_card(journal)
-        for e in card["elements"]:
-            if e.get("tag") == "note":
-                for elem in e.get("elements", []):
-                    assert elem.get("content") != "A 股估值与操作"
-                    assert elem.get("content") != "港股估值与操作"
-                    assert elem.get("content") != "美股估值与操作"
-
-    def test_combined_section_absent_when_no_data(self, journal: PortfolioJournal) -> None:
-        """DB 完全空 → combined section 整段不渲染。
-
-        publish 时 CLI 已自动 update，正常情况不会到这里；但如果 publish 失败或
-        手动 build 时没拉数据，section 不渲染比显示空表格好。
-        """
-        _seed(journal)
-        # 不调用任何 _seed_valuation_today → DB 没今天的指标
-        card = build_portfolio_card(journal)
-        for e in card["elements"]:
-            if e.get("tag") == "note":
-                for elem in e.get("elements", []):
-                    assert elem.get("content") != "估值与操作"
-
-    def test_combined_section_skipped_when_all_regions_empty(self, journal: PortfolioJournal) -> None:
-        """3 region 都没数据 → _build_valuation_section 返回 []（空数组）。"""
-        from global_allocation.portfolio.card import _build_valuation_section
-
-        _seed(journal)
-        # 不塞任何 valuation indicator
-        elements = _build_valuation_section(journal)
-        assert elements == []
-
-    def test_combined_indicator_table_5_columns(self, journal: PortfolioJournal) -> None:
-        """combined 指标表 5 列：区域 / 指标 / 当前 / 评估 / 阈值。"""
-        _seed_valuation_today(journal)
-        spec = self._get_combined_indicator_table(journal)
-        col_names = [c["name"] for c in spec["columns"]]
-        assert col_names == ["region", "indicator", "value", "verdict", "threshold"]
-
-    def test_combined_indicator_table_15_rows_when_3_regions(
-        self, journal: PortfolioJournal
-    ) -> None:
-        """3 region 都有数据 → combined 指标表 15 行 = 4 指标 × 3 + 3 综合。"""
-        _seed_valuation_today(journal)
-        _seed_hk_valuation_today(journal)
-        _seed_us_valuation_today(journal)
-        spec = self._get_combined_indicator_table(journal)
-        assert len(spec["rows"]) == 15
-
-    def test_combined_indicator_table_partial_region(self, journal: PortfolioJournal) -> None:
-        """只有 A 股数据 → combined 指标表 5 行（4 指标 + 1 综合），不渲染空 region。"""
-        _seed_valuation_today(journal)
-        spec = self._get_combined_indicator_table(journal)
-        assert len(spec["rows"]) == 5
-        # 所有行的 region 列都该是 "A 股" 或 "—"（综合行）
-        for row in spec["rows"]:
-            assert row["region"] in {"A 股", "—"}
-
-    def test_combined_indicator_table_rows_in_region_order(
-        self, journal: PortfolioJournal
-    ) -> None:
-        """行按 region 顺序排列：A 股 → 港股 → 美股（同 region 内按 indicator 顺序）。
-
-        spec 098.4 — 跨 region 看估值，方便对比。
-        """
-        _seed_valuation_today(journal)
-        _seed_hk_valuation_today(journal)
-        _seed_us_valuation_today(journal)
-        spec = self._get_combined_indicator_table(journal)
-        # 取每个 region 的前 4 行（4 指标），验证 region 顺序
-        actual_regions = [
-            row["region"]
-            for row in spec["rows"]
-            if row["indicator"] != "综合分"
-        ]
-        expected_pattern = ["A 股"] * 4 + ["港股"] * 4 + ["美股"] * 4
-        assert actual_regions == expected_pattern
-
-    def test_combined_indicator_table_composite_row_uses_dash_region(
-        self, journal: PortfolioJournal
-    ) -> None:
-        """综合分行 region 列 = "—"（聚合行不属于单一 region）。"""
-        _seed_valuation_today(journal)
-        _seed_hk_valuation_today(journal)
-        _seed_us_valuation_today(journal)
-        spec = self._get_combined_indicator_table(journal)
-        composite_rows = [r for r in spec["rows"] if r["indicator"] == "综合分"]
-        assert len(composite_rows) == 3
-        for r in composite_rows:
-            assert r["region"] == "—"
-
-    def test_combined_indicator_table_per_region_composite_format(
-        self, journal: PortfolioJournal
-    ) -> None:
-        """综合分行的 value 列保留 per-region 格式 "[股债:X PE:X ...]"。
-
-        spec 098.4 — 综合分行是 region 内部聚合，格式不动，只把 region 列改成 "—"。
-        """
-        _seed_valuation_today(journal)
-        spec = self._get_combined_indicator_table(journal)
-        composite_row = next(r for r in spec["rows"] if r["indicator"] == "综合分")
-        # A 股综合分行（之前 spec 098 测试的格式）保持不变
-        assert composite_row["value"] == "[股债:1 PE:2 巴菲特:3 股息:3]"
-        assert composite_row["verdict"] == "2.3 低估"
-
-    def test_combined_indicator_table_erp_signed_format(
-        self, journal: PortfolioJournal
-    ) -> None:
-        """股债利差 / 美股股债利差 用 signed format（+/-），其他指标 unsigned。
-
-        spec 098.4 — 各 region 的格式化规则不变，只在前面加 region 列。
-        """
-        _seed_valuation_today(journal)  # A 股 ERP=5.2% → +5.20%
-        spec = self._get_combined_indicator_table(journal)
-        erp_row = next(
-            r for r in spec["rows"]
-            if r["indicator"] == "股债利差" and r["region"] == "A 股"
-        )
-        assert erp_row["value"] == "+5.20%"
-
-    def test_combined_per_fund_table_11_columns(self, journal: PortfolioJournal) -> None:
-        """combined per-fund 表 11 列：区域 / 基金 / 指数 / PE / PE分位 / 股息率 / ROE同比
-        / 评估 / 建议 / 当前仓位 / 加减仓建议。"""
-        _seed_valuation_today(journal)
-        _seed_hk_valuation_today(journal)
-        _seed_us_valuation_today(journal)
-        _seed_a_share_funds(journal)
-        _seed_fund_valuations(journal)
-        _seed_us_funds(journal)
-        # 美股基金缺估值时也建 NDX/SP 的 fallback 估值
-        # 第十八轮：017730/016664/006373 已砍
-        today = date.today()
-        for code in ("018966", "539001", "016452", "017641",
-                      "519981"):
-            journal.db.upsert_fund_valuation(
-                FundValuation(
-                    record_date=today,
-                    fund_code=code,
-                    index_code="INX",
-                    pe_ttm=Decimal("30.0"),
-                    pe_percentile=Decimal("0.6"),
-                    dividend_yield=Decimal("0.011"),
-                    source="test",
-                )
-            )
-
-        spec = self._get_combined_per_fund_table(journal)
-        assert spec is not None
-        col_names = [c["name"] for c in spec["columns"]]
-        assert col_names == [
-            "region", "fund", "index", "pe", "pe_pct", "dy", "roe_yoy",
-            "verdict", "advice", "position", "adjust",
-        ]
-
-    def test_combined_per_fund_table_15_rows_when_3_regions(
-        self, journal: PortfolioJournal
-    ) -> None:
-        """3 region 都有持仓 → combined per-fund 表行数 = fixture 实际基金数。
-
-        第十八轮：港股全砍后 fixture = 3 A + 5 美股 = 8 行。
-        第二十二轮（2026-09-29）：013127 转回大类资产 HK_EQUITY，per-fund 表多 1 行：
-        3 A 股 + 1 港股 (013127) + 5 美股 = 9 行。
-        """
-        _seed_a_share_funds(journal)
-        _seed_fund_valuations(journal)
-        _seed_hk_funds(journal)  # seed 3 只港股基金，但 SUBCLASS_BY_CODE 只认 013127
-        _seed_hk_fund_valuations(journal)
-        _seed_us_funds(journal)
-        # 美股 per-fund 估值（共用 INX 兜底数据；2026-09-29 卖 019524 后 kept 5 只大类资产）
-        today = date.today()
-        for code in ("018966", "539001", "016452", "017641",
-                      "519981", "017730", "016664", "006373"):
-            journal.db.upsert_fund_valuation(
-                FundValuation(
-                    record_date=today,
-                    fund_code=code,
-                    index_code="INX",
-                    pe_ttm=Decimal("30.0"),
-                    pe_percentile=Decimal("0.6"),
-                    dividend_yield=Decimal("0.011"),
-                    source="test",
-                )
-            )
-
-        spec = self._get_combined_per_fund_table(journal)
-        assert spec is not None
-        # 3 A 股 + 1 港股 (013127) + 5 美股(2026-09-29 卖 019524；017730/016664/006373 砍了) = 9 行
-        assert len(spec["rows"]) == 9
-
-    def test_combined_per_fund_table_region_prefix(self, journal: PortfolioJournal) -> None:
-        """per-fund 表的每行 region 列都填对应 region label（A 股 / 港股 / 美股）。
-
-        spec 098.4 — 跨 region 看，方便对比。
-        第十八轮：fixture 是 A 股 + 美股（港股全砍），3 + 6 = 9 行。
-        """
-        _seed_a_share_funds(journal)
-        _seed_fund_valuations(journal)
-        _seed_us_funds(journal)
-        for code in ("018966", "539001", "016452", "017641", "519981"):
-            journal.db.upsert_fund_valuation(
-                FundValuation(
-                    record_date=date.today(),
-                    fund_code=code,
-                    index_code="INX",
-                    pe_ttm=Decimal("30.0"),
-                    pe_percentile=Decimal("0.6"),
-                    dividend_yield=Decimal("0.011"),
-                    source="test",
-                )
-            )
-        spec = self._get_combined_per_fund_table(journal)
-        assert spec is not None
-        # 3 A 股 + 0 港股 + 5 美股(2026-09-29 卖 019524) = 8 行
-        assert len(spec["rows"]) == 8
-        for row in spec["rows"][:3]:
-            assert row["region"] == "A 股"
-        for row in spec["rows"][3:8]:
-            assert row["region"] == "美股"
-
-    def test_combined_per_fund_table_skipped_when_no_holdings(
-        self, journal: PortfolioJournal
-    ) -> None:
-        """没有任何持仓 → combined per-fund 表不渲染（避免空表）。
-
-        跟 per-region 行为一致：_build_fund_valuation_section 没持仓就返回 []。
-        """
-        _seed(journal)
-        # 不调 _seed_a_share_funds / _seed_hk_funds / _seed_us_funds → DB 没基金
-        spec = self._get_combined_per_fund_table(journal)
-        assert spec is None
-
-    def test_combined_section_strategy_notes_one_per_region_with_data(
-        self, journal: PortfolioJournal
-    ) -> None:
-        """3 个 region 都有持仓 + 估值 → 3 个 strategy_note div（占比 + 估值判断）。
-
-        第十八轮：港股全砍后，HK 没基金 → HK strategy_note 不会渲染。
-        期望改：2 个 strategy_note div（A 股 + 美股）— 测试注释里说明这个变化。
-        """
-        _seed_a_share_funds(journal)
-        _seed_fund_valuations(journal)
-        _seed_us_funds(journal)
-        today = date.today()
-        for code in ("018966", "539001", "016452", "017641",
-                      "519981"):  # 第十八轮：3 只 QDII 主题砍了；2026-09-29 卖 019524
-            journal.db.upsert_fund_valuation(
-                FundValuation(
-                    record_date=today,
-                    fund_code=code,
-                    index_code="INX",
-                    pe_ttm=Decimal("30.0"),
-                    pe_percentile=Decimal("0.6"),
-                    dividend_yield=Decimal("0.011"),
-                    source="test",
-                )
-            )
-        _seed_valuation_today(journal)
-        _seed_us_valuation_today(journal)
-
-        card = build_portfolio_card(journal)
-        strategy_divs = [
-            e for e in card["elements"]
-            if e.get("tag") == "div" and "占比" in e["text"]["content"]
-        ]
-        # 第十八轮：2 个 strategy div（A 股 + 美股）— 港股全砍后无 strategy_note
-        assert len(strategy_divs) == 2
-        region_texts = [d["text"]["content"] for d in strategy_divs]
-        assert any("A 股占比" in t for t in region_texts)
-        assert any("美股占比" in t for t in region_texts)
-
-    def test_total_table_count_within_feishu_limit(self, journal: PortfolioJournal) -> None:
-        """全数据场景下整张卡片 ≤5 table（飞书 ErrCode 11310 限制 — spec 098.4）。
-
-        4 张表 = 持仓聚合 + 调仓纪录 + combined 指标 + combined per-fund。
-        第二十二轮（liubo 2026-10-17 改表版）：加调仓纪录 table → 4 张表（飞书 ≤5 限制内）。
-        第十八轮：移除 017730/016664/006373（已砍） + 移除 HK seed（无 HK 基金）。
-        """
-        _seed_a_share_funds(journal)
-        _seed_fund_valuations(journal)
-        _seed_us_funds(journal)
-        today = date.today()
-        for code in ("018966", "539001", "016452", "017641",
-                      "519981"):  # 第十八轮：3 只 QDII 主题砍了；2026-09-29 卖 019524
-            journal.db.upsert_fund_valuation(
-                FundValuation(
-                    record_date=today,
-                    fund_code=code,
-                    index_code="INX",
-                    pe_ttm=Decimal("30.0"),
-                    pe_percentile=Decimal("0.6"),
-                    dividend_yield=Decimal("0.011"),
-                    source="test",
-                )
-            )
-        _seed_valuation_today(journal)
-        _seed_hk_valuation_today(journal)
-        _seed_us_valuation_today(journal)
-
-        card = build_portfolio_card(journal)
-        tables = [e for e in card["elements"] if e.get("tag") == "table"]
-        assert len(tables) == 4, f"期望 4 张表，实际 {len(tables)}（飞书 ≤5 上限）"
-
-    def test_hr_count_with_combined_section(self, journal: PortfolioJournal) -> None:
-        """combined section 渲染后整张卡片的 hr 数 = 7（baseline 4 + combined section 加 3）。
-
-        无估值时 4 hr（Section 1 内 2 + 跨调仓纪录 1 + 调仓纪录内 1）。
-        渲染 combined section 后多 3 hr：
-        - 跨 Section 2 分隔（1，build_portfolio_card 加）
-        - combined section note 后（1，_build_valuation_section 加）
-        - combined per-fund 表前（1，_build_valuation_section 加）
-        """
-        _seed(journal)
-        # 无估值：4 hr（Section 1 内 2 + 跨调仓纪录 1 + 调仓纪录内 1）
-        card_no_val = build_portfolio_card(journal)
-        hrs_no_val = sum(1 for e in card_no_val["elements"] if e.get("tag") == "hr")
-        assert hrs_no_val == 4
-
-        # 有估值：4 + 3 = 7 hr
-        _seed_valuation_today(journal)
-        _seed_a_share_funds(journal)
-        _seed_fund_valuations(journal)
-        card_with_val = build_portfolio_card(journal)
-        hrs_with_val = sum(1 for e in card_with_val["elements"] if e.get("tag") == "hr")
-        assert hrs_with_val == 7
-
 
 class TestOrdering:
     """元素顺序（spec 097 第二十一轮 — 1 个 section：持仓；无 Section 2 策略对比表）。
@@ -1504,26 +1222,35 @@ class TestOrdering:
             for e in card["elements"]
             if e.get("tag") in {"note", "div", "chart", "table"}
         ]
-        # 第二十二轮（liubo 2026-10-17）：增加调仓纪录 section（note + table）在 1 和 2 之间
+        # 第二十五轮（liubo 2026-10-17 第二轮反馈）：4 个 section — 调仓和定投分开 2 张表
+        # - Section 1（实盘持仓）：note + div + chart + table
+        # - Section 2（per-fund）：note + div + table
+        # - Section 3（调仓记录）：note + table
+        # - Section 4（定投记录）：note + table
         assert tags == [
             "note",  # Section 1 header "实盘持仓"
             "div",   # Section 1 summary
             "chart", # Section 1 柱状图
             "table", # Section 1 持仓表（5 列：含 target/delta，整数仓位模型）
-            "note",  # Section 1.5 header "调仓纪录"
-            "table", # Section 1.5 调仓纪录表（4 列：date/fund/action/amount）
+            "note",  # Section 2 header "持仓与调仓建议"
+            "div",   # Section 2 summary (基金数/总成本/本周操作)
+            "table", # Section 2 per-fund 表（4 列：fund/cost/valuation/advice）
+            "note",  # Section 3 header "调仓纪录"
+            "table", # Section 3 调仓纪录表（4 列：date/fund/action/amount）
+            "note",  # Section 4 header "定投纪录"
+            "table", # Section 4 定投纪录表（4 列：date/fund/action/amount，DCA 3 段金额）
         ]
 
     def test_hr_count_and_position(self, journal: PortfolioJournal) -> None:
-        """第二十二轮（liubo 2026-10-17）：4 个 hr（Section 1 内 2 + 跨调仓纪录 section 分隔 1 + 调仓纪录内 1）。
+        """第二十五轮（liubo 2026-10-17 第二轮反馈）：7 个 hr
+        (Section 1 内 2 + Section 2 入口 1 + Section 3 入口 1 + Section 3 内 1 + Section 4 入口 1 + Section 4 内 1)。
 
-        之前第二十一轮 2 个 hr（Section 1 柱状图前后），无 Section 2 跨 section 分隔。
-        新增调仓纪录 section 后多 2 个 hr：build_portfolio_card 加 1，调仓纪录 section 内 1。
+        调仓 + 定投 分开后 +1 入口 hr +1 内 hr = 7（之前 6）。
         """
         _seed(journal)
         card = build_portfolio_card(journal)
         hrs = [e for e in card["elements"] if e.get("tag") == "hr"]
-        assert len(hrs) == 4
+        assert len(hrs) == 7
 
     def test_first_element_is_section_header_note(self, journal: PortfolioJournal) -> None:
         """第一个元素是 note 标签（section header），内容是"实盘持仓"。
@@ -1552,6 +1279,124 @@ class TestOrdering:
             if e.get("tag") == "note":
                 for elem in e.get("elements", []):
                     assert elem.get("content") != "大类资产策略"
+
+
+# ─── Section 2: per-fund 持仓成本 + 估值 + 调仓建议（第二十三轮 — liubo 2026-10-17 拍板）───
+
+
+class TestPerFundSection:
+    """Section 2: per-fund 持仓成本 + 估值 + 调仓建议。
+
+    liubo 2026-10-17 拍板 — 替代 spec 098 combined 估值与操作 section。
+    4 列：基金 / 持仓成本(¥) / 估值 / 调仓建议
+    数据：COST_BASIS_BY_CODE（52 只）+ weekly_rebalance_plan() 的 RebalanceAction
+    """
+
+    def _get_per_fund_table(self, journal: PortfolioJournal) -> dict[str, object]:
+        """拿 per-fund 表（4 列：fund/cost/valuation/advice）。"""
+        card = build_portfolio_card(journal)
+        for el in card["elements"]:
+            if el.get("tag") != "table":
+                continue
+            col_names = [c["name"] for c in el.get("columns", [])]
+            if col_names == ["fund", "cost", "valuation", "advice"]:
+                return el
+        raise AssertionError("未找到 per-fund 表（4 列 fund/cost/valuation/advice）")
+
+    def test_section_header_present(self, journal: PortfolioJournal) -> None:
+        """Section 2 标题 '持仓与调仓建议' 必须存在。"""
+        card = build_portfolio_card(journal)
+        for e in card["elements"]:
+            if e.get("tag") == "note":
+                for elem in e.get("elements", []):
+                    if elem.get("content") == "持仓与调仓建议":
+                        return
+        raise AssertionError("Section 2 标题 '持仓与调仓建议' 未找到")
+
+    def test_table_has_52_rows(self, journal: PortfolioJournal) -> None:
+        """per-fund 表 52 行 = COST_BASIS_BY_CODE 里的所有基金（liubo 2026-10-17 拍板全列）。"""
+        from global_allocation.portfolio.cost_basis import COST_BASIS_BY_CODE
+        expected = len(COST_BASIS_BY_CODE)
+        table = self._get_per_fund_table(journal)
+        assert len(table["rows"]) == expected
+
+    def test_columns_are_4(self, journal: PortfolioJournal) -> None:
+        """per-fund 表 4 列：基金 / 持仓成本(¥) / 估值 / 调仓建议。"""
+        table = self._get_per_fund_table(journal)
+        col_names = [c["name"] for c in table["columns"]]
+        assert col_names == ["fund", "cost", "valuation", "advice"]
+
+    def test_row_keys_have_all_4_columns(self, journal: PortfolioJournal) -> None:
+        """每行 4 个 key 都在（飞书 table 行为 row[key] = cell value）。"""
+        table = self._get_per_fund_table(journal)
+        for r in table["rows"]:
+            for k in ("fund", "cost", "valuation", "advice"):
+                assert k in r, f"行 {r} 缺 '{k}' key"
+
+    def test_sorted_by_subclass_then_code(self, journal: PortfolioJournal) -> None:
+        """按 SwensenClass 枚举顺序 + fund_code 排序。"""
+        from global_allocation.portfolio.breakdown import SUBCLASS_BY_CODE
+        from global_allocation.portfolio.cost_basis import COST_BASIS_BY_CODE
+        from global_allocation.portfolio.card import SwensenClass
+
+        subclass_order = {s: i for i, s in enumerate(SwensenClass)}
+        expected = sorted(
+            COST_BASIS_BY_CODE.keys(),
+            key=lambda c: (subclass_order[SUBCLASS_BY_CODE[c]], c),
+        )
+
+        table = self._get_per_fund_table(journal)
+        actual_codes = []
+        for r in table["rows"]:
+            # fund 列格式: "中文名 (code)"
+            code = r["fund"].rsplit("(", 1)[1].rstrip(")")
+            actual_codes.append(code)
+        assert actual_codes == expected
+
+    def test_valuation_column_uses_metric_format(self, journal: PortfolioJournal) -> None:
+        """估值列格式：PE-TTM 15.42 / 分位 41.55% / 等。
+
+        至少有一行包含 'PE-TTM' 格式（PE-TTM 是最常见估值指标）。
+        """
+        table = self._get_per_fund_table(journal)
+        # 检查有 PE-TTM 格式的行（A 股 / 美股 / 港股 / 国外发达 / 新兴市场都有）
+        pe_rows = [r for r in table["rows"] if "PE-TTM" in r["valuation"]]
+        assert len(pe_rows) >= 1, "至少应有一行 PE-TTM 格式（股票类）"
+
+    def test_advice_column_uses_5_signals(self, journal: PortfolioJournal) -> None:
+        """调仓建议列：5 个信号（加仓/减仓/建仓/不动/跳过）都可能出现在数据里。"""
+        table = self._get_per_fund_table(journal)
+        advice_texts = " ".join(r["advice"] for r in table["rows"])
+        # 数据里有 NDX 5 只 → 估值 "—"，建议 "不动"（SKIP 路径走 SKIP 给出"跳过"）
+        # 数据里有 DAX (000614) → 0 仓 + 分位 < 50% → "建仓"
+        # 数据里有 HSTECH (013127) → 加仓
+        # 数据里有黄金 (000216) → 看综合分
+        for keyword in ("不动",):
+            assert keyword in advice_texts, f"advice 列应含 '{keyword}'"
+
+    def test_no_valuation_section_note_present(self, journal: PortfolioJournal) -> None:
+        """第二十三轮：spec 098 估值与操作 4 张表 section 已删，'估值与操作' 标题不应存在。"""
+        card = build_portfolio_card(journal)
+        for e in card["elements"]:
+            if e.get("tag") == "note":
+                for elem in e.get("elements", []):
+                    assert elem.get("content") != "估值与操作"
+
+    def test_merged_etf_group_shows_same_valuation(self, journal: PortfolioJournal) -> None:
+        """merge_by_etf 合并组（"022434+022424+022448"）→ 3 只 A500 基金都显示同一个估值。
+
+        估值列是按 index 级别算的（同一指数估值一样），所以 3 只基金 PE-TTM 应该完全相同。
+        """
+        table = self._get_per_fund_table(journal)
+        a500_rows = [
+            r for r in table["rows"]
+            if "A500" in r["fund"] and any(code in r["fund"] for code in ("022434", "022424", "022448"))
+        ]
+        # 3 只 A500 基金（南方/广发/国泰）
+        assert len(a500_rows) == 3
+        # 估值列完全一致
+        vals = {r["valuation"] for r in a500_rows}
+        assert len(vals) == 1, f"A500 合并组估值不一致: {vals}"
 
 
 # ─── A 股策略建议行（spec 098 第二十五轮 — liubo 2026-09-19 反馈）───
@@ -1617,76 +1462,6 @@ class TestDecideAShareStrategy:
         strategy, reason = _decide_a_share_strategy(over_target=False, composite_verdict="正常")
         assert strategy == "正常持有"
         assert "估值" in reason and "正常" in reason
-
-
-class TestAShareStrategyNote:
-    """A 股策略建议渲染成 note 文字块（spec 098 第二十六轮）。
-
-    不再放表里（liubo 2026-09-19 反馈"用文字说"），独立一段话交代：
-        "A 股占比 X%，目标 Y%。<策略>（<理由>）"
-    """
-
-    def _get_strategy_note_text(self, journal: PortfolioJournal) -> str:
-        """从 build_portfolio_card 输出里抠出 A 股策略 note 的文字。"""
-        spec = build_portfolio_card(journal)
-        for el in spec["elements"]:
-            # spec 098 第二十八轮起：A 股策略提示用 div+lark_md（要更突出，不能灰字）
-            if el.get("tag") == "div" and "A 股占比" in el["text"]["content"]:
-                return el["text"]["content"]
-            if el.get("tag") != "note":
-                continue
-            for sub in el.get("elements", []):
-                content = sub.get("content", "")
-                if content.startswith("A 股占比"):
-                    return content
-        raise AssertionError("未找到 A 股策略提示（div/note 含 'A 股占比'）")
-
-    def test_note_present_after_have_holdings_and_valuation(
-        self, journal: PortfolioJournal
-    ) -> None:
-        """有持仓 + 估值 → 估值表后追加一个 note，文字以 'A 股占比' 开头。"""
-        _seed(journal)
-        _seed_valuation_today(journal)
-        text = self._get_strategy_note_text(journal)
-        assert "A 股占比" in text
-        assert "%" in text
-        assert "目标" in text
-
-    def test_note_format_includes_strategy_and_reason(
-        self, journal: PortfolioJournal
-    ) -> None:
-        """note 文字格式 = "A 股占比 X%，目标 Y%。<策略>（<理由>）"。
-
-        验证包含：占比百分比、目标百分比、策略文案（4 个之一）、括号里的理由。
-        """
-        _seed(journal)
-        _seed_valuation_today(journal)
-        text = self._get_strategy_note_text(journal)
-        # 必含 4 个策略文案之一
-        assert any(s in text for s in ["不再投入", "分批止盈", "分批买入", "正常持有", "等估值"])
-        # 理由在括号里（"（...）"）
-        assert "（" in text and "）" in text
-
-    def test_table_does_not_have_a_share_strategy_row(
-        self, journal: PortfolioJournal
-    ) -> None:
-        """combined 估值表不再含 'A 股策略' 行（已移到 note）。
-
-        spec 098.4 — combined 表结构变了：5 列 region/indicator/value/verdict/threshold。
-        这里验证 indicator 列不含 'A 股策略'（不管列结构怎么变）。
-        """
-        _seed(journal)
-        _seed_valuation_today(journal)
-        spec = build_portfolio_card(journal)
-        # 任何含 indicator 列的表都不是策略表
-        for t in [e for e in spec["elements"] if e.get("tag") == "table"]:
-            col_names = [c["name"] for c in t["columns"]]
-            if "indicator" in col_names:
-                row_names = [r.get("indicator", "") for r in t["rows"]]
-                assert "A 股策略" not in row_names
-
-
-# ─── Per-fund 估值（spec 098 第二十七轮）───
 
 
 class TestComputeRoeYoy:
@@ -2119,42 +1894,6 @@ class TestFundValuationSection:
         assert "022434" in fund_codes
         assert "163406" not in fund_codes
         assert "510300" not in fund_codes
-
-    def test_section_appears_after_strategy_note_in_card(
-        self, journal: PortfolioJournal
-    ) -> None:
-        """完整卡片里：fund_valuation_section 紧跟 A 股策略 div 之后。
-
-        spec 098 第二十八轮 — per-fund 表不再带子 header，外层 _build_valuation_section
-        统一在顶部渲染 "A 股估值与操作" note + 4 指标估值表 + strategy_note div，
-        再追加 hr + per-fund table。这里验证 per-fund table 在 strategy_div 之后。
-        """
-        _seed_a_share_funds(journal)
-        _seed_valuation_today(journal)
-        _seed_fund_valuations(journal)
-        card = build_portfolio_card(journal)
-        elements = card["elements"]
-        # 找 "A 股占比" 的 div（A 股策略提示，从 spec 098 第二十八轮起是 div+lark_md）
-        strategy_div_idx = next(
-            i for i, e in enumerate(elements)
-            if e.get("tag") == "div" and "A 股占比" in e["text"]["content"]
-        )
-        # per-fund table 的第一行 fund 列含 "008114"（区别于 4 指标估值表）
-        # 找 fund 列含 "014532" 的 table
-        def _is_per_fund_table(elem: dict[str, object]) -> bool:
-            if elem.get("tag") != "table":
-                return False
-            cols = elem.get("columns", [])
-            if not cols:
-                return False
-            col_names = [c.get("name") for c in cols]
-            return "fund" in col_names and "advice" in col_names
-
-        per_fund_table_idx = next(
-            i for i, e in enumerate(elements) if _is_per_fund_table(e)
-        )
-        assert per_fund_table_idx > strategy_div_idx
-
 
 class TestPositionManagementMerged:
     """spec 098 第二十九轮 + 第三十轮 — liubo 反馈"两张表合并"+"底仓 1 仓 + 上限 6 仓"。
@@ -3035,3 +2774,152 @@ class TestIndexVerdictStrategyUS:
         assert INDEX_VERDICT_STRATEGY["GSPC"] == "growth"
         assert INDEX_VERDICT_STRATEGY["OEX"] == "dividend"
         assert INDEX_VERDICT_STRATEGY["NDX"] == "growth"
+
+
+# ─── 调仓记录金额列：仓 + 元 双值（liubo 2026-10-17 反馈「我都想要」）───
+
+
+class TestFormatAmountWithUnits:
+    """_format_amount_with_units — 调仓记录「金额」列规范化。
+
+    公式：1 仓 = 1 万 CNY = 10,000 元（spec 022/097 整数仓位模型）。
+
+    liubo 2026-10-17：「你都显示的是金额和多少仓。比如说1万，你就要告诉我这1万是1仓，
+    还是0.5仓，对吧？你不要只显示金额，也不要只显示仓位。都想。」
+    """
+
+    def test_pure_position_with_sign_becomes_double_value(self) -> None:
+        """±N 仓（加减仓）→ "N 仓 / X,XXX 元"（方向走 action 列）。"""
+        from global_allocation.portfolio.card import _format_amount_with_units
+
+        assert _format_amount_with_units("+1 仓") == "1 仓 / 10,000 元"
+        assert _format_amount_with_units("-1 仓") == "1 仓 / 10,000 元"
+
+    def test_fractional_position(self) -> None:
+        """0.5 仓 / 5000 元 — liubo 2026-10-17 提到 "0.5 仓" 场景。"""
+        from global_allocation.portfolio.card import _format_amount_with_units
+
+        assert _format_amount_with_units("0.5 仓") == "0.5 仓 / 5,000 元"
+        assert _format_amount_with_units("5000 元") == "0.5 仓 / 5,000 元"
+
+    def test_pure_money_gets_position_prepended(self) -> None:
+        """纯 X 元 / CNY / 万 / ¥X → 前面加 仓 数。"""
+        from global_allocation.portfolio.card import _format_amount_with_units
+
+        assert _format_amount_with_units("10000 元") == "1 仓 / 10,000 元"
+        assert _format_amount_with_units("10000 CNY") == "1 仓 / 10,000 元"
+        assert _format_amount_with_units("1 万") == "1 仓 / 10,000 元"
+        assert _format_amount_with_units("¥10000") == "1 仓 / ¥10000"
+
+    def test_already_double_value_normalizes_format(self) -> None:
+        """已含 仓 + 元 双值（"建仓 1 仓 / 10000 CNY"）→ 标准化为 "1 仓 / 10,000 元"。
+
+        去 "建仓" 词（动作已在 action 列）+ CNY → 元 + 千分位逗号。
+        """
+        from global_allocation.portfolio.card import _format_amount_with_units
+
+        assert _format_amount_with_units("建仓 1 仓 / 10000 CNY") == "1 仓 / 10,000 元"
+        assert _format_amount_with_units("0.5 仓 / 5000 元") == "0.5 仓 / 5,000 元"
+
+    def test_dash_preserved(self) -> None:
+        """「—」表示无金额信息 → 保持。"""
+        from global_allocation.portfolio.card import _format_amount_with_units
+
+        assert _format_amount_with_units("—") == "—"
+        assert _format_amount_with_units("") == ""
+
+    def test_dca_three_value_format_preserved(self) -> None:
+        """DCA 3-value 格式（"10 元 / 每天 / 累计 1800"）→ 保持。
+
+        DCA 是定投计划三要素（金额 / 频率 / 累计目标），不是 仓 概念。
+        """
+        from global_allocation.portfolio.card import _format_amount_with_units
+
+        assert _format_amount_with_units("10 元 / 每天 / 累计 1800") == "10 元 / 每天 / 累计 1800"
+        assert _format_amount_with_units("10 元 / 每天 / 累计 2000") == "10 元 / 每天 / 累计 2000"
+        assert _format_amount_with_units("250-1000 元 / 每周（均值 500） / 累计 10000") == "250-1000 元 / 每周（均值 500） / 累计 10000"
+
+    def test_dca_fallback_already_bought_preserved(self) -> None:
+        """DCA 兜底"已买 ¥X" → 保持（已买金额是 DCA 进度，不是仓）。"""
+        from global_allocation.portfolio.card import _format_amount_with_units
+
+        assert _format_amount_with_units("已买 ¥60") == "已买 ¥60"
+
+    def test_cost_calibration_preserved(self) -> None:
+        """Cost 校准（"净 +1661" / "+40" / "成本 20 收回现金"）→ 保持（不是仓位概念）。
+
+        liubo 2026-10-17 拍板 — cost 校准是记账对账，不调仓。
+        """
+        from global_allocation.portfolio.card import _format_amount_with_units
+
+        assert _format_amount_with_units("净 +1661") == "净 +1661"
+        assert _format_amount_with_units("+40") == "+40"
+        assert _format_amount_with_units("成本 20 收回现金") == "成本 20 收回现金"
+
+    def test_bare_number_without_unit_preserved(self) -> None:
+        """无单位的纯数字（"20000" / "10000"）→ 保持（无法判定是元还是别的单位）。"""
+        from global_allocation.portfolio.card import _format_amount_with_units
+
+        assert _format_amount_with_units("20000") == "20000"
+        assert _format_amount_with_units("10000") == "10000"
+
+    def test_conversion_shares_preserved(self) -> None:
+        """"转换 8379 份" 保持（份是转换的份额单位，不是仓）。"""
+        from global_allocation.portfolio.card import _format_amount_with_units
+
+        assert _format_amount_with_units("转换 8379 份") == "转换 8379 份"
+
+
+class TestRebalanceRecordsDoubleValue:
+    """调仓记录表 — 金额列全部行都是 仓 + 元 双值（liubo 2026-10-17 拍板）。
+
+    16 行原始数据（基于 git log 抓取）：
+    - 8 行 ±N 仓 → 标准化为 "N 仓 / 10,000 元"
+    - 6 行 10000 元（转换 6 行）→ 标准化为 "1 仓 / 10,000 元"
+    - 1 行 DCA (南方纳100) → 保持 "10 元 / 每天 / 累计 1800"
+    - 2 行 DCA (摩根/万家) → 保持 "10 元 / 每天 / 累计 2000"
+    - 1 行 "建仓 1 仓 / 10000 CNY" → 标准化为 "1 仓 / 10,000 元"
+    - 1 行 +1 仓 (013127) → 标准化为 "1 仓 / 10,000 元"
+    - 2 行 "—" → 保持
+    """
+
+    def test_rebalance_table_amounts_all_double_value_or_dash(self) -> None:
+        """调仓记录表 16 行 — 每一行 amount 都有 仓 + 元 OR 是 "—" OR 是 DCA 3-value。"""
+        card = build_portfolio_card(PortfolioJournal(
+            db=PortfolioDB(path=__import__('pathlib').Path("/tmp/empty.db")),
+            price_source=FakePriceSource({}),
+        ))
+        tables = [e for e in card["elements"] if e.get("tag") == "table"]
+        rebalance_table = next(
+            (t for t in tables if [c["name"] for c in t["columns"]] == ["date", "fund", "action", "amount"]),
+            None,
+        )
+        if rebalance_table is None:
+            return  # 没数据跳过
+
+        for r in rebalance_table["rows"]:
+            amt = r["amount"]
+            if amt == "—":
+                continue
+            if " / 累计 " in amt:
+                # DCA 3-value
+                continue
+            # 应该 仓 + 元 双值
+            assert " 仓 / " in amt and " 元" in amt, f"行 {r} amount '{amt}' 不是 仓+元 双值"
+
+    def test_rebalance_table_dca_amount_preserved(self) -> None:
+        """DCA 行 amount 保持 3-value 格式 "10 元 / 每天 / 累计 X"。"""
+        card = build_portfolio_card(PortfolioJournal(
+            db=PortfolioDB(path=__import__('pathlib').Path("/tmp/empty.db")),
+            price_source=FakePriceSource({}),
+        ))
+        tables = [e for e in card["elements"] if e.get("tag") == "table"]
+        rebalance_table = next(
+            (t for t in tables if [c["name"] for c in t["columns"]] == ["date", "fund", "action", "amount"]),
+            None,
+        )
+        if rebalance_table is None:
+            return
+        dca_rows = [r for r in rebalance_table["rows"] if r["action"] == "定投"]
+        for r in dca_rows:
+            assert " / 每天 / 累计 " in r["amount"], f"DCA 行 {r} amount '{r['amount']}' 失去 3-value 格式"

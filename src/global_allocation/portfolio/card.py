@@ -1015,14 +1015,15 @@ def _parse_conversion_rows(stripped: str) -> list[RebalanceRow]:
     ]
 
 
-def _build_rebalance_records_section(limit: int = 20) -> list[dict[str, object] | None]:
-    """Section 1.5 — 调仓纪录表格版（liubo 2026-10-17 改：4 列 = 日期/基金/动作/金额）。
+def _collect_rebalance_rows(limit: int = 20) -> list[RebalanceRow]:
+    """从 git log 抓所有调仓/定投行 — 调仓记录 + 定投记录 共用。
 
-    从 git log 抓最近 N*4 条 commit 详细记录（subject + body），按 _is_rebalance_subject
-    过滤出真实调仓，每条 commit body 按 `- 0xxxxx ...` 行拆成多行 — 多基金 commit 自动展开
-    （如 8597945 "14 只基金成本校准" 14 行、2c36577 "卖出+加+建" 3 行）。
+    liubo 2026-10-17 拍板 — 调仓和定投分开 2 张表，但数据源都是 git log，
+    共用一次 git log 调用（节省 ~50ms + 避免时序不一致）。
 
-    无调仓 commit → 返回空 list（不渲染）。
+    返回：list[RebalanceRow]，按 action 自动分布：
+    - action != "定投" → 调仓记录表
+    - action == "定投" → 定投记录表
 
     为什么用 `%x00|<hash>|%x00END%x00` 包裹每条 commit：
     git log 的 `%b` 在 body 末尾加换行但不加分隔符，所以用纯 `\x00` 拆 4-field
@@ -1069,10 +1070,7 @@ def _build_rebalance_records_section(limit: int = 20) -> list[dict[str, object] 
     if not commits:
         return []
 
-    if not commits:
-        return []
-
-    rows: list[dict[str, object]] = []
+    rows: list[RebalanceRow] = []
     for commit in commits:
         subject = commit["subject"]
         if not _is_rebalance_subject(subject):
@@ -1118,20 +1116,35 @@ def _build_rebalance_records_section(limit: int = 20) -> list[dict[str, object] 
             # 真实校准一定有金额差值（"+21" / "+1400" 等），无金额 = 误判
             if rb.action == "校准" and rb.amount in ("—", ""):
                 continue
-            rows.append({
-                "date": date_short,
-                "fund": rb.fund,
-                "action": rb.action,
-                "amount": rb.amount,
-            })
+            rb_with_date = RebalanceRow(
+                date=date_short,
+                fund=rb.fund,
+                action=rb.action,
+                amount=rb.amount,
+            )
+            rows.append(rb_with_date)
             if len(rows) >= limit:
                 break
         if len(rows) >= limit:
             break
 
-    if not rows:
+    return rows
+
+
+def _build_rebalance_records_section(rows: list[RebalanceRow]) -> list[dict[str, object]]:
+    """Section 3 — 调仓纪录表格版（liubo 2026-10-17 改：4 列 = 日期/基金/动作/金额）。
+
+    liubo 2026-10-17 第二轮反馈 — 调仓是调仓，定投是定投，分开 2 张表。
+    本函数只渲染"调仓"行（action != "定投"），定投行由 _build_dca_records_section 渲染。
+    """
+    rebalance_rows = [r for r in rows if r.action != "定投"]
+    if not rebalance_rows:
         return []
 
+    rows_dict = [
+        {"date": r.date, "fund": r.fund, "action": r.action, "amount": r.amount}
+        for r in rebalance_rows
+    ]
     table: dict[str, object] = {
         "columns": [
             {"name": "date", "display_name": "日期", "data_type": "text", "width": "auto"},
@@ -1139,13 +1152,53 @@ def _build_rebalance_records_section(limit: int = 20) -> list[dict[str, object] 
             {"name": "action", "display_name": "动作", "data_type": "text", "width": "auto"},
             {"name": "amount", "display_name": "金额", "data_type": "text", "width": "auto"},
         ],
-        "rows": rows,
+        "rows": rows_dict,
     }
 
     return [
         {
             "tag": "note",
             "elements": [{"tag": "plain_text", "content": "调仓纪录"}],
+        },
+        {"tag": "hr"},
+        {
+            "tag": "table",
+            **table,
+        },
+    ]
+
+
+def _build_dca_records_section(rows: list[RebalanceRow]) -> list[dict[str, object]]:
+    """Section 4 — 定投纪录表格版（liubo 2026-10-17 第二轮反馈 — 跟调仓分开 2 张表）。
+
+    4 列：日期 / 基金 / 动作 / 金额
+    - 动作固定 "定投"
+    - 金额 = "X 元 / Y / 累计 Z" 3 段（per / cycle / total），从 _DCA_SCHEDULE_BY_CODE 拿
+    - 只有 016452/019172/019441/000614/000216 五只 DCA 基金会出现
+      （其他基金即使有 commit 也不会标"定投" action）
+    """
+    dca_rows = [r for r in rows if r.action == "定投"]
+    if not dca_rows:
+        return []
+
+    rows_dict = [
+        {"date": r.date, "fund": r.fund, "action": r.action, "amount": r.amount}
+        for r in dca_rows
+    ]
+    table: dict[str, object] = {
+        "columns": [
+            {"name": "date", "display_name": "日期", "data_type": "text", "width": "auto"},
+            {"name": "fund", "display_name": "基金", "data_type": "text", "width": "auto"},
+            {"name": "action", "display_name": "动作", "data_type": "text", "width": "auto"},
+            {"name": "amount", "display_name": "金额", "data_type": "text", "width": "auto"},
+        ],
+        "rows": rows_dict,
+    }
+
+    return [
+        {
+            "tag": "note",
+            "elements": [{"tag": "plain_text", "content": "定投纪录"}],
         },
         {"tag": "hr"},
         {
@@ -2342,12 +2395,19 @@ def build_portfolio_card(
     elements.extend(_build_per_fund_section())
 
     # Section 3: 调仓纪录（liubo 2026-10-17 拍板保留）— 在 Section 2 之后
+    # Section 4: 定投纪录（liubo 2026-10-17 第二轮反馈 — 调仓是调仓，定投是定投，分开 2 张表）
     # 数据来源：git log，按 _is_rebalance_subject 过滤掉调参/规则/卡片/docs
     # limit=20 是因为一个 commit 可能拆出多行（如 8597945 14 只基金 / 9e70495 3 笔转换）
-    rebalance_section = _build_rebalance_records_section(limit=20)
+    # 调仓 + 定投 共用一次 git log 调用（_collect_rebalance_rows），按 action 字段分到 2 张表
+    all_rebalance_rows = _collect_rebalance_rows(limit=20)
+    rebalance_section = _build_rebalance_records_section(all_rebalance_rows)
     if rebalance_section:
         elements.append({"tag": "hr"})
         elements.extend(rebalance_section)
+    dca_section = _build_dca_records_section(all_rebalance_rows)
+    if dca_section:
+        elements.append({"tag": "hr"})
+        elements.extend(dca_section)
 
     card: dict[str, object] = {
         "header": {
