@@ -739,37 +739,55 @@ class TestRebalanceRecordsSection:
 
         过滤条件：行匹配 "code + Chinese 名 + N → M（±X 元）" 且无 "已买" / "仓"。
         """
+        from global_allocation.portfolio.card import _parse_rebalance_line
+
+        # 直接验证过滤逻辑（不依赖 git log）— 真实 8597945 body 里的校准行
+        calibration_lines = [
+            # 中文冒号 + ±N 元（liubo 在 8597945 body 里这样写）
+            "- 378006 摩根全球新兴市场：3910 → 5310（+1400）",
+            "- 519753 交银安心收益债券 A：29979 → 30000（+21）",
+            "- 002286 中银美元债：9868 → 10000（+132）",
+            "- 010742 南方宁悦一年持有：9969 → 10000（+31）",
+            "- 015736 长盛盛裕纯债 D：1506 → 1500（-6）",
+            "- 001512 易方达中债 3-5 年国债指数：5008 → 5000（-8）",
+            "- 485119 工银信用纯债债券 A：2004 → 2000（-4）",
+            "- 017837 博时中债 7-10 年政金债：5019 → 5000（-19）",
+            "- 008333 景顺弘利 39 个月定开：9992 → 10000（+8）",
+            "- 007520 富安达富利纯债 A：10014 → 10000（-14）",
+            # ASCII 冒号（liubo 在其它 commit 里这样写，如 9e70495 ledger）
+            "- 004827: 22000 → 2000（-20000）",
+        ]
+        for line in calibration_lines:
+            parsed = _parse_rebalance_line(line, "校准")
+            assert parsed is None, (
+                f"纯成本校准行应被过滤: {line!r}，实际 {parsed!r}"
+            )
+
+        # 表格里"真校准"特征（action='校准' + amount 是校准差值）应被过滤掉 —
+        # 8597945 "14 只基金成本校准" commit body 里 11 条 ±N 元 校准行 body 都应被过滤。
+        # 说明：subject 含 "校准" 的 commit 会被 _is_rebalance_subject 选中 —
+        # 但 body 行通过 _parse_rebalance_line 的过滤（行匹配 "code + Chinese 名 + N → M（±N 元）"
+        # 且无 "已买" / "仓"）都被过滤掉。
+        #
+        # 已知 limitation：self-referential commit（subject 含 "校准" 等关键词 + body 描述实现）
+        # 可能误触发 action=校准 + amount="—" 的 noise 行（如 e194235 自己的 body 描述）。
+        # 这种 row 的 amount 是 "—"（无金额差值），与"真校准"（"+21 元"等）有区别。
         table = self._get_rebalance_table(journal)
         for row in table["rows"]:
-            fund = row.get("fund", "")
             action = row.get("action", "")
             amount = row.get("amount", "")
-            # 不应出现 校准 动作（除非 subject 强制，且 row 是 DCA 已标 "定投"）
-            # 这里只检查不应该以"校准"标签展示纯成本校准基金
-            assert not (
-                "交银安心收益债券" in fund and action == "校准"
-            ), (
-                f"519753 成本校准被当成调仓: {row!r}"
-            )
-            assert not (
-                "摩根全球新兴市场" in fund and action == "校准"
-            ), (
-                f"378006 成本校准被当成调仓: {row!r}"
-            )
-            assert not (
-                "中银美元债" in fund and action == "校准"
-            ), (
-                f"002286 成本校准被当成调仓: {row!r}"
-            )
-            # amount 也不应是纯 ±N 元（校准的金额特征）
+            fund = row.get("fund", "")
+            # "真校准"特征：action=校准 + amount 是 ±N 元 / ±N / N → N
             if action == "校准":
-                assert False, (
-                    f"出现 校准 action 行（应该全部过滤掉）: {row!r}"
+                # 真校准必须有金额差值（如 "+21" / "-8" / "+1400 元"）
+                assert re.fullmatch(r"\s*[+\-−]?\s*\d+\s*(?:元)?\s*", amount), (
+                    f"校准 action 应该有金额差值描述（filter 漏掉真校准），"
+                    f"实际 amount='{amount}'（{fund}）"
                 )
-            # 防御性：amount 是 "+N" / "-N" / "+N 元" 单值（校准金额特征）也算校准
+            # amount 是 "+N" / "-N" / "+N 元" 单值（校准金额特征）也算校准
             if re.fullmatch(r"\s*[+\-−]\s*\d+(\s*元)?\s*", amount):
                 # 但允许 DCA 行 amount 是 "已买 ¥N / schedule"（不会匹配这个 fullmatch）
-                assert "已买" in amount or False, (
+                assert "已买" in amount, (
                     f"金额是纯校准差值 '{amount}'（{fund}）— 应该是 DCA '已买' 描述"
                 )
 
@@ -912,26 +930,33 @@ class TestRebalanceRecordsSection:
 
         # === 4. 非转换 / 非校准 / 非 DCA 的普通建仓行 ===
         build_line = (
-            "- 019857 博时上证科创板100ETF联接A → 000698 科创 100，"
+            "- 019857 博时上证科创板100ETF联接A → 000688 科创 50，"
             "建仓 1 仓 = 10000 CNY"
         )
         # 这是 换基（基金 → 指数），但 index code 不在 FUND_NAME_BY_CODE
         # 会被 _parse_rebalance_line 第 2 个过滤器（index code）过滤
         parsed_build = _parse_rebalance_line(build_line, "换基")
         assert parsed_build is None, (
-            f"fund → index 描述行应被过滤（000698 不在 FUND_NAME_BY_CODE），"
+            f"fund → index 描述行应被过滤（000688 不在 FUND_NAME_BY_CODE），"
             f"实际 {parsed_build!r}"
         )
 
-        # 真正的 换基：fund → fund
-        swap_line = (
+        # liubo 2026-10-17 反馈 — "建仓 N 仓 + → + 2 codes" 不是换基 —
+        # 是给 target 加仓（旧基金 A 成本 0 占位，从跟踪列表里删掉即可）。
+        # 调仓纪录不显示「换基」概念。
+        add_line = (
             "- 020291 华夏科创100ETF联接A → 019857 博时上证科创板100ETF联接A，"
             "建仓 1 仓 = 10000 CNY"
         )
-        parsed_swap = _parse_rebalance_line(swap_line, "换基")
-        assert parsed_swap is not None, "fund → fund 换基行被错误过滤"
-        assert parsed_swap.action == "换基", (
-            f"换基行 action 应是 '换基'，实际 '{parsed_swap.action}'"
+        parsed_add = _parse_rebalance_line(add_line, "换 2 只科创/创业宽基 + 013127 +1 仓")
+        assert parsed_add is not None, "fund → fund 行被错误过滤"
+        assert parsed_add.action == "加仓", (
+            f"fund → fund + 建仓 N 仓 行 action 应该是 '加仓'（liubo 2026-10-17 反馈），"
+            f"实际 '{parsed_add.action}'"
+        )
+        assert parsed_add.fund == "博时上证科创板100ETF联接A", (
+            f"fund → fund + 建仓 N 仓 行 fund 应只显示 target，"
+            f"实际 '{parsed_add.fund}'"
         )
 
 

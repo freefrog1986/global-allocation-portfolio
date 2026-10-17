@@ -392,8 +392,9 @@ class RebalanceRow:
 
     Fields:
     - date: commit 日期（YYYY-MM-DD）
-    - fund: 基金显示文本（1 只 = name，转换/换基 = "<from_name> → <to_name>"）
-    - action: 中文动作标签（建仓 / 加仓 / 减仓 / 转换 / 砍仓 / 赎回 / 卖出 / 校准 / 对账 / 换基 / 扩仓）
+    - fund: 基金显示文本（1 只 = name；建仓+→+2 codes 只显示 target；转换 = 转出/转入拆分）
+    - action: 中文动作标签（建仓 / 加仓 / 减仓 / 转换 / 砍仓 / 赎回 / 卖出 / 校准 / 对账 / 扩仓）
+      — 注意：不显示「换基」；"建仓 N 仓 + → + 2 code" 是给 target 加仓
     - amount: 金额显示（"10000 元" / "+40" / "已买 ¥40" / "建仓 1 仓 / 10000 元" / "+1661 CNY" / ...）
     """
     date: str
@@ -407,8 +408,11 @@ def _resolve_fund_display(line: str) -> str:
 
     模式识别：
     - 1 个 code + 名称 + 描述：显示 name
-    - 2 个 codes（A → B）：显示 "<from_name> → <to_name>"
-    - 3+ codes: 取前两个 (一般不会发生)
+    - 2 个 codes（A → B）+"建仓 N 仓"：只显示 target (B) ——
+      liubo 2026-10-17 反馈：A 只是从跟踪列表里删掉（成本 0 占位），不是 swap
+    - 2 个 codes（A → B）"转换 NNNN 份"：不通过这里（_parse_conversion_rows 单独处理）
+    - 2 个 codes（A → B）其他：显示 "<from_name> → <to_name>"（少见；转换行的兜底）
+    - 3+ codes: 取前两个
     - 0 codes：fallback "基金 —"（理论上不会发生 — _parse_rebalance_line 提前过滤）
 
     数字用 \d{6} 6 位匹配（不强制 0 前缀，覆盖 519981/110017 等非 0 开头 code），
@@ -419,6 +423,9 @@ def _resolve_fund_display(line: str) -> str:
         return "基金 —"
     if len(codes) == 1:
         return get_fund_name(codes[0])
+    # "建仓 N 仓" + "→" + 2 codes → 只显示 target（liubo 2026-10-17 反馈）
+    if re.search(r"建仓\s*\d+\s*仓", line):
+        return get_fund_name(codes[1])
     from_name = get_fund_name(codes[0])
     to_name = get_fund_name(codes[1])
     return f"{from_name} → {to_name}"
@@ -429,11 +436,13 @@ def _resolve_action(line: str, subject: str) -> str:
 
     优先级（行内信号更具体）：
     1. 行内 "（... 转换 NNNN 份 ...）" → 转换（_parse_conversion_rows 单独处理）
-    2. 行内 "建仓 N 仓" + ≥2 code → 换基；否则 → 建仓
-    3. 行内 "+N 仓" → 加仓（要在 校准 前面 — `- 013127 ... +1 仓：25000 → 35000` 是加仓，不是校准）
-    4. 行内 "−N 仓" / "-N 仓" → 减仓
-    5. 行内 ":N → M" → 校准（_parse_rebalance_line 已过滤纯校准，这里只是 fallback）
-    6. 行内 "→" + ≥2 code → 换基
+    2. 行内 "建仓 N 仓" + ≥2 code → 加仓（liubo 2026-10-17 反馈：
+       "建仓 N 仓 + → + 2 code" 不是 swap，是给 target 加仓；旧基金只是
+       从跟踪列表里删掉（成本 0 占位），不显示 换基）
+    3. 行内 "建仓 N 仓" 单 code → 建仓
+    4. 行内 "+N 仓" → 加仓（要在 校准 前面 — `- 013127 ... +1 仓：25000 → 35000` 是加仓，不是校准）
+    5. 行内 "−N 仓" / "-N 仓" → 减仓
+    6. 行内 ":N → M" → 校准（_parse_rebalance_line 已过滤纯校准，这里只是 fallback）
     7. 行内以 "- 加 0xxxxx" 开头 → 加仓
     8. 行内以 "- 卖出 " 开头 → 卖出
     9. 行内以 "- 砍 " 开头 → 砍仓
@@ -445,7 +454,9 @@ def _resolve_action(line: str, subject: str) -> str:
         return "转换"
     if re.search(r"建仓\s*\d+\s*仓", line):
         if "→" in line and len(re.findall(r"(?<!\d)\d{6}", line)) >= 2:
-            return "换基"
+            # liubo 2026-10-17：这是给 target 加仓，不是换基
+            # （旧基金 A 成本 0 占位，从跟踪列表里删掉就算处理掉了）
+            return "加仓"
         return "建仓"
     # 加仓 / 减仓：先于 校准 检测（line 含 "+1 仓" 时是加仓，不是校准）
     if re.search(r"\+\s*\d+\s*仓", line):
@@ -455,8 +466,6 @@ def _resolve_action(line: str, subject: str) -> str:
     # 校准：支持 ASCII : 和中文 ：（liubo 在 commit 里两种都用）
     if re.search(r"[:：]\s*\d[\d,]*\s*→\s*\d[\d,]*", line):
         return "校准"
-    if "→" in line and len(re.findall(r"(?<!\d)\d{6}", line)) >= 2:
-        return "换基"
     # liubo 拍板 "- 加 0xxxxx 基金名" 系列 → 加仓（常见于加仓 / 建仓混用的 commit）
     if re.search(r"-\s+加\s+(?:\d{6}|基金)", line):
         return "加仓"
@@ -806,6 +815,10 @@ def _build_rebalance_records_section(limit: int = 20) -> list[dict[str, object] 
 
         # 同一 commit 多行 → 补日期 + 加进 rows
         for rb in body_rows:
+            # 校准 + amount="—" 是 noise（self-referential commit body 描述实现）—
+            # 真实校准一定有金额差值（"+21" / "+1400" 等），无金额 = 误判
+            if rb.action == "校准" and rb.amount in ("—", ""):
+                continue
             rows.append({
                 "date": date_short,
                 "fund": rb.fund,
