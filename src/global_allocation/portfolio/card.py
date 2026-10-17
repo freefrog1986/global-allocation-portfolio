@@ -64,6 +64,16 @@ _DCA_SCHEDULE_BY_CODE: dict[str, dict[str, str]] = {
     "000216": {"per": "250-1000 元", "cycle": "每周一", "total": "7500"},   # 华安黄金ETF联接A（慧定投 250-1000/周一 → 累计 7500 暂停）
 }
 
+# DCA 计划创建日（liubo 2026-10-17 提供的天天基金截图）
+# 用于定投记录表 date 列 — 不是从 git log 拿（git log 里的 10-09 行是 校准 事件不是 DCA 起始）
+_DCA_PLAN_START_BY_CODE: dict[str, str] = {
+    "016452": "2026-09-29",  # 南方纳100（天天基金 DCA 计划创建日）
+    "019172": "2026-09-29",  # 摩根纳100
+    "019441": "2026-09-29",  # 万家纳100
+    "000614": "2026-09-29",  # 华安 DAX
+    "000216": "2026-10-08",  # 华安黄金（10-08 单独创建，比 NDX 4 只晚 9 天）
+}
+
 
 def _format_dca_amount(schedule: dict[str, str]) -> str:
     """把 DCA schedule dict 格式化成 "10 元 / 每天 / 累计 1800"。
@@ -1174,17 +1184,32 @@ def _build_dca_records_section(rows: list[RebalanceRow]) -> list[dict[str, objec
     4 列：日期 / 基金 / 动作 / 金额
     - 动作固定 "定投"
     - 金额 = "X 元 / Y / 累计 Z" 3 段（per / cycle / total），从 _DCA_SCHEDULE_BY_CODE 拿
-    - 只有 016452/019172/019441/000614/000216 五只 DCA 基金会出现
-      （其他基金即使有 commit 也不会标"定投" action）
+    - 始终展示 _DCA_SCHEDULE_BY_CODE 全部 5 只基金（liubo 2026-10-17 第二十五轮反馈 — 不管
+      git log 是否有 "定投" commit，黄金 + DAX 也要展示），日期从 _DCA_PLAN_START_BY_CODE 拿
+    - `rows` 参数保留以备未来用（目前没有 git log 行需合并到 DCA 表，因为 DCA 不走 commit body）
+
+    为什么不依赖 git log：
+    - git log 只在 校准 事件里手动加了 "已买 ¥X" 行（numpy column 当时想统计"已买多少"）
+    - 但 DCA 的本体不是「买」而是「自动定投计划」，天天基金后台每天扣款，commit 注释跟 DCA 无关
+    - 真实数据源是 liubo 在 2026-10-17 提供的天天基金 DCA 计划详情截图
+    - 因此 DCA 表是「持仓里所有 DCA 计划的快照」，跟调仓表（git log 历史事件）语义不同
     """
-    dca_rows = [r for r in rows if r.action == "定投"]
-    if not dca_rows:
+    if not _DCA_SCHEDULE_BY_CODE:
         return []
 
-    rows_dict = [
-        {"date": r.date, "fund": r.fund, "action": r.action, "amount": r.amount}
-        for r in dca_rows
-    ]
+    rows_dict: list[dict[str, str]] = []
+    # 按 code 排序，输出稳定（016452 → 000614 → 000216 → 019172 → 019441）
+    for code in sorted(_DCA_SCHEDULE_BY_CODE.keys()):
+        schedule = _DCA_SCHEDULE_BY_CODE[code]
+        fund_name = get_fund_name(code)
+        date = _DCA_PLAN_START_BY_CODE.get(code, "—")
+        rows_dict.append({
+            "date": date,
+            "fund": fund_name,
+            "action": "定投",
+            "amount": _format_dca_amount(schedule),
+        })
+
     table: dict[str, object] = {
         "columns": [
             {"name": "date", "display_name": "日期", "data_type": "text", "width": "auto"},

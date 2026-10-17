@@ -1113,6 +1113,40 @@ class TestDcaRecordsSection:
                 f"fund={row['fund']!r} amount={row['amount']!r}"
             )
 
+    def test_dca_table_lists_all_5_funds(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """DCA 表展示 _DCA_SCHEDULE_BY_CODE 全部 5 只基金（不依赖 git log）。
+
+        liubo 2026-10-17 第二十五轮反馈 — 「黄金 + DAX 你为什么没进呢？」
+        之前只过滤 git log 里 action == "定投" 的行（只有 3 只 NDX），现在改成
+        直接遍历 _DCA_SCHEDULE_BY_CODE 全列。
+        """
+        from global_allocation.portfolio.card import _DCA_SCHEDULE_BY_CODE
+
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        candidates = [
+            t for t in card["elements"]
+            if t.get("tag") == "table"
+            and "date" in [c["name"] for c in t.get("columns", [])]
+            and "action" in [c["name"] for c in t.get("columns", [])]
+            and "amount" in [c["name"] for c in t.get("columns", [])]
+        ]
+        if len(candidates) < 2:
+            pytest.skip("DCA 表不存在（应该是 fallback path）")
+        dca_table = candidates[1]
+        # 必须有全部 5 只 DCA 基金（liubo 反馈「黄金 + DAX 你为什么没进呢」）
+        assert len(dca_table["rows"]) == len(_DCA_SCHEDULE_BY_CODE), (
+            f"DCA 表应有 {len(_DCA_SCHEDULE_BY_CODE)} 行（_DCA_SCHEDULE_BY_CODE 全部），"
+            f"实际 {len(dca_table['rows'])} 行"
+        )
+        # action 字段都是 "定投"
+        for row in dca_table["rows"]:
+            assert row["action"] == "定投", (
+                f"DCA 表所有行 action 应是 '定投'，实际 {row['action']!r}"
+            )
+
 
 class TestRemovedSections:
     """spec 096/097 移除的部分必须真的没了（第十九轮：Section 2 + Section 3 也都删了）。"""
