@@ -6,9 +6,11 @@ focus 在实盘持仓 = summary div + 大类资产柱状图 + 5 列聚合持仓�
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+import re
 
 import pytest
 
@@ -561,6 +563,127 @@ def _get_breakdown(journal: PortfolioJournal):
     journal_for_breakdown = journal
     _seed(journal_for_breakdown)  # ensure seeded
     return compute_breakdown(journal_for_breakdown)
+
+
+class TestRebalanceRecordsSection:
+    """第二十二轮（liubo 2026-10-17）调仓纪录 section — 表格版（4 列 = 日期/基金/动作/金额）。
+
+    关键设计：
+    - 基金列用 FUND_NAME_BY_CODE 显示中文名，不显示 code
+    - 多基金 commit body 的每条 `- ` 行 → 单独一行（不再把多只基金挤一起）
+    - 金额从 commit body 提取（建仓 N 仓 / ¥X / N 元 / +N 等）
+    - 不再有 "—" 占位符：fallback 用 "基金 <code>"
+    """
+
+    def _get_rebalance_table(
+        self, journal: PortfolioJournal,
+    ) -> dict[str, object]:
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        tables = [e for e in card["elements"] if e.get("tag") == "table"]
+        for t in tables:
+            cols = [c["name"] for c in t.get("columns", [])]
+            if "action" in cols and "amount" in cols:
+                return t
+        raise AssertionError("找不到调仓纪录 table")
+
+    def test_fund_column_uses_chinese_name_not_code(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """基金列用中文名（来自 FUND_NAME_BY_CODE），不用 raw 6 位 code。
+
+        liubo 2026-10-17 反馈："首先基金那一列不要用扣的，要用它的基金名称"。
+        """
+        table = self._get_rebalance_table(journal)
+        for row in table["rows"]:
+            fund = row.get("fund", "")
+            # 不能是纯 6 位 code（如 "013127"）
+            assert not re.fullmatch(r"\d{6}", fund), (
+                f"fund 列是 raw code: {fund!r}（应该用中文名）"
+            )
+            # 不能是 "—" 占位符（除非确实解析失败，理论上不会）
+            assert fund != "—", "fund 列出现 '—' 占位符（不应该有）"
+            # 应该包含中文（含 unicode ≥ 0x4E00）
+            assert any("\u4e00" <= ch <= "\u9fff" for ch in fund), (
+                f"fund 列不含中文: {fund!r}"
+            )
+
+    def test_amount_column_not_dash_when_commits_have_amounts(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """金额列在 commit body 含具体金额时不能是 "—"。
+
+        liubo 2026-10-17 反馈："金额你也不知道，这是为什么呢？这你应该知道呀"。
+        测试：从最近几个调仓 commit 的 body 里能读出来的金额，amount 列必须有值。
+        """
+        table = self._get_rebalance_table(journal)
+        rows = table["rows"]
+        # 至少要有一行 amount 不是 "—"（最近 5 个调仓 commit 里有大量 "10000 元" / "+1661" 等）
+        non_dash = [r for r in rows if r.get("amount") not in ("—", "")]
+        assert non_dash, (
+            "调仓纪录 amount 列全部是 '—'，但 commit body 里有具体金额（liubo 反馈" +
+            '"这你应该知道呀"）'
+        )
+
+    def test_multi_fund_commit_splits_into_multiple_rows(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """多基金 commit body 的每条 `- ` 行 → 单独一行。
+
+        liubo 2026-10-17 反馈："你不要把很多基金的变动放到一起...都是假仓，
+        这个应该是分成三行的"。
+
+        验证：调仓纪录表里同一个 commit date 至少出现一次 ≥3 行（同日 ≥3 rows
+        = body 里确实有 ≥3 个 `- 0xxxxx ...` 行）。
+        """
+        table = self._get_rebalance_table(journal)
+        rows = table["rows"]
+        # 按 date 分组
+        from collections import Counter
+        date_counts = Counter(r["date"] for r in rows)
+        # 至少有一个 date 有 ≥ 3 行（commit 2c36577 / 9e70495 / 8597945 等）
+        assert any(c >= 3 for c in date_counts.values()), (
+            f"没有 commit 拆成 ≥3 行：{dict(date_counts)}"
+            "（user feedback: 多基金 commit 应该拆成多行）"
+        )
+
+    def test_no_cross_portfolio_funds_leaked(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """调仓纪录不展示 ETF 轮动 / 红利策略 / 其他组合的基金。
+
+        liubo 2026-10-17 反馈 — global-allocation / dividend-strategy / etf-rotation
+        三个组合分开管理。已知跨组合基金 code: 010989 / 023917 / 457001 / 025682。
+        """
+        table = self._get_rebalance_table(journal)
+        for row in table["rows"]:
+            fund = row.get("fund", "")
+            # 不能出现跨组合 code（fund 列是中文名，但如果回退到 "基金 <code>" 格式，
+            # 或叙述里直接出现 code 也能被检出）
+            for code in ("010989", "023917", "457001", "025682"):
+                assert code not in fund, (
+                    f"调仓纪录混入跨组合基金 {code}：{fund!r}"
+                )
+
+    def test_no_index_only_doc_lines_promoted_to_rebalance(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """纯文档行（含指数代码 000698/399673 但无具体基金）不能被当作调仓。
+
+        例子：commit 00e9da2 fix 描述 `LAST_REBALANCE_BY_ETF 加 "000698" / "399673" →
+        date(2026, 10, 9)` —— 000698/399673 是 ETF 跟踪的指数代码，不是基金 code，
+        应该被过滤掉。
+        """
+        table = self._get_rebalance_table(journal)
+        for row in table["rows"]:
+            fund = row.get("fund", "")
+            # 不应出现 "基金 000698" 这种 fallback（000698 不在 FUND_NAME_BY_CODE）
+            assert not fund.startswith("基金 000698"), (
+                f"指数代码 000698 被当成基金: {fund!r}"
+            )
+            assert not fund.startswith("基金 399673"), (
+                f"指数代码 399673 被当成基金: {fund!r}"
+            )
 
 
 class TestRemovedSections:

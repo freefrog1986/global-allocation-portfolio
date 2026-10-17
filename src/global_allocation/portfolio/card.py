@@ -28,7 +28,23 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
-from global_allocation.portfolio.breakdown import SwensenClass, compute_breakdown, get_subclass
+from global_allocation.portfolio.breakdown import (
+    FUND_NAME_BY_CODE,
+    SwensenClass,
+    compute_breakdown,
+    get_fund_name,
+    get_subclass,
+)
+
+# 跨组合白名单：这些基金属于其他组合（ETF 轮动 / 红利策略 / 其他），不在大类资产配置 card 里展示
+# liubo 2026-10-17 反馈 — global-allocation / dividend-strategy / etf-rotation 三个组合分开管理
+# 历史基金（019524/020291/160422）虽然不在 COST_BASIS_BY_CODE，仍属于大类资产配置历史持仓 → 保留
+_CROSS_PORTFOLIO_EXCLUDE_CODES: frozenset[str] = frozenset({
+    "010989",   # 南方中证房地产 ETF 联接 E — ETF 轮动组合
+    "023917",   # 红利策略基金
+    "457001",   # 国富亚洲机会 — ETF 轮动组合
+    "025682",   # 红利策略基金
+})
 from global_allocation.portfolio.journal import PortfolioJournal
 from global_allocation.portfolio.models import (
     FundValuation,
@@ -328,13 +344,16 @@ def _build_cost_basis_section() -> list[dict[str, object]]:
 
 # ─── 第二十二轮（liubo 2026-10-17）：调仓纪录 section（独立，1-2 之间）───
 #
-# 关键词白名单：识别真实调仓 commit（按 subject 包含的关键词/模式）
-# - "校准/对账/转换/砍/新建仓/赎回/卖出/清仓/加仓" 等明确动作词
-# - "加 0xxxxx 基金代码"（6 位数字）= 加基金 = 建仓
-# - "扩 N 只 / 加 N 只" = 扩/加 N 只基金
-# - "调整" + 6 位基金代码 = 基金调整（建/加/减/换）
+# 关键设计：解析 commit body 而不是 subject（liubo 2026-10-17 反馈）：
+# - 基金名：FUND_NAME_BY_CODE 查 code → 中文全称（不再显示 "013127"）
+# - 多基金拆分：commit body 每条 `- 0xxxxx ...` 行 → 单独一行（不再把 3 笔放一起）
+# - 金额：commit body 里 liubo 写了具体金额（如 "10000 元" / "已买 ¥40" / "+1661"）→ 提取
+# - 无 "—" 占位符：每只基金一定显示名（fallback = "基金 <code>"，不编造）
 #
-# 不在白名单 = 视为调参/规则/卡片/docs，过滤掉（不展示给用户看）
+# 关键词白名单：识别真实调仓 commit（subject 含明确动作词）
+# - "校准/对账/转换/砍/新建仓/赎回/卖出/清仓/加仓" 等
+# - "加 0xxxxx" / "扩 N 只" / "调整" + 6 位基金代码
+# - 不在白名单 = 调参/规则/卡片/docs，过滤掉
 
 _REBALANCE_KEYWORDS: tuple[str, ...] = (
     # 关键词带空格避免误命中（"赎回费" 属于调仓规则，不是真实调仓）
@@ -342,122 +361,349 @@ _REBALANCE_KEYWORDS: tuple[str, ...] = (
     "加仓 ", "+1 仓", "−1 仓", "-1 仓",
 )
 
+
 def _is_rebalance_subject(subject: str) -> bool:
     """判断 commit subject 是否是真实调仓（白名单匹配）。"""
     for marker in _REBALANCE_KEYWORDS:
         if marker in subject:
             return True
-    # 加 0xxxxx 基金代码（6 位数字开头）= 加基金
     if re.search(r"加\s*?\d{6}", subject):
         return True
-    # 扩 N 只 / 加 N 只 模式
     if re.search(r"[扩加]\s*?\d+\s*?只", subject):
         return True
-    # "调整" + 6 位基金代码 = 调仓（建/加/减/换）
     if "调整" in subject and re.search(r"\d{6}", subject):
         return True
     return False
 
 
-def _parse_rebalance_row(subject: str) -> tuple[str, str, str]:
-    """从 commit subject 解析（基金, 动作, 金额）。
+@dataclass(frozen=True, slots=True)
+class RebalanceRow:
+    """调仓纪录里的一行。
 
-    返回：
-    - 基金：6 位数字基金代码（多个用 "/" 分隔），无则 "—"
-    - 动作：建仓/加仓/减仓/转换/砍仓/赎回/卖出/校准/对账/换基/扩仓（按优先级取第一个匹配）
-    - 金额：subject 提到 ¥/元/万 才填，否则 "—"
-
-    为什么这样解析（liubo 2026-10-17 反馈"简单点"）：
-    - subject 里很多信息（建仓 N 只、扩 N 只、换 N 只）没具体基金 code，无法精确定位
-    - 也不编造 — 解析不到就填 "—"，让用户能看 commit hash 查详情
-    - 金额同理：commit subject 多数没金额，编金额就是误导
-
-    动作优先级：先匹配更具体（"新建仓"/"校准"），再匹配通用（"加"/"换"）。
+    Fields:
+    - date: commit 日期（YYYY-MM-DD）
+    - fund: 基金显示文本（1 只 = name，转换/换基 = "<from_name> → <to_name>"）
+    - action: 中文动作标签（建仓 / 加仓 / 减仓 / 转换 / 砍仓 / 赎回 / 卖出 / 校准 / 对账 / 换基 / 扩仓）
+    - amount: 金额显示（"10000 元" / "+40" / "已买 ¥40" / "建仓 1 仓 / 10000 元" / "+1661 CNY" / ...）
     """
-    # 基金 codes：6 位数字 + 前置 0（避免日期 2026-10-09 干扰 → 2026-10-09 整体是 8 位，
-    # 但 2026-10 不是 6 位；2026-10-09 = 20261009 整体 8 位也不会命中 0\d{5}）
-    # 0\d{5} 匹配 6 位以 0 开头 — 基金代码通常 6 位且以数字开头
-    codes = re.findall(r"(?<!\d)0\d{5}", subject)
-    # 过滤：保留成本校准等 commit 里 015736/008505 等真基金代码，
-    # 但 0\d{5} 也可能匹配 commit 里 "01" 这样的短码 — 不存在，全是 6 位
-    fund_str = "/".join(codes) if codes else "—"
+    date: str
+    fund: str
+    action: str
+    amount: str
 
-    # 金额（¥ + 数字 + 元/万，可选小数点和千分位）
-    amount_match = re.search(r"[¥￥]\s?(\d+(?:,\d{3})*(?:\.\d+)?)\s?[元万]?", subject)
-    amount = amount_match.group(0).strip() if amount_match else "—"
 
-    # 动作（按优先级匹配，第一个命中胜出）
-    action = "其他"
-    action_patterns = [
-        # 具体动作优先
-        ("新建仓", "新建仓"),
-        ("成本校准", "成本校准"),
-        ("实盘对账", "实盘对账"),
+def _resolve_fund_display(line: str) -> str:
+    r"""把 `- 0xxxxx 基金名 ... → 0yyyyy 目标基金名 ...` 行解析成基金显示。
+
+    模式识别：
+    - 1 个 code + 名称 + 描述：显示 name
+    - 2 个 codes（A → B）：显示 "<from_name> → <to_name>"
+    - 3+ codes: 取前两个 (一般不会发生)
+    - 0 codes：fallback "基金 —"（理论上不会发生 — _parse_rebalance_line 提前过滤）
+
+    数字用 \d{6} 6 位匹配（不强制 0 前缀，覆盖 519981/110017 等非 0 开头 code），
+    lookbehind (?<!\d) 避免日期 2026-10 之类误命中。
+    """
+    codes = re.findall(r"(?<!\d)\d{6}", line)
+    if not codes:
+        return "基金 —"
+    if len(codes) == 1:
+        return get_fund_name(codes[0])
+    from_name = get_fund_name(codes[0])
+    to_name = get_fund_name(codes[1])
+    return f"{from_name} → {to_name}"
+
+
+def _resolve_action(line: str, subject: str) -> str:
+    """从 `- ` 行 + commit subject 推断动作标签。
+
+    优先级（行内信号更具体）：
+    1. 行内 "（... 转换 NNNN 份 ...）" → 转换
+    2. 行内 "建仓 N 仓" + 行内 ≥2 个 code → 换基；否则 → 建仓
+    3. 行内 ":N → M"（支持 ASCII : 和中文 ：）→ 校准
+    4. 行内 "→" + ≥2 code → 换基
+    5. 行内 "−N 仓" / "-N 仓" → 减仓
+    6. 行内 "+N 仓" → 加仓
+    7. 行内以 "- 加 0xxxxx" 开头（liubo 拍板 "加" 系列）→ 加仓
+    8. 行内以 "- 卖出 " 开头 → 卖出
+    9. 行内以 "- 砍 " 开头 → 砍仓
+    10. 行内 "赎回 " → 赎回
+    11. 兜底：subject 关键字
+    """
+    # 行级优先
+    if "转换" in line and re.search(r"\d+\s*份", line):
+        return "转换"
+    if re.search(r"建仓\s*\d+\s*仓", line):
+        if "→" in line and len(re.findall(r"(?<!\d)\d{6}", line)) >= 2:
+            return "换基"
+        return "建仓"
+    # 校准：支持 ASCII : 和中文 ：（liubo 在 commit 里两种都用）
+    if re.search(r"[:：]\s*\d[\d,]*\s*→\s*\d[\d,]*", line):
+        return "校准"
+    if "→" in line and len(re.findall(r"(?<!\d)\d{6}", line)) >= 2:
+        return "换基"
+    # 加仓 / 减仓：先看 ± N 仓，避免误匹配校准里的 "→ N → M"
+    if re.search(r"[−-]\s*\d+\s*仓", line):
+        return "减仓"
+    if re.search(r"\+\s*\d+\s*仓", line):
+        return "加仓"
+    # liubo 拍板 "- 加 0xxxxx 基金名" 系列 → 加仓（常见于加仓 / 建仓混用的 commit）
+    if re.search(r"-\s+加\s+(?:\d{6}|基金)", line):
+        return "加仓"
+    # 行内以 "- 卖出 " 开头 → 卖出
+    if re.search(r"-\s+卖出\s", line):
+        return "卖出"
+    if re.search(r"-\s+砍\s", line):
+        return "砍仓"
+    if "赎回 " in line:
+        return "赎回"
+
+    # subject 兜底
+    for kw, label in (
+        ("实盘对账", "对账"),
+        ("成本校准", "校准"),
         ("校准", "校准"),
+        ("对账", "对账"),
+        ("新建仓", "新建仓"),
+        ("建仓", "建仓"),
         ("转换", "转换"),
-        ("砍", "砍仓"),
+        ("赎回 ", "赎回"),
+        ("卖出 ", "卖出"),
+        ("加仓 ", "加仓"),
         ("+1 仓", "加仓"),
         ("−1 仓", "减仓"),
         ("-1 仓", "减仓"),
-        # 通用动作（带空格避免误命中 — "赎回费" 算规则不是赎回）
-        ("赎回 ", "赎回"),
-        ("卖出 ", "卖出"),
-        ("扩", "扩仓"),  # 扩 N 只基金
-        ("换 ", "换基"),  # 换 N 只基金
-        ("加 0", "加仓"),  # 加 0xxxxx 基金代码
-        ("加 ", "加仓"),  # 加 N 只基金
-    ]
-    for pat, label in action_patterns:
-        if pat in subject:
-            action = label
+        ("砍", "砍仓"),
+        ("换 ", "换基"),
+        ("加 0", "加仓"),
+        ("加 ", "加仓"),
+    ):
+        if kw in subject:
+            return label
+    return "调仓"
+
+
+def _resolve_amount(line: str) -> str:
+    """从 `- ` 行提取金额显示。
+
+    优先级：
+    1. 括号里的金额描述（"已买 ¥60" / "+40" / "10000 元，转换 8379 份" / "成本 20 收回现金"）
+       — 直接用括号片段（截断 30 字符避免列过宽）
+    2. 行内的 "建仓 N 仓 = X CNY" / "±N 仓" / "¥X" / "X CNY" / "X 元"
+
+    解析不到 → "—"（不编造）。
+    """
+    # 优先级 1：括号片段（liubo 总是把关键金额放在括号里）
+    # 用 Chinese fullwidth parens
+    paren_matches = re.findall(r"（([^（）]+)）", line)
+    for seg in paren_matches:
+        # 跳过 "（PE 19.69% < 20% 触发深价值）" 这种纯描述段
+        is_pure_desc = any(kw in seg for kw in ("PE", "分位", "触发", "占位", "收回现金"))
+        # 「成本 20 收回现金」算数据（"20" + "收回现金"）— 优先显示
+        has_cost_kw = "成本" in seg and "收回" in seg
+        has_money_signal = (
+            re.search(r"[+\-−]?\s*\d", seg) is not None
+            and any(kw in seg for kw in ("元", "¥", "￥", "CNY", "+", "-", "−", "已买", "份", "仓", "%", "成本", "净"))
+        )
+        if is_pure_desc and not has_cost_kw:
+            continue
+        if not has_money_signal:
+            continue
+        # 跳过 "（赚 N%）" 这种纯百分比描述
+        if re.fullmatch(r"\s*[+\-−]?\s*\d[\d,.]*\s*%\s*", seg):
+            continue
+        cleaned = seg.strip()
+        # 截断 30 字符（飞书 table 列宽有限）
+        return cleaned[:30]
+
+    # 优先级 2：行内 "建仓 N 仓 = X CNY" 格式
+    build_match = re.search(
+        r"建仓\s*(\d+)\s*仓(?:\s*=\s*([+\-−]?\s*\d[\d,]*(?:\.\d+)?\s*(?:元|万|CNY|¥|￥)?))?",
+        line,
+    )
+    if build_match and build_match.group(2):
+        return f"建仓 {build_match.group(1)} 仓 / {build_match.group(2).strip()}"
+
+    # 优先级 3：行内 ±N 仓（加减仓）
+    posn_match = re.search(r"([+\-−])\s*(\d+)\s*仓", line)
+    if posn_match:
+        sign = "+" if posn_match.group(1) == "+" else "-"
+        return f"{sign}{posn_match.group(2)} 仓"
+
+    # 优先级 4：行内 ¥/CNY/元 数字
+    money_match = re.search(r"[¥￥]\s*\d[\d,]*(?:\.\d+)?(?:\s*(?:元|万|CNY))?", line)
+    if money_match:
+        return money_match.group(0).strip()
+    cny_match = re.search(r"\d[\d,]*(?:\.\d+)?\s*CNY", line)
+    if cny_match:
+        return cny_match.group(0).strip()
+
+    return "—"
+
+
+def _parse_rebalance_line(line: str, subject: str) -> RebalanceRow | None:
+    """单条 `- 0xxxxx ...` 行 → RebalanceRow。无 code 也不在白名单 → None。
+
+    行必须以 `- ` 开头 + 含 6 位基金代码（不一定以 0 开头 — 519981/110017/160422 等也合法），
+    否则视为注释/标题行（跳过）。
+
+    文档行过滤（commit body 描述代码改动时也用 `- ` 格式）：
+    - 代码被引号包裹（如 `"000698"` / `'399673'`）→ 描述上下文，跳过
+    - 代码后跟着 Chinese fund name（"平安中短债"）→ 真实调仓
+    - 代码后跟着 ` → date(...)` 或变量名 → 文档上下文，跳过
+    """
+    stripped = line.strip()
+    if not stripped.startswith("- "):
+        return None
+    # 6 位数字基金代码 — 不用前缀 0（519981/110017/160422 等非 0 开头的也合法）
+    code_positions = [m.start() for m in re.finditer(r"(?<!\d)\d{6}", stripped)]
+    if not code_positions:
+        return None
+    # 过滤：被引号包裹的 6 位数字（描述上下文，不是真实调仓）
+    for pos in code_positions:
+        before = stripped[max(0, pos - 1):pos]
+        after_char = stripped[pos + 6:pos + 7]
+        if before in ('"', "'", "`") or after_char in ('"', "'", "`"):
+            return None
+    # 过滤：代码后没 Chinese 字符 + 没另一个 6 位数字（不像基金描述）
+    has_fund_name = False
+    for pos in code_positions:
+        # 检查 code 后 ~20 字符内是否有 Chinese 字符
+        tail = stripped[pos + 6:pos + 30]
+        if re.search(r"[\u4e00-\u9fff]", tail):
+            has_fund_name = True
             break
+        # 如果有另一个 6 位数字（→ 后跟另一只基金），也算 fund context
+        if re.search(r"(?<!\d)\d{6}", tail):
+            has_fund_name = True
+            break
+    if not has_fund_name:
+        return None
 
-    return fund_str, action, amount
+    # 过滤：所有 6 位数字都不在 FUND_NAME_BY_CODE — 是指数代码/版本号/日期等描述上下文
+    # 例：`补 test_... "000698" / "399673" → date(2026, 10, 9)` 这种行
+    # 000698/399673 是 ETF 跟踪的指数代码（不在 fund 表里），不是真实调仓
+    actual_fund_codes = [m.group() for m in re.finditer(r"(?<!\d)\d{6}", stripped)
+                         if m.group() in FUND_NAME_BY_CODE]
+    if not actual_fund_codes:
+        return None
+
+    fund = _resolve_fund_display(stripped)
+    action = _resolve_action(stripped, subject)
+    amount = _resolve_amount(stripped)
+    return RebalanceRow(
+        date="",  # 由 caller 填
+        fund=fund,
+        action=action,
+        amount=amount,
+    )
 
 
-def _build_rebalance_records_section(limit: int = 10) -> list[dict[str, object] | None]:
+def _build_rebalance_records_section(limit: int = 20) -> list[dict[str, object] | None]:
     """Section 1.5 — 调仓纪录表格版（liubo 2026-10-17 改：4 列 = 日期/基金/动作/金额）。
 
-    从 git log 抓最近 N*3 条 commit，按 _is_rebalance_subject 过滤出真实调仓，
-    用 _parse_rebalance_row 解析每行成 (基金, 动作, 金额)，渲染成 4 列表。
+    从 git log 抓最近 N*4 条 commit 详细记录（subject + body），按 _is_rebalance_subject
+    过滤出真实调仓，每条 commit body 按 `- 0xxxxx ...` 行拆成多行 — 多基金 commit 自动展开
+    （如 8597945 "14 只基金成本校准" 14 行、2c36577 "卖出+加+建" 3 行）。
 
     无调仓 commit → 返回空 list（不渲染）。
+
+    为什么用 `%x00|<hash>|%x00END%x00` 包裹每条 commit：
+    git log 的 `%b` 在 body 末尾加换行但不加分隔符，所以用纯 `\x00` 拆 4-field
+    结构会偏移（因为 body 内部可能含 `\n`）。用 START/END 包裹后 split('\x00')
+    切片能精确还原每个 commit 的字段。
     """
     import subprocess
 
     try:
         proc = subprocess.run(
             ["git", "-C", str(Path(__file__).resolve().parents[3]),
-             "log", "--pretty=format:%h %ai %s", f"-{limit * 3}"],
+             "log", "--pretty=format:%x00REC%x00%H%x00%ai%x00%s%x00%b%x00END%x00",
+             f"-{limit * 4}"],
             capture_output=True,
             text=True,
             timeout=5,
             check=True,
         )
-        lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
         return []
 
-    if not lines:
+    commits: list[dict[str, str]] = []
+    for block in proc.stdout.split("\x00REC\x00"):
+        # block 形如 "<hash>\0<date>\0<subject>\0<body>\0END\0\n"
+        # 第一个 block 是空字符串（最前面有 \x00REC），跳过
+        if not block:
+            continue
+        parts = block.split("\x00")
+        # 期望结构: hash, date, subject, body, "END", trailing
+        if len(parts) < 5:
+            continue
+        if parts[4] != "END":
+            # 没找到 END 标记 → 不是合法 commit block（可能截断）
+            continue
+        commits.append({
+            "hash": parts[0],
+            "date": parts[1],
+            "subject": parts[2],
+            "body": parts[3],
+        })
+        if len(commits) >= limit * 4:
+            break
+
+    if not commits:
+        return []
+
+    if not commits:
         return []
 
     rows: list[dict[str, object]] = []
-    for ln in lines:
-        # 格式: "{hash} {YYYY-MM-DD HH:MM:SS +ZZZZ} {subject}"
-        parts = ln.split(" ", 3)
-        if len(parts) < 4:
-            continue
-        _, date_str, _, subject = parts
+    for commit in commits:
+        subject = commit["subject"]
         if not _is_rebalance_subject(subject):
             continue
-        date_short = date_str[:10]
-        fund, action, amount = _parse_rebalance_row(subject)
-        rows.append({
-            "date": date_short,
-            "fund": fund,
-            "action": action,
-            "amount": amount,
-        })
+        date_short = commit["date"][:10]
+        body = commit["body"]
+
+        # 每条 `- 0xxxxx ...` 行 → 1 row
+        # 跨组合过滤（按行）：spec 022 card 只展示 global-allocation 调仓；ETF 轮动 /
+        # 红利策略 / 其他组合的行跳过（liubo 2026-10-17 反馈 — 三个组合分开管理）
+        body_rows: list[RebalanceRow] = []
+        for line in body.splitlines():
+            rb = _parse_rebalance_line(line, subject)
+            if rb is None:
+                continue
+            # 提取行内第一个基金 code，判定是否属于其他组合
+            line_codes = re.findall(r"(?<!\d)\d{6}", line)
+            if line_codes and line_codes[0] in _CROSS_PORTFOLIO_EXCLUDE_CODES:
+                continue
+            body_rows.append(rb)
+
+        # 没有任何 `- ` 行 → fallback 用 subject 解析出 1 row（避免漏掉 subject-only commit）
+        if not body_rows:
+            fallback_fund, fallback_action, fallback_amount = _parse_subject_fallback(subject)
+            # fallback 也找不到具体基金 code（subject 是描述/fix 而非真调仓）→ 跳过
+            # 例：`fix(022): 补 2026-10-09 新建仓 2 个 ETF ...` — 描述历史动作的 fix，不是新调仓
+            if not re.search(r"(?<!\d)\d{6}", fallback_fund):
+                continue
+            body_rows.append(
+                RebalanceRow(
+                    date="",
+                    fund=fallback_fund,
+                    action=fallback_action,
+                    amount=fallback_amount,
+                )
+            )
+
+        # 同一 commit 多行 → 补日期 + 加进 rows
+        for rb in body_rows:
+            rows.append({
+                "date": date_short,
+                "fund": rb.fund,
+                "action": rb.action,
+                "amount": rb.amount,
+            })
+            if len(rows) >= limit:
+                break
         if len(rows) >= limit:
             break
 
@@ -485,6 +731,40 @@ def _build_rebalance_records_section(limit: int = 10) -> list[dict[str, object] 
             **table,
         },
     ]
+
+
+def _parse_subject_fallback(subject: str) -> tuple[str, str, str]:
+    """commit body 没有 `- ` 行时的 fallback — 直接从 subject 解析。
+
+    与旧版 _parse_rebalance_row 等价，但用 fund_name 而非 code。保留向后兼容：
+    - subject-only commit（如很老的 commit）也能渲染
+    - subject 含 "校准 14 只基金" 但没具体 code → 显示 fallback
+    """
+    codes = re.findall(r"(?<!\d)\d{6}", subject)
+    if codes:
+        fund = " / ".join(get_fund_name(c) for c in codes)
+    else:
+        # 没 code 时显示 subject 摘要的前 30 字
+        fund = subject[:30] + ("..." if len(subject) > 30 else "")
+    action = "调仓"  # 没有足够信号时用通用 "调仓"
+    action_patterns = [
+        ("新建仓", "新建仓"), ("成本校准", "成本校准"), ("实盘对账", "实盘对账"),
+        ("校准", "校准"), ("对账", "对账"), ("转换", "转换"), ("建仓", "建仓"),
+        ("加仓 ", "加仓"), ("+1 仓", "加仓"),
+        ("−1 仓", "减仓"), ("-1 仓", "减仓"),
+        ("赎回 ", "赎回"), ("卖出 ", "卖出"), ("砍", "砍仓"),
+        ("加 0", "加仓"), ("加 ", "加仓"), ("换 ", "换基"),
+    ]
+    for pat, label in action_patterns:
+        if pat in subject:
+            action = label
+            break
+
+    # 金额
+    amount_match = re.search(r"[¥￥]\s?\d[\d,]*(?:\.\d+)?\s?[元万]?", subject)
+    amount = amount_match.group(0).strip() if amount_match else "—"
+
+    return fund, action, amount
 
 
 # ─── Per-fund 估值指标策略（spec 098 第二十七轮）───
@@ -1632,7 +1912,8 @@ def build_portfolio_card(
 
     # Section 1.5: 调仓纪录（liubo 2026-10-17）— 在 Section 1 和 Section 2 之间
     # 数据来源：git log，按 _is_rebalance_subject 过滤掉调参/规则/卡片/docs
-    rebalance_section = _build_rebalance_records_section(limit=10)
+    # limit=20 是因为一个 commit 可能拆出多行（如 8597945 14 只基金 / 9e70495 3 笔转换）
+    rebalance_section = _build_rebalance_records_section(limit=20)
     if rebalance_section:
         elements.append({"tag": "hr"})
         elements.extend(rebalance_section)

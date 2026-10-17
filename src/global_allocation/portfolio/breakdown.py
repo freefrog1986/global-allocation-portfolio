@@ -123,13 +123,8 @@ SUBCLASS_BY_CODE: dict[str, SwensenClass] = {
     "019857": SwensenClass.CN_EQUITY,  # 博时上证科创板100ETF联接A（2026-10-09 拍板换掉 020291，建仓 1 仓）
     "023414": SwensenClass.CN_EQUITY,  # 工银创业板50ETF联接A（2026-10-09 拍板换掉 160422，建仓 1 仓）
     # 港股 (1) - 2026-09-29 liubo 把 013127 从 ETF 轮动组合转过来，跟踪恒生科技 HSTECH
-    "013127": SwensenClass.HK_EQUITY,  # 汇添富恒生科技 ETF 联接发起式(QDII)A（第二十二轮从 ETF 轮动组合转过来）
+    "013127": SwensenClass.HK_EQUITY,  # 汇添富恒生科技 ETF 联接发起式(QDII)A
     # 美股股票 (7 宽基) - 519981 标普100 + 017641 标普500 + 5 只纳100
-    # 2026-09-29 liubo 卖出 019524（华泰柏瑞纳 100 联接），8 → 7
-    # 2026-09-29 liubo 确认 539001 是直接 QDII 场外（不是场内 ETF，天天基金可买）
-    # 第二十轮（liubo 2026-09-29）：加 019172 摩根纳斯达克100指数(QDII)人民币A
-    # 直接 QDII（非联接），替代联接作为新加仓渠道；DCA ¥10/天 → 1 仓目标
-    # 第二十一轮（liubo 2026-09-29）：加 019441 万家纳斯达克100指数发起式(QDII)A — 双只备份
     "519981": SwensenClass.US_EQUITY,  # 长信标普100
     "018966": SwensenClass.US_EQUITY,  # 汇添富纳100（联接基金）
     "539001": SwensenClass.US_EQUITY,  # 建信纳斯达克100指数(QDII)A人民币（直接 QDII 场外）
@@ -137,37 +132,31 @@ SUBCLASS_BY_CODE: dict[str, SwensenClass] = {
     "016452": SwensenClass.US_EQUITY,  # 南方纳100（第十九轮补回）
     "019172": SwensenClass.US_EQUITY,  # 摩根纳斯达克100指数(QDII)人民币A（第二十轮加）
     "019441": SwensenClass.US_EQUITY,  # 万家纳斯达克100指数发起式(QDII)A（第二十一轮加）
-    # 国外发达市场股票 (1) - liubo 2026-09-22 移 457001 到 ETF 轮动组合后为 0，
-    # 2026-09-29 第二十四轮 liubo 把 000614 华安 DAX 联接 A 加回来（支付宝慧定投 250-1000 元/周，
-    # 平均 500，目标累计 10000 CNY = 1 仓自动暂停，跟踪法兰克福 DAX 指数 = .GDAXI），
-    # PE 16.90 / 分位 47.1% < 50% → BUILD
-    "000614": SwensenClass.FOREIGN_DM_EQUITY,  # 华安德国(DAX)联接(QDII)A（第二十四轮加，慧定投凑 1 仓）
-    # 新兴市场股票 (1) - MSCI Emerging Markets 总回报
+    # 国外发达市场股票 (1)
+    "000614": SwensenClass.FOREIGN_DM_EQUITY,  # 华安德国(DAX)联接(QDII)A
+    # 新兴市场股票 (1) - MSCI Emerging Markets
     "378006": SwensenClass.EM_EQUITY,  # 摩根全球新兴市场
-    # REITs (2) — lixinger 无指数估值数据，per-fund 表显示"数据缺失"
+    # REITs (2) — lixinger 无指数估值数据
     "028277": SwensenClass.CN_REIT,  # 华夏中证REITs全收益
     "160140": SwensenClass.US_REIT,  # 南方道琼斯美国精选REIT
-    # 国内利率债 (23) - 含原国内信用债 2 只（解锁）+ 第十九轮新 7 只 + 移来 1 只（007997）
-    # 第十九轮解锁（不再按现金）：008505 / 004827
-    "008505": SwensenClass.CN_GOV_BOND,  # 浙商中短债A（第十九轮解锁，不再按现金）
-    "004827": SwensenClass.CN_GOV_BOND,  # 平安中短债（第十九轮解锁，不再按现金）
+    # 国内利率债 (23)
+    "008505": SwensenClass.CN_GOV_BOND,  # 浙商中短债A
+    "004827": SwensenClass.CN_GOV_BOND,  # 平安中短债
     "003547": SwensenClass.CN_GOV_BOND,  # 鹏华丰禄
     "000931": SwensenClass.CN_GOV_BOND,  # 国寿安保尊益信用纯债
-    "007520": SwensenClass.CN_GOV_BOND,  # 富安达富利纯债A（liubo 2026-09-22）
-    "006829": SwensenClass.CN_GOV_BOND,  # 鹏扬利沣短债A（liubo 2026-09-22）
-    "008333": SwensenClass.CN_GOV_BOND,  # 景顺长城弘利39个月定开债（liubo 2026-09-22）
-    "015736": SwensenClass.CN_GOV_BOND,  # 长盛盛裕纯债D（liubo 2026-09-22）
-    "017837": SwensenClass.CN_GOV_BOND,  # 博时中债7-10年政金债指数A（liubo 2026-09-22）
-    "001512": SwensenClass.CN_GOV_BOND,  # 易方达中债3-5年期国债指数（liubo 2026-09-22）
-    "485119": SwensenClass.CN_GOV_BOND,  # 工银信用纯债债券A（liubo 2026-09-22）
-    "010653": SwensenClass.CN_GOV_BOND,  # 农银汇理金玉债券（liubo 2026-09-22，9-24 分红）
-    "202103": SwensenClass.CN_GOV_BOND,  # 南方多利增强债券A（liubo 2026-09-22）
-    "519753": SwensenClass.CN_GOV_BOND,  # 交银安心收益债券A（liubo 2026-09-22）
-    "002490": SwensenClass.CN_GOV_BOND,  # 金鹰元祺债券A（liubo 2026-09-22）
-    "010742": SwensenClass.CN_GOV_BOND,  # 南方宁悦一年持有期混合A（liubo 2026-09-22 确认归利率债）
-    # 第十九轮从红利策略组合移过来
+    "007520": SwensenClass.CN_GOV_BOND,  # 富安达富利纯债A
+    "006829": SwensenClass.CN_GOV_BOND,  # 鹏扬利沣短债A
+    "008333": SwensenClass.CN_GOV_BOND,  # 景顺长城弘利39个月定开债
+    "015736": SwensenClass.CN_GOV_BOND,  # 长盛盛裕纯债D
+    "017837": SwensenClass.CN_GOV_BOND,  # 博时中债7-10年政金债指数A
+    "001512": SwensenClass.CN_GOV_BOND,  # 易方达中债3-5年期国债指数
+    "485119": SwensenClass.CN_GOV_BOND,  # 工银信用纯债债券A
+    "010653": SwensenClass.CN_GOV_BOND,  # 农银汇理金玉债券
+    "202103": SwensenClass.CN_GOV_BOND,  # 南方多利增强债券A
+    "519753": SwensenClass.CN_GOV_BOND,  # 交银安心收益债券A
+    "002490": SwensenClass.CN_GOV_BOND,  # 金鹰元祺债券A
+    "010742": SwensenClass.CN_GOV_BOND,  # 南方宁悦一年持有期混合A
     "007997": SwensenClass.CN_GOV_BOND,  # 易方达年年恒秋一年定开债A
-    # 第十九轮新增 7 只中债
     "004534": SwensenClass.CN_GOV_BOND,  # 汇添富双盈回报一年持有债A
     "110017": SwensenClass.CN_GOV_BOND,  # 易方达增强回报债券A
     "009625": SwensenClass.CN_GOV_BOND,  # 天弘中债3-5年政策性金融债指数发起A
@@ -175,13 +164,13 @@ SUBCLASS_BY_CODE: dict[str, SwensenClass] = {
     "400030": SwensenClass.CN_GOV_BOND,  # 东方添益债券
     "010942": SwensenClass.CN_GOV_BOND,  # 招商瑞乐6个月持有期混合A
     "008420": SwensenClass.CN_GOV_BOND,  # 广发招泰A
-    # 美债 (6) - 全 USD 计价 + liubo 2026-09-22 截图新增 3 只 QDII 全球债
-    "100050": SwensenClass.US_BOND,  # 富国全球债券（实际 100% 美国国债）
+    # 美债 (6)
+    "100050": SwensenClass.US_BOND,  # 富国全球债券
     "007360": SwensenClass.US_BOND,  # 易方达中短期美元债
     "003385": SwensenClass.US_BOND,  # 工银全球美元债
-    "002286": SwensenClass.US_BOND,  # 中银美元债债券(QDII)人民币A（liubo 2026-09-22 确认归美债）
-    "000290": SwensenClass.US_BOND,  # 鹏华全球高收益债(QDII)（liubo 2026-09-22）
-    "501300": SwensenClass.US_BOND,  # 海富通全球收益债券人民币（liubo 2026-09-22）
+    "002286": SwensenClass.US_BOND,  # 中银美元债债券(QDII)人民币A
+    "000290": SwensenClass.US_BOND,  # 鹏华全球高收益债(QDII)
+    "501300": SwensenClass.US_BOND,  # 海富通全球收益债券人民币
     # 商品 (1)
     "000216": SwensenClass.COMMODITY,  # 华安黄金ETF联接A
     # 现金 (1)
@@ -192,6 +181,114 @@ SUBCLASS_BY_CODE: dict[str, SwensenClass] = {
 def get_subclass(fund_code: str) -> SwensenClass | None:
     """查某只基金属于哪个子类。未知返回 None（不影响其它基金的统计）。"""
     return SUBCLASS_BY_CODE.get(fund_code)
+
+
+# ─── FUND_NAME_BY_CODE — 基金 code → 中文名（调仓纪录渲染 / 卡片基金列显示）───
+#
+# 第二十二轮新增（liubo 2026-10-17 反馈"基金列不要用 code"）：调仓纪录的"基金"列改用
+# 中文名（"汇添富恒生科技 ETF 联接发起式(QDII)A" 而不是 "013127"）。
+#
+# 数据来源：
+# - cost_basis.py 注释（最完整 — 含每只基金的简称/全称/历史转换）
+# - breakdown.py 注释（验证一致）
+# - 历史 commit body（liubo 写的 `- 0xxxxx 基金名` 行）—— 020291 / 160422 / 019524
+#   已不在 cost_basis.py，但调仓纪录历史行需要显示名称 → 单独收录
+#
+# 命名约定：保留 liubo 在 commit body 写的中文全称（带括号修饰），
+#           去掉首个空格、调整标点（避免过宽）
+#
+# 注意：历史 019524 已卖出，020291 / 160422 已替换 — 这 3 只不进 SUBCLASS_BY_CODE，
+#       但 FUND_NAME_BY_CODE 仍保留以便历史调仓行能正确显示基金名。
+FUND_NAME_BY_CODE: dict[str, str] = {
+    # A 股股票 (9 宽基)
+    "013310": "华夏科创创业50",
+    "022434": "南方中证A500",
+    "017644": "博道中证1000指数增强",
+    "022424": "广发中证A500",
+    "014532": "易方达MSCI中国A50",
+    "022448": "国泰中证A500ETF发起联接A",
+    "011612": "华夏科创50ETF联接A",
+    "019857": "博时上证科创板100ETF联接A",
+    "023414": "工银创业板50ETF联接A",
+    # 港股 (1)
+    "013127": "汇添富恒生科技 ETF 联接发起式(QDII)A",
+    # 美股股票 (7 宽基)
+    "519981": "长信标普100",
+    "018966": "汇添富纳100",
+    "539001": "建信纳斯达克100指数(QDII)A人民币",
+    "017641": "摩根标普500",
+    "016452": "南方纳100",
+    "019172": "摩根纳斯达克100指数(QDII)人民币A",
+    "019441": "万家纳斯达克100指数发起式(QDII)A",
+    # 国外发达 (1)
+    "000614": "华安德国(DAX)联接(QDII)A",
+    # 新兴市场 (1)
+    "378006": "摩根全球新兴市场",
+    # REITs (2)
+    "028277": "华夏中证REITs全收益",
+    "160140": "南方道琼斯美国精选REIT",
+    # 国内利率债 (23)
+    "008505": "浙商中短债A",
+    "004827": "平安中短债",
+    "003547": "鹏华丰禄",
+    "000931": "国寿安保尊益信用纯债",
+    "007520": "富安达富利纯债A",
+    "006829": "鹏扬利沣短债A",
+    "008333": "景顺长城弘利39个月定开债",
+    "015736": "长盛盛裕纯债D",
+    "017837": "博时中债7-10年政金债指数A",
+    "001512": "易方达中债3-5年期国债指数",
+    "485119": "工银信用纯债债券A",
+    "010653": "农银汇理金玉债券",
+    "202103": "南方多利增强债券A",
+    "519753": "交银安心收益债券A",
+    "002490": "金鹰元祺债券A",
+    "010742": "南方宁悦一年持有期混合A",
+    "007997": "易方达年年恒秋一年定开债A",
+    "004534": "汇添富双盈回报一年持有债A",
+    "110017": "易方达增强回报债券A",
+    "009625": "天弘中债3-5年政策性金融债指数发起A",
+    "005690": "中银安享债券A",
+    "400030": "东方添益债券",
+    "010942": "招商瑞乐6个月持有期混合A",
+    "008420": "广发招泰A",
+    # 美债 (6)
+    "100050": "富国全球债券",
+    "007360": "易方达中短期美元债",
+    "003385": "工银全球美元债",
+    "002286": "中银美元债债券(QDII)人民币A",
+    "000290": "鹏华全球高收益债(QDII)",
+    "501300": "海富通全球收益债券人民币",
+    # 商品 (1)
+    "000216": "华安黄金ETF联接A",
+    # 现金 (1)
+    "004137": "博时合惠货币B",
+    # ─── 历史已替换/已卖出的基金（不在 SUBCLASS_BY_CODE，但调仓纪录历史行仍要显示名）───
+    "019524": "华泰柏瑞纳 100 联接",        # 2026-09-29 卖出
+    "020291": "华夏科创100ETF联接A",        # 2026-10-09 被 019857 替换
+    "160422": "华安创业板50ETF联接A",       # 2026-10-09 被 023414 替换
+    # ─── 跨组合（ETF 轮动组合里也出现过）───
+    "010989": "南方中证房地产 ETF 联接 E",  # 2026-09-30 加到 ETF 轮动组合（房地产类别）
+    "004098": "港股 ETF 联接（已不在大类资产配置）",  # 第十八轮砍
+    "006809": "港股 ETF 联接（已不在大类资产配置）",  # 第十八轮砍
+    "014673": "港股 ETF 联接（已不在大类资产配置）",  # 第十八轮砍
+    "005561": "红利低波（已不在大类资产配置）",         # 第十八轮砍
+    "007605": "红利低波（已不在大类资产配置）",         # 第十八轮砍
+    "008114": "红利低波（已不在大类资产配置）",         # 第十八轮砍
+}
+
+
+def get_fund_name(fund_code: str) -> str:
+    """查某只基金的中文名。未知返回 fallback "code 0xxxxx"（每只基金一定有 code，不会是 "—"）。
+
+    为什么 fallback 用 code 而不是 "—"（liubo 2026-10-17 反馈"每只基金都有 code，没有 -"）：
+    - 解析 commit body 时偶尔遇到 SUBCLASS/FUND_NAME 都没覆盖到的 6 位 code
+      （罕见：新买入但还没录入 breakdown 的基金）
+    - fallback 用 code 让用户至少能定位基金；不编造中文名
+    """
+    if fund_code in FUND_NAME_BY_CODE:
+        return FUND_NAME_BY_CODE[fund_code]
+    return f"基金 {fund_code}"
 
 
 def compute_breakdown(
@@ -245,7 +342,9 @@ __all__ = [
     "SwensenClass",
     "DISPLAY_NAME",
     "SUBCLASS_BY_CODE",
+    "FUND_NAME_BY_CODE",
     "BreakdownRow",
     "get_subclass",
+    "get_fund_name",
     "compute_breakdown",
 ]
