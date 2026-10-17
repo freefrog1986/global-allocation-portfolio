@@ -685,16 +685,18 @@ class TestRebalanceRecordsSection:
                 f"指数代码 399673 被当成基金: {fund!r}"
             )
 
-    def test_dca_action_with_total_and_cycle_for_dollar_cost_funds(
+    def test_dca_action_with_3_values_for_dollar_cost_funds(
         self, journal: PortfolioJournal,
     ) -> None:
-        """DCA (定投) 行的 action 是 "定投"，金额列只显示「总金额 / 周期」。
+        """DCA (定投) 行的 action 是 "定投"，金额列显示 3 个值。
 
-        liubo 2026-10-17 反馈 — 金额列只写「总金额 / 周期」（如 "¥1800 / 每天"），
+        liubo 2026-10-17 反馈 — 金额列显示 3 个值：
+        1. 定投额（每次投多少）— "10 元"
+        2. 频率（多久投一次）— "每天"
+        3. 总目标（计划投多少）— "累计 1800"
+
+        格式：「10 元 / 每天 / 累计 1800」。
         不写「已买 ¥X」（已经买入了多少他不关心）。
-
-        三个基金 (016452 / 019172 / 019441) 在 _DCA_SCHEDULE_BY_CODE 里都有
-        "¥<total> / <cycle>" schedule。
         """
         from global_allocation.portfolio.card import _DCA_SCHEDULE_BY_CODE
 
@@ -718,22 +720,32 @@ class TestRebalanceRecordsSection:
                 f"DCA 行 amount 不应有 '已买'（liubo 2026-10-17 反馈不关心已买多少），"
                 f"实际 '{row['amount']}'（{row['fund']}）"
             )
-            # 金额应该直接等于 _DCA_SCHEDULE_BY_CODE 里对应 fund 的 schedule
-            fund_to_schedule = {
-                "南方纳100": _DCA_SCHEDULE_BY_CODE["016452"],
-                "摩根纳斯达克100指数(QDII)人民币A": _DCA_SCHEDULE_BY_CODE["019172"],
-                "万家纳斯达克100指数发起式(QDII)A": _DCA_SCHEDULE_BY_CODE["019441"],
+            # 金额应该等于 _DCA_SCHEDULE_BY_CODE 对应 fund 格式化后的字符串
+            fund_to_code = {
+                "南方纳100": "016452",
+                "摩根纳斯达克100指数(QDII)人民币A": "019172",
+                "万家纳斯达克100指数发起式(QDII)A": "019441",
             }
-            for prefix, schedule in fund_to_schedule.items():
+            for prefix, code in fund_to_code.items():
                 if prefix in row["fund"]:
-                    assert row["amount"] == schedule, (
-                        f"DCA 行 amount 应该是 schedule '{schedule}'，"
+                    schedule = _DCA_SCHEDULE_BY_CODE[code]
+                    # amount 必须包含 3 个值（定投额 / 频率 / 累计）
+                    assert schedule["per"] in row["amount"], (
+                        f"DCA 行 amount 应包含定投额 '{schedule['per']}'，"
                         f"实际 '{row['amount']}'（{row['fund']}）"
                     )
-                    # schedule 应该有「总金额 / 周期」格式
-                    assert "/" in schedule, (
-                        f"_DCA_SCHEDULE_BY_CODE[{prefix}] 应该有 '/' 分隔，"
-                        f"实际 '{schedule}'"
+                    assert schedule["cycle"] in row["amount"], (
+                        f"DCA 行 amount 应包含频率 '{schedule['cycle']}'，"
+                        f"实际 '{row['amount']}'（{row['fund']}）"
+                    )
+                    assert f"累计 {schedule['total']}" in row["amount"], (
+                        f"DCA 行 amount 应包含累计 '{schedule['total']}'，"
+                        f"实际 '{row['amount']}'（{row['fund']}）"
+                    )
+                    # 3 个值之间应该有分隔符
+                    assert row["amount"].count("/") >= 2, (
+                        f"DCA 行 amount 应有 2 个 '/' 分隔 3 个值，"
+                        f"实际 '{row['amount']}'（{row['fund']}）"
                     )
                     break
 
@@ -890,14 +902,20 @@ class TestRebalanceRecordsSection:
         assert parsed.action == "定投", (
             f"DCA 行 action 应该是 '定投'，实际 '{parsed.action}'"
         )
-        # liubo 2026-10-17 反馈：金额列只写「总金额 / 周期」，
+        # liubo 2026-10-17 反馈：金额列显示 3 个值 ——
+        # 定投额 / 频率 / 总目标（如 "10 元 / 每天 / 累计 1800"）
         # 不写「已买 ¥X」（已经买入了多少他不关心）
         assert "已买" not in parsed.amount, (
             f"DCA 行 amount 不应有 '已买'，实际 '{parsed.amount}'"
         )
-        assert parsed.amount == _DCA_SCHEDULE_BY_CODE["016452"], (
-            f"DCA 行 amount 应该是 schedule '¥1800 / 每天'，"
-            f"实际 '{parsed.amount}'"
+        schedule = _DCA_SCHEDULE_BY_CODE["016452"]
+        for part in (schedule["per"], schedule["cycle"], f"累计 {schedule['total']}"):
+            assert part in parsed.amount, (
+                f"DCA 行 amount 应包含 '{part}'，实际 '{parsed.amount}'"
+            )
+        # 3 个值之间应该有 2 个 '/' 分隔符
+        assert parsed.amount.count("/") >= 2, (
+            f"DCA 行 amount 应有 2 个 '/' 分隔 3 个值，实际 '{parsed.amount}'"
         )
 
         # === 2. 转换行 ===

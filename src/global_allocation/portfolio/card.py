@@ -47,16 +47,26 @@ _CROSS_PORTFOLIO_EXCLUDE_CODES: frozenset[str] = frozenset({
 })
 
 # 定投计划 (DCA) — 显示在调仓纪录的"金额"列
-# liubo 2026-10-17 反馈 — 金额列写「总金额 / 周期」（如 "¥1800 / 每天"），
+# liubo 2026-10-17 反馈 — 金额列显示 3 个值：定投额 / 频率 / 总目标
+# 例：016452 南方纳100 → "10 元 / 每天 / 累计 1800"
 # 不写「已买 ¥X」（已经买入了多少他不关心）。
 # 数据源：cost_basis.py 注释里的 DCA 设定。
-_DCA_SCHEDULE_BY_CODE: dict[str, str] = {
-    "016452": "¥1800 / 每天",              # 南方纳100（DCA ¥10/天 → 累计 1800）
-    "019172": "¥2000 / 每天",              # 摩根纳斯达克100(QDII)人民币A（DCA ¥10/天 → 累计 2000）
-    "019441": "¥2000 / 每天",              # 万家纳斯达克100发起式(QDII)A（DCA ¥10/天 → 累计 2000）
-    "000614": "¥10000 / 每周（均值 ¥500）",  # 华安德国(DAX)联接(QDII)A（慧定投 250-1000/周）
-    "000216": "¥500 / 每周一",              # 华安黄金ETF联接A（每周一 +500）
+_DCA_SCHEDULE_BY_CODE: dict[str, dict[str, str]] = {
+    # code: {"per": 定投额, "cycle": 频率, "total": 总目标}
+    "016452": {"per": "10 元", "cycle": "每天", "total": "1800"},          # 南方纳100（DCA ¥10/天 → 累计 1800）
+    "019172": {"per": "10 元", "cycle": "每天", "total": "2000"},          # 摩根纳斯达克100(QDII)人民币A（DCA ¥10/天 → 累计 2000）
+    "019441": {"per": "10 元", "cycle": "每天", "total": "2000"},          # 万家纳斯达克100发起式(QDII)A（DCA ¥10/天 → 累计 2000）
+    "000614": {"per": "250-1000 元", "cycle": "每周（均值 500）", "total": "10000"},  # 华安德国(DAX)联接(QDII)A（慧定投）
+    "000216": {"per": "500 元", "cycle": "每周一", "total": "—"},           # 华安黄金ETF联接A（每周一 +500，无固定目标）
 }
+
+
+def _format_dca_amount(schedule: dict[str, str]) -> str:
+    """把 DCA schedule dict 格式化成 "10 元 / 每天 / 累计 1800"。
+
+    liubo 2026-10-17 反馈 — 金额列显示 3 个值：定投额 / 频率 / 总目标。
+    """
+    return f"{schedule['per']} / {schedule['cycle']} / 累计 {schedule['total']}"
 from global_allocation.portfolio.journal import PortfolioJournal
 from global_allocation.portfolio.models import (
     FundValuation,
@@ -644,12 +654,12 @@ def _parse_rebalance_line(line: str, subject: str) -> RebalanceRow | None:
             return _parse_conversion_rows(stripped)
         action = "定投"
         fund = _resolve_fund_display(stripped)
-        # liubo 2026-10-17 反馈 — 金额列只写「总金额 / 周期」，
+        # liubo 2026-10-17 反馈 — 金额列显示 3 个值：定投额 / 频率 / 总目标，
         # 不写「已买 ¥X」（已经买入了多少他不关心）。
         # 数据从 _DCA_SCHEDULE_BY_CODE 拿（cost_basis.py 注释里的 DCA 设定）。
         line_codes = re.findall(r"(?<!\d)\d{6}", stripped)
         if line_codes and line_codes[0] in _DCA_SCHEDULE_BY_CODE:
-            amount = _DCA_SCHEDULE_BY_CODE[line_codes[0]]
+            amount = _format_dca_amount(_DCA_SCHEDULE_BY_CODE[line_codes[0]])
         else:
             # 兜底：基金不在 DCA mapping → 用 commit body 的金额（避免信息丢失）
             amount = _resolve_amount(stripped)
