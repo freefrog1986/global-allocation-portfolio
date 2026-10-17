@@ -685,6 +685,255 @@ class TestRebalanceRecordsSection:
                 f"指数代码 399673 被当成基金: {fund!r}"
             )
 
+    def test_dca_action_with_schedule_for_dollar_cost_funds(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """DCA (定投) 行的 action 应是 "定投"（不是 "校准"），金额列附定投频率。
+
+        liubo 2026-10-17 反馈 — 南方纳100 / 摩根纳指100 / 万家纳指100 是 DCA 定投，
+        不是成本校准。amount 列写清楚 "已买 ¥X / ¥10/天"。
+
+        三个基金 (016452 / 019172 / 019441) 在 _DCA_SCHEDULE_BY_CODE 里都有
+        "¥10/天" schedule。
+        """
+        from global_allocation.portfolio.card import _DCA_SCHEDULE_BY_CODE
+
+        table = self._get_rebalance_table(journal)
+        # 按 fund 列找 DCA 行
+        dca_rows = [
+            r for r in table["rows"]
+            if "南方纳100" in r.get("fund", "")
+            or "摩根纳斯达克100指数(QDII)人民币A" in r.get("fund", "")
+            or "万家纳斯达克100指数发起式(QDII)A" in r.get("fund", "")
+        ]
+        assert len(dca_rows) >= 3, (
+            f"应该有 3 个 DCA 行（016452/019172/019441），实际 {len(dca_rows)} 行"
+        )
+        for row in dca_rows:
+            assert row["action"] == "定投", (
+                f"DCA 行 action 应该是 '定投'，实际 '{row['action']}'（{row['fund']}）"
+            )
+            assert "已买" in row["amount"], (
+                f"DCA 行 amount 应该有 '已买'，实际 '{row['amount']}'（{row['fund']}）"
+            )
+            # 任意一个 schedule 必须出现
+            assert any(
+                schedule in row["amount"]
+                for schedule in _DCA_SCHEDULE_BY_CODE.values()
+            ), (
+                f"DCA 行 amount 应该有 schedule 信息（如 '¥10/天'），实际 "
+                f"'{row['amount']}'（{row['fund']}）"
+            )
+
+    def test_pure_cost_calibration_rows_filtered(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """纯成本校准行（如 519753 +21 元、378006 +1400 元）应被过滤掉。
+
+        liubo 2026-10-17 反馈 — 成本校准属于记账对账，不是调仓 ——
+        "原来记错了，我纠正你了，所以这种它不属于调仓"。
+
+        8597945 commit body 有 11 条这种校准行（519753 +21、378006 +1400、
+        002286 +132、010742 +31、015736 -6、001512 -8、485119 -4、
+        017837 -19、008333 +8、007520 -14）。
+
+        过滤条件：行匹配 "code + Chinese 名 + N → M（±X 元）" 且无 "已买" / "仓"。
+        """
+        table = self._get_rebalance_table(journal)
+        for row in table["rows"]:
+            fund = row.get("fund", "")
+            action = row.get("action", "")
+            amount = row.get("amount", "")
+            # 不应出现 校准 动作（除非 subject 强制，且 row 是 DCA 已标 "定投"）
+            # 这里只检查不应该以"校准"标签展示纯成本校准基金
+            assert not (
+                "交银安心收益债券" in fund and action == "校准"
+            ), (
+                f"519753 成本校准被当成调仓: {row!r}"
+            )
+            assert not (
+                "摩根全球新兴市场" in fund and action == "校准"
+            ), (
+                f"378006 成本校准被当成调仓: {row!r}"
+            )
+            assert not (
+                "中银美元债" in fund and action == "校准"
+            ), (
+                f"002286 成本校准被当成调仓: {row!r}"
+            )
+            # amount 也不应是纯 ±N 元（校准的金额特征）
+            if action == "校准":
+                assert False, (
+                    f"出现 校准 action 行（应该全部过滤掉）: {row!r}"
+                )
+            # 防御性：amount 是 "+N" / "-N" / "+N 元" 单值（校准金额特征）也算校准
+            if re.fullmatch(r"\s*[+\-−]\s*\d+(\s*元)?\s*", amount):
+                # 但允许 DCA 行 amount 是 "已买 ¥N / schedule"（不会匹配这个 fullmatch）
+                assert "已买" in amount or False, (
+                    f"金额是纯校准差值 '{amount}'（{fund}）— 应该是 DCA '已买' 描述"
+                )
+
+    def test_conversion_line_split_into_transfer_out_and_in(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """转换行拆成 2 行：转出 + 转入。
+
+        liubo 2026-10-17 反馈 — 转换其实你也可以把它拆成两个。
+        例：004827 平安中短债 → 019857 博时上证科创板100ETF联接A
+        = (平安中短债 | 转出 | 10000 元) + (博时上证科创板100ETF联接A | 转入 | 10000 元)
+
+        8597945 转换 commit (664b6d6 fix(099)) 应该有 6 行转换（3 转出 + 3 转入）。
+        """
+        table = self._get_rebalance_table(journal)
+        rows = table["rows"]
+        # 找 转出 / 转入 配对
+        transfer_out = [r for r in rows if r["action"] == "转出"]
+        transfer_in = [r for r in rows if r["action"] == "转入"]
+        # 数量相等（每个转换拆出 1 转出 + 1 转入）
+        assert len(transfer_out) >= 3, (
+            f"转换 commit 应该有 ≥3 个 '转出' 行，实际 {len(transfer_out)}"
+        )
+        assert len(transfer_in) >= 3, (
+            f"转换 commit 应该有 ≥3 个 '转入' 行，实际 {len(transfer_in)}"
+        )
+        # 转出/转入配对（同一 commit date）
+        from collections import defaultdict
+        out_by_date: dict[str, set[str]] = defaultdict(set)
+        in_by_date: dict[str, set[str]] = defaultdict(set)
+        for r in transfer_out:
+            out_by_date[r["date"]].add(r["fund"])
+        for r in transfer_in:
+            in_by_date[r["date"]].add(r["fund"])
+        for date_key in out_by_date:
+            assert len(out_by_date[date_key]) >= 1, f"{date_key} 没有 转出 行"
+            assert len(in_by_date[date_key]) >= 1, f"{date_key} 没有 转入 行"
+        # 关键转换源基金必须出现（平安中短债 转出 × 2、鹏扬利沣短债A 转出 × 1）
+        out_funds = {r["fund"] for r in transfer_out}
+        assert "平安中短债" in out_funds, (
+            f"转换源 平安中短债 不在转出行: {out_funds}"
+        )
+        # 关键转换目标基金必须出现
+        in_funds = {r["fund"] for r in transfer_in}
+        assert "博时上证科创板100ETF联接A" in in_funds, (
+            f"转换目标 博时上证科创板100ETF联接A 不在转入行: {in_funds}"
+        )
+        assert "工银创业板50ETF联接A" in in_funds, (
+            f"转换目标 工银创业板50ETF联接A 不在转入行: {in_funds}"
+        )
+        assert "汇添富恒生科技 ETF 联接发起式(QDII)A" in in_funds, (
+            f"转换目标 汇添富恒生科技 ETF 联接发起式(QDII)A 不在转入行: {in_funds}"
+        )
+        # 转出/转入金额相等（同一笔转换金额一致）
+        for r_out in transfer_out:
+            r_in_match = next(
+                (
+                    r for r in transfer_in
+                    if r["date"] == r_out["date"] and r["amount"] == r_out["amount"]
+                ),
+                None,
+            )
+            assert r_in_match is not None, (
+                f"转出 '{r_out['fund']}' {r_out['amount']} ({r_out['date']}) "
+                f"没有匹配的转入行"
+            )
+
+    def test_unit_helpers_dca_conversion_calibration(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """单元测试 — 直接打 _parse_rebalance_line / _is_conversion_line / _parse_conversion_rows。
+
+        不依赖 git log — 构造合成 commit body 行，验证 3 个新行为（DCA / 转换拆分 /
+        校准过滤）的核心逻辑。
+        """
+        from global_allocation.portfolio.card import (
+            _is_conversion_line,
+            _parse_conversion_rows,
+            _parse_rebalance_line,
+        )
+
+        # === 1. DCA 行 ===
+        dca_line = "- 016452 南方纳指 100：20 → 60（已买 ¥60）"
+        parsed = _parse_rebalance_line(dca_line, "校准")
+        assert parsed is not None, "DCA 行被错误过滤"
+        assert not isinstance(parsed, list), "DCA 行不应返回 list"
+        assert parsed.action == "定投", (
+            f"DCA 行 action 应该是 '定投'，实际 '{parsed.action}'"
+        )
+        assert "已买" in parsed.amount, (
+            f"DCA 行 amount 应有 '已买'，实际 '{parsed.amount}'"
+        )
+
+        # === 2. 转换行 ===
+        conv_line = (
+            "- 004827 平安中短债 → 019857 博时上证科创板100ETF联接A"
+            "（10000 元，转换 8379 份）"
+        )
+        assert _is_conversion_line(conv_line), (
+            "转换行未被 _is_conversion_line 识别"
+        )
+        rows = _parse_conversion_rows(conv_line)
+        assert len(rows) == 2, f"转换应拆 2 行，实际 {len(rows)} 行"
+        assert rows[0].action == "转出", (
+            f"转换第 1 行 action 应该是 '转出'，实际 '{rows[0].action}'"
+        )
+        assert rows[1].action == "转入", (
+            f"转换第 2 行 action 应该是 '转入'，实际 '{rows[1].action}'"
+        )
+        assert rows[0].fund == "平安中短债", (
+            f"转出 fund 应该是 '平安中短债'，实际 '{rows[0].fund}'"
+        )
+        assert "博时上证科创板100ETF联接A" in rows[1].fund, (
+            f"转入 fund 应该是 '博时上证科创板100ETF联接A'，实际 '{rows[1].fund}'"
+        )
+        assert rows[0].amount == rows[1].amount, (
+            f"转出/转入金额应一致: '{rows[0].amount}' vs '{rows[1].amount}'"
+        )
+
+        # _parse_rebalance_line 也应该返回 list（2 行）
+        parsed_conv = _parse_rebalance_line(conv_line, "加仓")
+        assert isinstance(parsed_conv, list), (
+            f"_parse_rebalance_line 转换行应该返回 list，实际 {type(parsed_conv)}"
+        )
+        assert len(parsed_conv) == 2
+
+        # === 3. 纯校准行（应过滤） ===
+        calib_line = "- 519753 交银安心收益债券 A：29979 → 30000（+21）"
+        parsed_calib = _parse_rebalance_line(calib_line, "校准")
+        assert parsed_calib is None, (
+            f"纯成本校准行应被过滤（None），实际返回 {parsed_calib!r}"
+        )
+
+        # ASCII 冒号的校准行也应过滤
+        calib_line2 = "- 004827: 22000 → 2000（-20000）"
+        parsed_calib2 = _parse_rebalance_line(calib_line2, "校准")
+        assert parsed_calib2 is None, (
+            f"ASCII 冒号成本校准行应被过滤，实际返回 {parsed_calib2!r}"
+        )
+
+        # === 4. 非转换 / 非校准 / 非 DCA 的普通建仓行 ===
+        build_line = (
+            "- 019857 博时上证科创板100ETF联接A → 000698 科创 100，"
+            "建仓 1 仓 = 10000 CNY"
+        )
+        # 这是 换基（基金 → 指数），但 index code 不在 FUND_NAME_BY_CODE
+        # 会被 _parse_rebalance_line 第 2 个过滤器（index code）过滤
+        parsed_build = _parse_rebalance_line(build_line, "换基")
+        assert parsed_build is None, (
+            f"fund → index 描述行应被过滤（000698 不在 FUND_NAME_BY_CODE），"
+            f"实际 {parsed_build!r}"
+        )
+
+        # 真正的 换基：fund → fund
+        swap_line = (
+            "- 020291 华夏科创100ETF联接A → 019857 博时上证科创板100ETF联接A，"
+            "建仓 1 仓 = 10000 CNY"
+        )
+        parsed_swap = _parse_rebalance_line(swap_line, "换基")
+        assert parsed_swap is not None, "fund → fund 换基行被错误过滤"
+        assert parsed_swap.action == "换基", (
+            f"换基行 action 应是 '换基'，实际 '{parsed_swap.action}'"
+        )
+
 
 class TestRemovedSections:
     """spec 096/097 移除的部分必须真的没了（第十九轮：Section 2 + Section 3 也都删了）。"""
