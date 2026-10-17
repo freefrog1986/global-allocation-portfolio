@@ -359,13 +359,69 @@ def _is_rebalance_subject(subject: str) -> bool:
     return False
 
 
+def _parse_rebalance_row(subject: str) -> tuple[str, str, str]:
+    """从 commit subject 解析（基金, 动作, 金额）。
+
+    返回：
+    - 基金：6 位数字基金代码（多个用 "/" 分隔），无则 "—"
+    - 动作：建仓/加仓/减仓/转换/砍仓/赎回/卖出/校准/对账/换基/扩仓（按优先级取第一个匹配）
+    - 金额：subject 提到 ¥/元/万 才填，否则 "—"
+
+    为什么这样解析（liubo 2026-10-17 反馈"简单点"）：
+    - subject 里很多信息（建仓 N 只、扩 N 只、换 N 只）没具体基金 code，无法精确定位
+    - 也不编造 — 解析不到就填 "—"，让用户能看 commit hash 查详情
+    - 金额同理：commit subject 多数没金额，编金额就是误导
+
+    动作优先级：先匹配更具体（"新建仓"/"校准"），再匹配通用（"加"/"换"）。
+    """
+    # 基金 codes：6 位数字 + 前置 0（避免日期 2026-10-09 干扰 → 2026-10-09 整体是 8 位，
+    # 但 2026-10 不是 6 位；2026-10-09 = 20261009 整体 8 位也不会命中 0\d{5}）
+    # 0\d{5} 匹配 6 位以 0 开头 — 基金代码通常 6 位且以数字开头
+    codes = re.findall(r"(?<!\d)0\d{5}", subject)
+    # 过滤：保留成本校准等 commit 里 015736/008505 等真基金代码，
+    # 但 0\d{5} 也可能匹配 commit 里 "01" 这样的短码 — 不存在，全是 6 位
+    fund_str = "/".join(codes) if codes else "—"
+
+    # 金额（¥ + 数字 + 元/万，可选小数点和千分位）
+    amount_match = re.search(r"[¥￥]\s?(\d+(?:,\d{3})*(?:\.\d+)?)\s?[元万]?", subject)
+    amount = amount_match.group(0).strip() if amount_match else "—"
+
+    # 动作（按优先级匹配，第一个命中胜出）
+    action = "其他"
+    action_patterns = [
+        # 具体动作优先
+        ("新建仓", "新建仓"),
+        ("成本校准", "成本校准"),
+        ("实盘对账", "实盘对账"),
+        ("校准", "校准"),
+        ("转换", "转换"),
+        ("砍", "砍仓"),
+        ("+1 仓", "加仓"),
+        ("−1 仓", "减仓"),
+        ("-1 仓", "减仓"),
+        # 通用动作（带空格避免误命中 — "赎回费" 算规则不是赎回）
+        ("赎回 ", "赎回"),
+        ("卖出 ", "卖出"),
+        ("扩", "扩仓"),  # 扩 N 只基金
+        ("换 ", "换基"),  # 换 N 只基金
+        ("加 0", "加仓"),  # 加 0xxxxx 基金代码
+        ("加 ", "加仓"),  # 加 N 只基金
+    ]
+    for pat, label in action_patterns:
+        if pat in subject:
+            action = label
+            break
+
+    return fund_str, action, amount
+
+
 def _build_rebalance_records_section(limit: int = 10) -> list[dict[str, object] | None]:
-    """Section 1.5 — 调仓纪录（liubo 2026-10-17 加在 1 和 2 之间）。
+    """Section 1.5 — 调仓纪录表格版（liubo 2026-10-17 改：4 列 = 日期/基金/动作/金额）。
 
     从 git log 抓最近 N*3 条 commit，按 _is_rebalance_subject 过滤出真实调仓，
-    取前 limit 条渲染成 lark_md div。无调仓 commit → 返回空 list（不渲染）。
+    用 _parse_rebalance_row 解析每行成 (基金, 动作, 金额)，渲染成 4 列表。
 
-    抓 N*3 是因为按经验，调仓 commit 占比 ~1/3，多抓点保证 limit 条都能拿到。
+    无调仓 commit → 返回空 list（不渲染）。
     """
     import subprocess
 
@@ -385,25 +441,39 @@ def _build_rebalance_records_section(limit: int = 10) -> list[dict[str, object] 
     if not lines:
         return []
 
-    bullets: list[str] = []
+    rows: list[dict[str, object]] = []
     for ln in lines:
         # 格式: "{hash} {YYYY-MM-DD HH:MM:SS +ZZZZ} {subject}"
         parts = ln.split(" ", 3)
         if len(parts) < 4:
             continue
-        short_hash, date_str, _, subject = parts
+        _, date_str, _, subject = parts
         if not _is_rebalance_subject(subject):
             continue
         date_short = date_str[:10]
-        subject_short = subject[:80]
-        bullets.append(f"- {date_short} `{short_hash}` {subject_short}")
-        if len(bullets) >= limit:
+        fund, action, amount = _parse_rebalance_row(subject)
+        rows.append({
+            "date": date_short,
+            "fund": fund,
+            "action": action,
+            "amount": amount,
+        })
+        if len(rows) >= limit:
             break
 
-    if not bullets:
+    if not rows:
         return []
 
-    content = "**调仓纪录**（git log，过滤掉调参/规则/卡片/docs）：\n" + "\n".join(bullets)
+    table: dict[str, object] = {
+        "columns": [
+            {"name": "date", "display_name": "日期", "data_type": "text", "width": "auto"},
+            {"name": "fund", "display_name": "基金", "data_type": "text", "width": "auto"},
+            {"name": "action", "display_name": "动作", "data_type": "text", "width": "auto"},
+            {"name": "amount", "display_name": "金额", "data_type": "text", "width": "auto"},
+        ],
+        "rows": rows,
+    }
+
     return [
         {
             "tag": "note",
@@ -411,8 +481,8 @@ def _build_rebalance_records_section(limit: int = 10) -> list[dict[str, object] 
         },
         {"tag": "hr"},
         {
-            "tag": "div",
-            "text": {"tag": "lark_md", "content": content},
+            "tag": "table",
+            **table,
         },
     ]
 

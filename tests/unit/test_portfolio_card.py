@@ -155,10 +155,10 @@ class TestBuildPortfolioCard:
             - delta：投资子类 "{+/-N} 份"；现金 "区间内/低于下限/高于上限"
 
         合计：1 note + 1 div + 2 hr + 1 chart + 1 table = 6 个元素 + footer
-        + 第二十二轮（liubo 2026-10-17）调仓纪录 section：
-        + 1 note + 1 div + 1 hr（跨 section 分隔）= +3 个元素
+        + 第二十二轮（liubo 2026-10-17）调仓纪录 section（表格版）：
+        + 1 note + 1 hr（跨 section 分隔）+ 1 hr（section 内）+ 1 table = +4 个元素
 
-        无估值总计：2 note + 2 div + 3 hr + 1 chart + 1 table = 9 + footer
+        无估值总计：2 note + 1 div + 4 hr + 1 chart + 2 table = 10 + footer
         """
         _seed(journal)
         card = build_portfolio_card(journal, title="我的实盘")
@@ -171,10 +171,10 @@ class TestBuildPortfolioCard:
         notes = [e for e in card["elements"] if e.get("tag") == "note"]
         hrs = [e for e in card["elements"] if e.get("tag") == "hr"]
         assert len(charts) == 1
-        assert len(tables) == 1
-        # 第二十二轮（liubo 2026-10-17）：多 1 个 div（调仓纪录 section）+ 1 note + 2 hr
-        # （跨调仓纪录 section 分隔 1，调仓纪录 section 内 1）
-        assert len(divs) == 2
+        # 第二十二轮：2 张 table（持仓表 + 调仓纪录表）
+        assert len(tables) == 2
+        # 第二十二轮：调仓纪录改 table 后少 1 个 div（之前是 div，现在是 table）
+        assert len(divs) == 1
         assert len(notes) == 2
         assert len(hrs) == 4
 
@@ -334,12 +334,19 @@ class TestHoldingsTable:
         """Section 1 持仓表 — 5 列（class / value / weight / target / delta）。
 
         第二十一轮：卡片只有 1 张表（持仓表，Section 2 已删除）。
+        第二十二轮（liubo 2026-10-17）：增加调仓纪录 table（4 列：date/fund/action/amount），
+        所以现在有 2 张表。按列名定位持仓表（找含 "delta" 列的）。
         """
         _seed(journal)
         card = build_portfolio_card(journal)
         tables = [e for e in card["elements"] if e.get("tag") == "table"]
-        assert len(tables) == 1  # 只有 Section 1 持仓表（Section 2 已删除）
-        spec = tables[0]
+        # 找持仓表（5 列：含 "delta" 列）
+        holdings_tables = [
+            t for t in tables
+            if "delta" in [c["name"] for c in t.get("columns", [])]
+        ]
+        assert len(holdings_tables) == 1
+        spec = holdings_tables[0]
         col_names = [c["name"] for c in spec["columns"]]
         assert col_names == ["class", "value", "weight", "target", "delta"]
         return spec
@@ -574,11 +581,21 @@ class TestRemovedSections:
             assert c["chart_spec"]["type"] != "line"
 
     def test_no_recent_transactions_columns(self, journal: PortfolioJournal) -> None:
-        """持仓明细表的列不应该有交易流水的字段（date / side / strategy）。"""
+        """持仓明细表的列不应该有交易流水的字段（date / side / strategy）。
+
+        第二十二轮（liubo 2026-10-17）：调仓纪录 table 含 "date" 列（commit 日期），
+        但调仓纪录的"date"不是流水日期（side/strategy/price 都不在），所以只排除
+        持仓表（找含 "delta" 列的表）。
+        """
         _seed(journal)
         card = build_portfolio_card(journal)
         tables = [e for e in card["elements"] if e.get("tag") == "table"]
-        for t in tables:
+        # 只看持仓聚合表（含 "delta" 列的）
+        holdings_tables = [
+            t for t in tables
+            if "delta" in [c["name"] for c in t.get("columns", [])]
+        ]
+        for t in holdings_tables:
             col_names = {c["name"] for c in t["columns"]}
             assert "date" not in col_names
             assert "side" not in col_names
@@ -985,8 +1002,8 @@ class TestValuationSection:
     def test_total_table_count_within_feishu_limit(self, journal: PortfolioJournal) -> None:
         """全数据场景下整张卡片 ≤5 table（飞书 ErrCode 11310 限制 — spec 098.4）。
 
-        3 张表 = 持仓聚合 + combined 指标 + combined per-fund。
-        第二十一轮（当前）：删除 Section 2 策略对比表 → 3 张表（飞书 ≤5 限制内）。
+        4 张表 = 持仓聚合 + 调仓纪录 + combined 指标 + combined per-fund。
+        第二十二轮（liubo 2026-10-17 改表版）：加调仓纪录 table → 4 张表（飞书 ≤5 限制内）。
         第十八轮：移除 017730/016664/006373（已砍） + 移除 HK seed（无 HK 基金）。
         """
         _seed_a_share_funds(journal)
@@ -1012,7 +1029,7 @@ class TestValuationSection:
 
         card = build_portfolio_card(journal)
         tables = [e for e in card["elements"] if e.get("tag") == "table"]
-        assert len(tables) == 3, f"期望 3 张表，实际 {len(tables)}（飞书 ≤5 上限）"
+        assert len(tables) == 4, f"期望 4 张表，实际 {len(tables)}（飞书 ≤5 上限）"
 
     def test_hr_count_with_combined_section(self, journal: PortfolioJournal) -> None:
         """combined section 渲染后整张卡片的 hr 数 = 7（baseline 4 + combined section 加 3）。
@@ -1053,14 +1070,14 @@ class TestOrdering:
             for e in card["elements"]
             if e.get("tag") in {"note", "div", "chart", "table"}
         ]
-        # 第二十二轮（liubo 2026-10-17）：增加调仓纪录 section（note + div）在 1 和 2 之间
+        # 第二十二轮（liubo 2026-10-17）：增加调仓纪录 section（note + table）在 1 和 2 之间
         assert tags == [
             "note",  # Section 1 header "实盘持仓"
             "div",   # Section 1 summary
             "chart", # Section 1 柱状图
             "table", # Section 1 持仓表（5 列：含 target/delta，整数仓位模型）
             "note",  # Section 1.5 header "调仓纪录"
-            "div",   # Section 1.5 调仓 commit 列表
+            "table", # Section 1.5 调仓纪录表（4 列：date/fund/action/amount）
         ]
 
     def test_hr_count_and_position(self, journal: PortfolioJournal) -> None:
