@@ -56,7 +56,7 @@ from enum import Enum
 from typing import Iterable
 
 from global_allocation.portfolio.breakdown import SwensenClass
-from global_allocation.portfolio.cost_basis import COST_BASIS_BY_CODE
+from global_allocation.portfolio.cost_basis import COST_BASIS_BY_CODE, get_position_unit
 from global_allocation.portfolio.models import ValuationIndicatorCode
 from global_allocation.portfolio.valuation_indicators import (
     compute_composite_score,
@@ -955,17 +955,23 @@ def get_live_reit_data_date() -> date | None:
 
 
 def get_current_position(fund_code: str) -> Decimal:
-    """从 COST_BASIS_BY_CODE 算当前仓位（cost / 10000, 单位 = 1 万 CNY）。
+    """从 COST_BASIS_BY_CODE 算当前仓位（cost / per-fund 1 仓单位）。
 
-    liubo 2026-09-24 拍板：成本 = 仓位单位（"成本 20000 就是 2 个仓位"）。
-    0.65 仓位 = 6500 元。
-
-    未知基金 / 现金类（004137）→ 返回 0。
+    仓位单位：
+    - 全局默认：1 仓 = 10000 CNY（2026-09-24 拍板"成本 = 仓位单位"，0.65 仓 = 6500 元）
+    - per-fund 覆盖：5 只定投基金 1 仓 = 定投累计目标（liubo 2026-10-17 反馈）
+      - 000614 DAX 定投累计 10000
+      - 016452 南方纳100 定投累计 1800
+      - 019172 摩根纳100 定投累计 2000
+      - 019441 万家纳100 定投累计 2000
+      - 000216 黄金 定投累计 7500（"为了凑一仓"——liubo 原话）
+    - 未知基金 / 现金类（004137）→ 返回 0
     """
     cost = COST_BASIS_BY_CODE.get(fund_code)
     if cost is None:
         return Decimal("0")
-    return cost / Decimal("10000")
+    unit = get_position_unit(fund_code)
+    return cost / unit
 
 
 def build_evaluations() -> list[FundPEvaluation]:

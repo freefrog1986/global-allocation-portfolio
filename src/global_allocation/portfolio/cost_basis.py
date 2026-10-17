@@ -141,6 +141,34 @@ CASH_LIKE_CODES: frozenset[str] = frozenset({
 })
 
 
+# ─── Per-fund 1 仓 单位（liubo 2026-10-17 第二十七轮反馈：000216 黄金 1 仓 = 7500 而不是 10000）───
+#
+# 2026-09-24 拍板的全局规则：1 仓 = 10000 CNY（cost / 10000 = 仓位）。
+# 但 5 只定投基金的"1 仓"对用户来说 = 定投累计目标，因为：
+# - 000216 黄金：定投累计 7500 = 1 仓（"为了凑一仓" — liubo 2026-10-17 反馈原文）
+# - 000614 DAX：定投累计 10000 = 1 仓（凑巧跟全局单位一样）
+# - 016452/019172/019441 NDX 3 只：定投累计 1800/2000/2000 = 各自 1 仓
+#
+# 所以这 5 只基金的"current_position"应该 = cost / 定投累计 而非 cost / 10000。
+# 结果：5 只基金都显示"满仓（1 仓）"，调仓建议 = HOLD（除非深价值例外）。
+#
+# 不是定投的基金 1 仓 = 10000（全局默认）。
+POSITION_UNIT_BY_CODE: dict[str, Decimal] = {
+    # code: 1 仓的 CNY 数（per-fund 覆盖；不在表里的走全局 10000）
+    "000614": Decimal("10000"),  # 华安 DAX 定投累计 10000
+    "016452": Decimal("1800"),   # 南方纳100 定投累计 1800
+    "019172": Decimal("2000"),   # 摩根纳100 定投累计 2000
+    "019441": Decimal("2000"),   # 万家纳100 定投累计 2000
+    "000216": Decimal("7500"),   # 华安黄金 定投累计 7500（"为了凑一仓"）
+}
+DEFAULT_POSITION_UNIT: Decimal = Decimal("10000")  # 1 仓 = 1 万 CNY（全局默认）
+
+
+def get_position_unit(fund_code: str) -> Decimal:
+    """查某只基金的 1 仓 CNY 数（per-fund 覆盖；未覆盖走全局默认 10000）。"""
+    return POSITION_UNIT_BY_CODE.get(fund_code, DEFAULT_POSITION_UNIT)
+
+
 # 合计：626454.47 元（52 只大类资产配置组合里的基金；2026-10-17 改 5 只 DCA 基金 cost = 累计目标
 # 而不是"已买"快照：+10000+1740+1960+1960+4990 = +20650，所以 605804.47 + 20650 = 626454.47）
 # - A股宽基 9：81500（6 老 61500 + 011612=0 + 019857=10000 + 023414=10000）
@@ -172,6 +200,9 @@ __all__ = [
     "COST_BASIS_BY_CODE",
     "CASH_LIKE_CODES",
     "TOTAL_COST_CNY",
+    "POSITION_UNIT_BY_CODE",
+    "DEFAULT_POSITION_UNIT",
     "get_cost_basis",
+    "get_position_unit",
     "is_cash_like",
 ]

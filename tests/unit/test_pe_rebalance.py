@@ -764,6 +764,52 @@ class TestGetCurrentPosition:
         assert get_current_position("022448") == Decimal("1.1")
 
 
+class TestGetCurrentPositionDingtouOverride:
+    """第二十七轮（liubo 2026-10-17 反馈："000216 黄金 定投累计 7500 = 1 仓，凑一仓"）。
+
+    5 只定投基金的 1 仓单位 per-fund 覆盖（不再走全局 10000）：
+    - 000614 DAX cost=10000 / 1 仓=10000 → 1 仓
+    - 016452 南方纳100 cost=1800 / 1 仓=1800 → 1 仓
+    - 019172 摩根纳100 cost=2000 / 1 仓=2000 → 1 仓
+    - 019441 万家纳100 cost=2000 / 1 仓=2000 → 1 仓
+    - 000216 黄金 cost=7500 / 1 仓=7500 → 1 仓
+    """
+
+    def test_dingtou_funds_all_position_equals_1(self) -> None:
+        """5 只定投基金 都 = 1 仓（因为 cost = 定投累计 = 1 仓单位）。"""
+        for code in ("000614", "016452", "019172", "019441", "000216"):
+            pos = get_current_position(code)
+            assert pos == Decimal("1"), (
+                f"{code} 应是 1 仓（cost = 定投累计 = 1 仓单位），"
+                f"实际 {pos}"
+            )
+
+    def test_000216_gold_7500_equals_1_cang(self) -> None:
+        """000216 黄金：cost=7500, 1 仓=7500 → 1 仓（liubo "凑一仓"原话）。
+
+        关键修复：之前用全局 10000 → 0.75 仓 → 调仓建议「加仓」；现在用 per-fund 7500 → 1 仓 → HOLD。
+        """
+        assert get_current_position("000216") == Decimal("1")
+
+    def test_non_dingtou_funds_still_use_global_10000(self) -> None:
+        """非定投基金还是 cost / 10000（全局默认不变）。"""
+        assert get_current_position("013310") == Decimal("2.0")  # 20000 / 10000
+        assert get_current_position("013127") == Decimal("3.5")  # 35000 / 10000
+
+    def test_dingtou_000216_signal_is_hold(self) -> None:
+        """000216 黄金 signal = HOLD（满仓 + 综合分 2.5 在 2.0-4.0 区间）。
+
+        之前 cost=7500 / 全局 10000 = 0.75 仓 → 欠配 + score 2.5 < 3.0 → ADD；
+        改完 cost/7500 = 1 仓 → 满仓 + score 2.5 (2.0-4.0) → HOLD。
+        """
+        from global_allocation.portfolio.pe_rebalance import weekly_rebalance_plan
+        actions = weekly_rebalance_plan()
+        gold = next(a for a in actions if a.fund_code == "000216")
+        assert gold.signal == PESignal.HOLD, (
+            f"000216 黄金应 HOLD（满仓），实际 {gold.signal.value}"
+        )
+
+
 # ─── build_evaluations ─────────────────────────────
 
 

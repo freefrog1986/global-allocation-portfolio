@@ -176,6 +176,46 @@ class TestGetCostBasis:
         assert get_cost_basis("999999") is None
         assert get_cost_basis("") is None
 
+
+class TestPositionUnitByCode:
+    """第二十七轮（liubo 2026-10-17 反馈）：5 只定投基金 1 仓 = 定投累计目标。
+
+    5 只定投基金 per-fund 覆盖（不走全局 10000）：
+    - 000614 DAX 定投累计 10000
+    - 016452 南方纳100 定投累计 1800
+    - 019172 摩根纳100 定投累计 2000
+    - 019441 万家纳100 定投累计 2000
+    - 000216 黄金 定投累计 7500（"为了凑一仓"——liubo 原话）
+    """
+
+    def test_5_dingtou_funds_have_position_unit_override(self) -> None:
+        from global_allocation.portfolio.cost_basis import (
+            POSITION_UNIT_BY_CODE,
+            get_position_unit,
+        )
+        assert len(POSITION_UNIT_BY_CODE) == 5
+        # 每只定投基金 1 仓 = 定投累计
+        assert get_position_unit("000614") == Decimal("10000")
+        assert get_position_unit("016452") == Decimal("1800")
+        assert get_position_unit("019172") == Decimal("2000")
+        assert get_position_unit("019441") == Decimal("2000")
+        assert get_position_unit("000216") == Decimal("7500")
+
+    def test_non_dingtou_funds_use_global_10000(self) -> None:
+        """非定投基金 1 仓 = 全局 10000。"""
+        from global_allocation.portfolio.cost_basis import get_position_unit
+        # 股票 / REITs / 债 / 现金 全部走全局 10000
+        assert get_position_unit("013310") == Decimal("10000")  # 华夏科创创业 50
+        assert get_position_unit("013127") == Decimal("10000")  # 汇添富恒生科技
+        assert get_position_unit("028277") == Decimal("10000")  # 华夏中证REITs
+        assert get_position_unit("008505") == Decimal("10000")  # 浙商中短债
+        assert get_position_unit("999999") == Decimal("10000")  # 未知基金也走默认
+
+    def test_default_position_unit_is_10000(self) -> None:
+        """全局默认 1 仓 = 10000 CNY（spec 022 2026-09-24 拍板不变）。"""
+        from global_allocation.portfolio.cost_basis import DEFAULT_POSITION_UNIT
+        assert DEFAULT_POSITION_UNIT == Decimal("10000")
+
     def test_cut_fund_returns_none(self) -> None:
         """砍掉的 11 只非宽基返回 None（已不在 cost_basis）。"""
         assert get_cost_basis("004098") is None  # 港股
