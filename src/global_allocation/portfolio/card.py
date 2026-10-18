@@ -395,7 +395,26 @@ def _build_cost_basis_section() -> list[dict[str, object]]:
         "rows": rows,
     }
 
-    # summary div：生成时间 + 总成本 + 大类资产数
+    # 跟 DEFAULT_POSITION_ALLOCATION 比对，标出欠配/超配
+    # 第三十轮（liubo 2026-10-18 反馈）：摘要补「欠配/超配」一行。
+    # 阈值 1%：偏差 < -1% 算欠配，> +1% 算超配（CASH 不参与 — CASH 不在 cost_basis）。
+    under_alloc: list[str] = []
+    over_alloc: list[str] = []
+    for sub in SwensenClass:
+        if sub == SwensenClass.CASH:
+            continue
+        if sub not in by_sub:
+            continue
+        cost = by_sub[sub][1]
+        actual_pct = float(cost / total_cost * 100) if total_cost > 0 else 0.0
+        target_pct = float(DEFAULT_POSITION_ALLOCATION.target_weight(sub)) * 100
+        dev = actual_pct - target_pct
+        if dev < -1:
+            under_alloc.append(f"{DISPLAY_NAME[sub]} {dev:+.1f}%")
+        elif dev > 1:
+            over_alloc.append(f"{DISPLAY_NAME[sub]} {dev:+.1f}%")
+
+    # summary div：生成时间 + 总成本 + 大类资产数 + 欠配/超配
     # 第二十九轮（liubo 2026-10-17 反馈）：改"基金数"为"大类资产数"——
     # 用户视角下"52 只"太细节，关心的是"我覆盖了几大类资产"（10 类 = A 股/港股/美股/国外发达/
     # 新兴市场/国内 REITs/美国 REITs/国内利率债/美债/商品；现金 004137 不算）。
@@ -403,7 +422,9 @@ def _build_cost_basis_section() -> list[dict[str, object]]:
     summary_text = (
         f"**生成时间**：{datetime.now().strftime('%Y-%m-%d %H:%M')}  \n"
         f"**总成本**：{float(total_cost):,.2f} CNY  \n"
-        f"**大类资产数**：{n_classes} 类"
+        f"**大类资产数**：{n_classes} 类  \n"
+        f"**欠配**：{' / '.join(under_alloc) if under_alloc else '—'}  \n"
+        f"**超配**：{' / '.join(over_alloc) if over_alloc else '—'}"
     )
 
     elements: list[dict[str, object]] = [

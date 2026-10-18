@@ -1555,6 +1555,96 @@ class TestCostBasisByClassAggregation:
         raise AssertionError("找不到「持仓成本 by 大类」表")
 
 
+class TestAllocationDeviationInSummary:
+    """第三十轮（liubo 2026-10-18 反馈）：Section 1 摘要补「欠配/超配」。
+
+    - 阈值 ±1% — 偏差绝对值 ≤ 1% 不标（避免噪音）
+    - CASH 不参与（cost_basis 不含现金 004137）
+    - 按子类枚举顺序输出 + `{:+.1f}%` 格式（保留符号 + 1 位小数）
+    """
+
+    def _get_summary_text(self, card: dict) -> str:
+        """找 Section 1 摘要 div（含「总成本」字样）。"""
+        for el in card["elements"]:
+            if el.get("tag") == "div":
+                text = el.get("text", {}).get("content", "")
+                if "总成本" in text:
+                    return text
+        raise AssertionError("找不到 Section 1 摘要 div")
+
+    def test_summary_contains_under_and_over_alloc_lines(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """摘要 div 必须包含「**欠配**」和「**超配**」两行。"""
+        card = build_portfolio_card(journal)
+        summary = self._get_summary_text(card)
+        assert "**欠配**" in summary, (
+            f"摘要应有「**欠配**」一行，实际：{summary}"
+        )
+        assert "**超配**" in summary, (
+            f"摘要应有「**超配**」一行，实际：{summary}"
+        )
+
+    def test_over_alloc_includes_bond_overweights(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """国内利率债（45% vs 5% target = +40%）和美债（28% vs 1.67% = +26%）必须标超配。"""
+        card = build_portfolio_card(journal)
+        summary = self._get_summary_text(card)
+        # 抓「**超配**：...」行
+        over_line = next(
+            (line for line in summary.split("\n") if line.startswith("**超配**：")),
+            None,
+        )
+        assert over_line is not None, f"找不到「**超配**」行，实际：{summary}"
+        assert "国内利率债" in over_line, f"国内利率债应在超配行，实际：{over_line}"
+        assert "美债" in over_line, f"美债应在超配行，实际：{over_line}"
+        # 验证正号格式（保留 + 号）
+        assert "+" in over_line, f"超配行应有 + 号，实际：{over_line}"
+
+    def test_under_alloc_includes_equity_underweights(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """A 股 / 美股 / 国外发达 / 新兴市场 等股票子类实际占比 < target，应进欠配行。"""
+        card = build_portfolio_card(journal)
+        summary = self._get_summary_text(card)
+        under_line = next(
+            (line for line in summary.split("\n") if line.startswith("**欠配**：")),
+            None,
+        )
+        assert under_line is not None, f"找不到「**欠配**」行，实际：{summary}"
+        # A 股 (13% vs 18.33% = -5%) + 美股 (2% vs 10% = -8%) 都应进
+        assert "A 股股票" in under_line, f"A 股应在欠配行，实际：{under_line}"
+        assert "美股股票" in under_line, f"美股应在欠配行，实际：{under_line}"
+        # 验证负号格式
+        assert "-" in under_line, f"欠配行应有 - 号，实际：{under_line}"
+
+    def test_deviation_threshold_excludes_small_drift(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """港股偏差仅 -1.08%（绝对值 > 1）应进欠配；阈值内（≤ 1%）的不进。"""
+        card = build_portfolio_card(journal)
+        summary = self._get_summary_text(card)
+        under_line = next(
+            (line for line in summary.split("\n") if line.startswith("**欠配**：")),
+            None,
+        )
+        # 港股 dev=-1.08%（绝对值 > 1）→ 应进
+        assert "港股" in under_line, (
+            f"港股 dev=-1.08% 应进欠配（|dev|>1），实际：{under_line}"
+        )
+
+    def test_cash_not_in_deviation_lines(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """CASH 子类不在 COST_BASIS BY_CODE，不参与欠配/超配计算。"""
+        card = build_portfolio_card(journal)
+        summary = self._get_summary_text(card)
+        assert "现金" not in summary, (
+            f"现金不应出现在摘要里（CASH 不参与成本占比），实际：{summary}"
+        )
+
+
 class TestRemovedSections:
     """spec 096/097 移除的部分必须真的没了（第十九轮：Section 2 + Section 3 也都删了）。"""
 
