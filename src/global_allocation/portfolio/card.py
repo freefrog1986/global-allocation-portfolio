@@ -712,6 +712,21 @@ def _resolve_action(line: str, subject: str) -> str:
     return "调仓"
 
 
+def _format_cang(n: float) -> str:
+    """格式化仓值：四舍五入到 1 位小数，整数不带 .0。
+
+    liubo 2026-10-18 反馈 — 0.499939 仓太长了，0.5 仓 / 1 仓 / 1.5 仓就够用。
+
+    规则：
+    - 整数（round 后 == int）→ "1" / "2" / "10"（无小数）
+    - 1 位小数 → "0.5" / "0.8" / "1.5"
+    """
+    rounded = round(n, 1)
+    if rounded == int(rounded):
+        return f"{int(rounded)}"
+    return f"{rounded:.1f}"
+
+
 def _format_amount_with_units(amount: str) -> str:
     """把 {N 仓} 或 {X 元} 表达标准化为 "N 仓 / X 元" 双值。
 
@@ -728,6 +743,9 @@ def _format_amount_with_units(amount: str) -> str:
     - "建仓 N 仓 / X 元"（已含两者）→ 标准化为 "N 仓 / X 元"（去 "建仓" + 换 CNY/¥ 为 元）
     - "±N 仓"（纯 仓）→ "N 仓 / X 元"（方向走 action 列，amount 不带 ±）
     - "X 元 / CNY / 万 / ¥X"（纯 元）→ "N 仓 / X 元"（前面补 仓数）
+
+    仓值显示：四舍五入到 1 位小数（liubo 2026-10-18 反馈 — 0.499939 仓太长了）。
+    整数仓值保留 "1 仓" 不带 ".0"。
     """
     if not amount or amount == "—":
         return amount
@@ -760,6 +778,11 @@ def _format_amount_with_units(amount: str) -> str:
                 return f"{int(n):,} 元"
             return m.group(0)
         cleaned = re.sub(r"(\d+)\s*元", _add_thousands_yuan, cleaned)
+        # 仓值四舍五入到 1 位小数（liubo 2026-10-18 反馈 — 0.499939 仓太长了）
+        def _round_cang_in_text(m: re.Match[str]) -> str:
+            n = float(m.group(1))
+            return f"{_format_cang(n)} 仓"
+        cleaned = re.sub(r"(\d+(?:\.\d+)?)\s*仓", _round_cang_in_text, cleaned)
         # 压缩多余空格但保留单空格
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         return cleaned
@@ -772,7 +795,7 @@ def _format_amount_with_units(amount: str) -> str:
             元_str = f"{int(元):,}"
         else:
             元_str = f"{元:,.2f}"
-        return f"{n:g} 仓 / {元_str} 元"
+        return f"{_format_cang(n)} 仓 / {元_str} 元"
     # 纯 X 元 / CNY / 万（数字在前）
     元_match = re.search(r"(\d+(?:\.\d+)?)\s*(元|万|CNY)", amount)
     if 元_match:
@@ -781,10 +804,6 @@ def _format_amount_with_units(amount: str) -> str:
         if unit == "万":
             n = n * 10000
         仓 = n / 10000
-        if 仓 == int(仓):
-            仓_str = f"{int(仓)} 仓"
-        else:
-            仓_str = f"{仓:g} 仓"
         # 标准化原 amount：CNY → 元，千分位逗号对齐
         # 把 "10000" / "10,000" 规范成 "10,000"（带千分位）
         normalized_num = f"{int(n):,}" if n == int(n) else f"{n:,}"
@@ -792,17 +811,13 @@ def _format_amount_with_units(amount: str) -> str:
             normalized = f"{normalized_num} 元"  # 万 → 转成元
         else:
             normalized = f"{normalized_num} 元"
-        return f"{仓_str} / {normalized}"
+        return f"{_format_cang(仓)} 仓 / {normalized}"
     # 纯 ¥X / ￥X（数字在后）
     符号_match = re.search(r"[¥￥]\s*(\d+(?:\.\d+)?)", amount)
     if 符号_match:
         n = float(符号_match.group(1))
         仓 = n / 10000
-        if 仓 == int(仓):
-            仓_str = f"{int(仓)} 仓"
-        else:
-            仓_str = f"{仓:g} 仓"
-        return f"{仓_str} / ¥{int(n) if n == int(n) else n:g}"
+        return f"{_format_cang(仓)} 仓 / ¥{int(n) if n == int(n) else n:g}"
     # 其他（含 "成本 20 收回现金" / "净 +N 元" / "净+N" 等特殊表达）→ 保持
     return amount
 

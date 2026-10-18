@@ -1083,6 +1083,56 @@ class TestRebalanceRecordsSection:
         assert parsed_real is not None, "真实加仓行被错误过滤"
         assert parsed_real.action == "加仓"
 
+    def test_cang_rounded_to_1_decimal(self) -> None:
+        """第三十二轮（liubo 2026-10-18 反馈）：调仓纪录的 仓值四舍五入到 1 位小数。
+
+        之前会出现 0.499939 仓 / 4,999.39 元（转换 4999.39 元 = 0.499939 仓）太长了。
+        改成 0.5 仓 / 4,999.39 元，1 仓 / 10000 元 等都保持不变（整数 仓值不带 .0）。
+        """
+        from global_allocation.portfolio.card import _format_amount_with_units
+
+        # 0.499939 仓 → 0.5 仓（四舍五入）
+        assert _format_amount_with_units("0.499939 仓 / 4,999.39 元") == (
+            "0.5 仓 / 4,999.39 元"
+        )
+
+        # 整数 仓值 1 仓 / 10000 元 → 1 仓（不带 .0）
+        assert _format_amount_with_units("1 仓 / 10,000 元") == "1 仓 / 10,000 元"
+
+        # 0.8 仓（已 1 位小数）保持
+        assert _format_amount_with_units("0.8 仓 / 8,000 元") == "0.8 仓 / 8,000 元"
+
+        # 纯 元 输入：4999.39 元 → 0.5 仓（不是 0.499939）
+        result = _format_amount_with_units("4999.39 元")
+        assert "0.5 仓" in result, f"4999.39 元 应格式化为 0.5 仓，实际: {result!r}"
+
+        # 纯 元 输入：10000 元 → 1 仓
+        result = _format_amount_with_units("10000 元")
+        assert result == "1 仓 / 10,000 元", f"10000 元 应格式化为 1 仓 / 10,000 元，实际: {result!r}"
+
+        # 纯 仓 输入：0.499939 仓 → 0.5 仓
+        result = _format_amount_with_units("0.499939 仓")
+        assert "0.5 仓" in result, f"0.499939 仓 应格式化为 0.5 仓，实际: {result!r}"
+
+        # DCA 3-value 不动（不在 仓 范畴）
+        dca_amount = "10 元 / 每天 / 累计 1800"
+        assert _format_amount_with_units(dca_amount) == dca_amount
+
+        # "建仓 1 仓 = 10000 CNY" → "1 仓 / 10,000 元"（both case 也走 1-decimal 仓）
+        result = _format_amount_with_units("建仓 1 仓 = 10000 CNY")
+        assert "1 仓" in result, f"建仓 1 仓 应保留为 1 仓，实际: {result!r}"
+        assert "10,000 元" in result, f"10000 CNY 应转为 10,000 元，实际: {result!r}"
+
+        # 0.15 仓 → 0.2 仓（四舍五入，不是 0.1）
+        # 实际场景：1595 元 ≈ 0.1595 仓 → 0.2 仓
+        result = _format_amount_with_units("1595 元")
+        assert "0.2 仓" in result, f"1595 元 应四舍五入为 0.2 仓，实际: {result!r}"
+
+        # 0.04 仓 → 0.0 仓（但 _format_cang 会返回 "0"，仓=0 也保持显示）
+        # 实际场景：396 元 ≈ 0.0396 仓 → 0 仓
+        result = _format_amount_with_units("396 元")
+        assert "0 仓" in result, f"396 元 应四舍五入为 0 仓，实际: {result!r}"
+
     def test_transfer_add_dedup_same_physical_trade(
         self, journal: PortfolioJournal,
     ) -> None:
