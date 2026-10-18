@@ -30,6 +30,7 @@ from global_allocation.portfolio.card import (
     _format_indicator_value,
     _per_fund_recommendation,
     _per_fund_verdict,
+    build_overview_card,
     build_portfolio_card,
 )
 from global_allocation.portfolio.db import PortfolioDB
@@ -3393,3 +3394,325 @@ class TestRebalanceRecordsDoubleValue:
         dca_rows = [r for r in rebalance_table["rows"] if r["action"] == "定投"]
         for r in dca_rows:
             assert " / 每天 / 累计 " in r["amount"], f"DCA 行 {r} amount '{r['amount']}' 失去 3-value 格式"
+
+
+# ─── 4 张周报卡片（第三十五轮 liubo 2026-10-18 拍板） ──────────────
+#
+# 周报改发 4 张卡：
+# - Card 1 = 总览（持仓成本 by 大类，4 列：分类/基金数/累计成本/占比）
+# - Card 2 = A 股（per-fund + 调仓记录 + 定投记录，filter 到 CN_EQUITY）
+# - Card 3 = 港股（同上，filter 到 HK_EQUITY）
+# - Card 4 = 美股（同上，filter 到 US_EQUITY）
+#
+# 验证：
+# - build_overview_card = 1 张，只有 cost_basis section
+# - build_region_card(region) 只展示该 region 的基金 / 调仓 / 定投
+# - build_portfolio_cards 顺序固定（[总览, A 股, 港股, 美股]）
+# - 旧 build_portfolio_card（单卡向后兼容）保持原行为
+
+
+class TestBuildOverviewCard:
+    """build_overview_card = Card 1（总览）。"""
+
+    def test_title_default(self, journal: PortfolioJournal) -> None:
+        """默认 title = "实盘周报（总览）"。"""
+        _seed(journal)
+        card = build_overview_card(journal)
+        title = card["header"]["title"]["content"]
+        assert title == "实盘周报（总览）", f"默认 title 应为「实盘周报（总览）」，实际「{title}」"
+
+    def test_only_cost_basis_section(self, journal: PortfolioJournal) -> None:
+        """总览卡只有 cost_basis section（note + div + table），不含 per-fund / 调仓 / 定投。
+
+        第三十四轮（liubo 2026-10-18）：删柱状图 + 删持仓表，只剩持仓成本 by 大类。
+        第三十五轮：把它单独作为 Card 1。
+        """
+        _seed(journal)
+        card = build_overview_card(journal)
+        # 元素类型
+        tags = [
+            e.get("tag")
+            for e in card["elements"]
+            if e.get("tag") in {"note", "div", "chart", "table", "hr"}
+        ]
+        # 期望：note (header) + div (summary) + table (cost_basis by 大类) + 1 个 hr（在 div 与 table 之间）
+        assert "chart" not in tags, f"总览卡不应有 chart，实际 tags={tags}"
+        assert tags.count("note") == 1, f"总览卡应有 1 个 note（header），实际 {tags.count('note')} 个"
+        assert tags.count("table") == 1, f"总览卡应有 1 个 table（cost_basis），实际 {tags.count('table')} 个"
+        # 表头是 {class, count, cost, weight}
+        table = next(e for e in card["elements"] if e.get("tag") == "table")
+        col_names = [c["name"] for c in table["columns"]]
+        assert col_names == ["class", "count", "cost", "weight"], (
+            f"总览卡表头应为 4 列（class/count/cost/weight），实际 {col_names}"
+        )
+
+    def test_custom_title_overrides_default(self, journal: PortfolioJournal) -> None:
+        """title 参数会覆盖默认 title（用作 base_title 前缀）。"""
+        _seed(journal)
+        card = build_overview_card(journal, title="我的持仓总览")
+        title = card["header"]["title"]["content"]
+        assert title == "我的持仓总览", f"自定义 title 应传入，实际「{title}」"
+
+    def test_header_blue_template(self, journal: PortfolioJournal) -> None:
+        """header template 固定为 blue（与其他卡一致）。"""
+        _seed(journal)
+        card = build_overview_card(journal)
+        assert card["header"]["template"] == "blue"
+
+
+class TestBuildRegionCard:
+    """build_region_card = Card 2/3/4（区域）。"""
+
+    def test_default_title_uses_region_display_name(self, journal: PortfolioJournal) -> None:
+        """默认 title = "{region 中文名} 周报"，其中中文名取 DISPLAY_NAME[region] 去掉'股票'后缀。
+
+        例：CN_EQUITY = 'A 股'（DISPLAY_NAME[CN_EQUITY] = 'A 股股票'）。
+        """
+        from global_allocation.portfolio.breakdown import DISPLAY_NAME
+        from global_allocation.portfolio.card import SwensenClass, build_region_card
+
+        _seed(journal)
+        for region in (SwensenClass.CN_EQUITY, SwensenClass.HK_EQUITY, SwensenClass.US_EQUITY):
+            card = build_region_card(journal, region)
+            expected = f"{DISPLAY_NAME[region].split('股票')[0]} 周报"
+            actual = card["header"]["title"]["content"]
+            assert actual == expected, (
+                f"region={region} 默认 title 应为「{expected}」，实际「{actual}」"
+            )
+
+    def test_custom_title_overrides(self, journal: PortfolioJournal) -> None:
+        """title 参数会覆盖默认 title。"""
+        from global_allocation.portfolio.card import SwensenClass, build_region_card
+
+        _seed(journal)
+        card = build_region_card(journal, SwensenClass.CN_EQUITY, title="A 股 周报（自定义）")
+        assert card["header"]["title"]["content"] == "A 股 周报（自定义）"
+
+    def test_includes_per_fund_section(self, journal: PortfolioJournal) -> None:
+        """Card 2/3/4 包含 per-fund section（5 列：fund/etf_index/cost/valuation/advice）。
+
+        即使 region 完全空，per-fund section 也输出（filter 后可能 0 行）。
+        """
+        from global_allocation.portfolio.card import SwensenClass, build_region_card
+
+        _seed(journal)
+        card = build_region_card(journal, SwensenClass.CN_EQUITY)
+        tables = [e for e in card["elements"] if e.get("tag") == "table"]
+        per_fund = next(
+            (t for t in tables if [c["name"] for c in t["columns"]] == ["fund", "etf_index", "cost", "valuation", "advice"]),
+            None,
+        )
+        assert per_fund is not None, "Card 应包含 per-fund 表（5 列：fund/etf_index/cost/valuation/advice）"
+
+    def test_empty_region_still_returns_card(
+        self, journal: PortfolioJournal, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Region 完全空（如 CN_REIT 在测试 fixture 里只有 1 个 028277 基金 + 无 DCA/无 rebalance）。
+
+        仍返回 1 张有效卡片（header + elements + footer）。
+        """
+        from global_allocation.portfolio.card import SwensenClass, build_region_card
+
+        # 清空可能存在的飞书凭证环境变量（一些 shell 里可能漏出来）
+        for k in ("FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_CHAT_ID"):
+            monkeypatch.delenv(k, raising=False)
+
+        _seed(journal)
+        # CN_REIT region 在测试 fixture 里只有 1 个 028277 基金，且无 DCA schedule
+        card = build_region_card(journal, SwensenClass.CN_REIT)
+        # 至少有合法的卡片 envelope
+        assert "header" in card, "空 region 也应返回 header"
+        assert "elements" in card, "空 region 也应返回 elements"
+        assert "footer" in card, "空 region 也应返回 footer"
+        # 至少包含 per-fund section（filter 后可能有 1 行）
+        tables = [e for e in card["elements"] if e.get("tag") == "table"]
+        per_fund = next(
+            (t for t in tables if [c["name"] for c in t["columns"]] == ["fund", "etf_index", "cost", "valuation", "advice"]),
+            None,
+        )
+        assert per_fund is not None, "空 region 也应有 per-fund 表（filter 后可能 0 行 / 1 行）"
+
+    def test_filter_to_region_excludes_other_funds(self, journal: PortfolioJournal) -> None:
+        """per-fund section 只展示该 region 的基金（用 SUBSET_BY_CODE 判断）。"""
+        from global_allocation.portfolio.breakdown import SUBCLASS_BY_CODE
+        from global_allocation.portfolio.card import SwensenClass, build_region_card
+
+        _seed(journal)
+        card = build_region_card(journal, SwensenClass.CN_EQUITY)
+        tables = [e for e in card["elements"] if e.get("tag") == "table"]
+        per_fund = next(
+            (t for t in tables if [c["name"] for c in t["columns"]] == ["fund", "etf_index", "cost", "valuation", "advice"]),
+            None,
+        )
+        assert per_fund is not None, "Card 应有 per-fund 表"
+        rows = per_fund["rows"]
+        for row in rows:
+            # fund 列通常是 "163406 兴全合润" 或 "(000300) 沪深300" 这种
+            # 从 fund 列提取所有 6 位基金代码（排除 ETF index 代码）
+            codes = re.findall(r"(?<!\d)\d{6}(?!\d)", row["fund"])
+            # 至少有一个 code 的 subclass 是 CN_EQUITY
+            assert any(SUBCLASS_BY_CODE.get(c) == SwensenClass.CN_EQUITY for c in codes), (
+                f"per-fund 行 {row} 不属于 CN_EQUITY region"
+            )
+
+
+class TestBuildPortfolioCards:
+    """build_portfolio_cards 顺序固定 + 4 张卡。"""
+
+    def test_returns_exactly_four_cards(self, journal: PortfolioJournal) -> None:
+        """build_portfolio_cards 必须返回 4 张卡（总览 + A 股 + 港股 + 美股）。"""
+        from global_allocation.portfolio.card import build_portfolio_cards
+
+        _seed(journal)
+        cards = build_portfolio_cards(journal)
+        assert len(cards) == 4, f"build_portfolio_cards 应返回 4 张卡，实际 {len(cards)} 张"
+
+    def test_order_overview_cn_hk_us(self, journal: PortfolioJournal) -> None:
+        """顺序固定：[总览, A 股, 港股, 美股]。"""
+        from global_allocation.portfolio.card import build_portfolio_cards
+
+        _seed(journal)
+        cards = build_portfolio_cards(journal)
+        titles = [c["header"]["title"]["content"] for c in cards]
+        assert titles[0] == "实盘周报（总览）", f"cards[0] 应为总览，实际「{titles[0]}」"
+        assert titles[1] == "实盘周报（A 股）", f"cards[1] 应为 A 股，实际「{titles[1]}」"
+        assert titles[2] == "实盘周报（港股）", f"cards[2] 应为港股，实际「{titles[2]}」"
+        assert titles[3] == "实盘周报（美股）", f"cards[3] 应为美股，实际「{titles[3]}」"
+
+    def test_base_title_propagates_to_all_cards(self, journal: PortfolioJournal) -> None:
+        """base_title 参数会传到每张卡的 title（"{base_title}（{...}）"）。"""
+        from global_allocation.portfolio.card import build_portfolio_cards
+
+        _seed(journal)
+        cards = build_portfolio_cards(journal, base_title="My Weekly Report")
+        titles = [c["header"]["title"]["content"] for c in cards]
+        assert titles == [
+            "My Weekly Report（总览）",
+            "My Weekly Report（A 股）",
+            "My Weekly Report（港股）",
+            "My Weekly Report（美股）",
+        ], f"base_title 应传播到所有卡，实际 {titles}"
+
+    def test_each_card_is_valid_envelope(self, journal: PortfolioJournal) -> None:
+        """每张卡都有标准 envelope（header + elements + footer）。"""
+        from global_allocation.portfolio.card import build_portfolio_cards
+
+        _seed(journal)
+        cards = build_portfolio_cards(journal)
+        for i, c in enumerate(cards, 1):
+            assert "header" in c, f"第 {i} 张卡缺 header"
+            assert "elements" in c, f"第 {i} 张卡缺 elements"
+            assert "footer" in c, f"第 {i} 张卡缺 footer"
+            assert c["header"].get("template") == "blue", f"第 {i} 张卡 template 不为 blue"
+
+    def test_no_chart_in_any_card(self, journal: PortfolioJournal) -> None:
+        """4 张卡都没有 chart（第三十四轮禁柱状图）。"""
+        from global_allocation.portfolio.card import build_portfolio_cards
+
+        _seed(journal)
+        cards = build_portfolio_cards(journal)
+        for i, c in enumerate(cards, 1):
+            charts = [e for e in c["elements"] if e.get("tag") == "chart"]
+            assert len(charts) == 0, f"第 {i} 张卡不应有 chart"
+
+
+class TestBuildPortfolioCardBackwardCompat:
+    """build_portfolio_card（单卡，向后兼容）保持原行为。"""
+
+    def test_single_card_still_has_all_sections(self, journal: PortfolioJournal) -> None:
+        """单卡版仍拼 4 个 section（cost_basis + per-fund + 调仓 + 定投），55 行 per-fund。
+
+        第三十五轮（liubo 2026-10-18）：新加 build_portfolio_cards() 走 4 张分卡，
+        老的 build_portfolio_card() 不变 — 单卡向后兼容（老调用方用得到）。
+        """
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        # 老行为：单一 header + 全部 elements 拼一起
+        assert "header" in card
+        # 应有 4 个 note（4 section header）+ 多个 table
+        notes = [e for e in card["elements"] if e.get("tag") == "note"]
+        # 1 个 cost_basis note + 1 个 per-fund note + 1 个 调仓 note + 1 个 定投 note + 1 个 footer note = 5
+        # 但 footer 在 card["footer"] 里，不在 elements 里，所以 elements 里有 4 个 note
+        section_notes = [
+            n for n in notes
+            if any("持仓成本" in e.get("content", "") for e in n["elements"])
+            or any("持仓与调仓建议" in e.get("content", "") for e in n["elements"])
+            or any("调仓纪录" in e.get("content", "") for e in n["elements"])
+            or any("定投纪录" in e.get("content", "") for e in n["elements"])
+        ]
+        assert len(section_notes) == 4, (
+            f"单卡版应有 4 个 section header，实际 {len(section_notes)} 个"
+        )
+
+    def test_single_card_differs_from_multi(self, journal: PortfolioJournal) -> None:
+        """单卡版 ≠ 多卡版 — 单卡是 [header + elements(全部)]，多卡是 [4 张完整卡]。
+
+        第三十五轮设计：单卡向后兼容，新流程走 4 张卡。
+        """
+        from global_allocation.portfolio.card import build_portfolio_cards
+
+        _seed(journal)
+        single = build_portfolio_card(journal)
+        multi = build_portfolio_cards(journal)
+
+        # 数量：单卡 = 1，多卡 = 4
+        assert isinstance(single, dict)
+        assert isinstance(multi, list)
+        assert len(multi) == 4
+
+
+class TestPublishPortfolioReports:
+    """publish_portfolio_reports() — 飞书发送 4 张卡（dry_run 路径）。"""
+
+    def test_dry_run_returns_four_json_strings(
+        self, journal: PortfolioJournal, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """dry_run=True → 返回 4 个 JSON 字符串（不发飞书）。
+
+        第三十五轮（liubo 2026-10-18）：4 张周报卡走 dry_run 路径也走真的 send 路径。
+        测试用 dry_run=True 走 JSON 序列化，避免发真的飞书 API。
+        """
+        # 设假凭证，否则 load_credentials() 会 raise ValueError("缺少 FEISHU_APP_ID")
+        monkeypatch.setenv("FEISHU_APP_ID", "cli_aab25b0d09f69be3")
+        monkeypatch.setenv("FEISHU_APP_SECRET", "test_secret_only_used_for_load_credentials")
+        monkeypatch.setenv("FEISHU_CHAT_ID", "oc_test_chat_id")
+
+        from global_allocation.portfolio.publisher import publish_portfolio_reports
+
+        _seed(journal)
+        result = publish_portfolio_reports(journal, dry_run=True)
+        assert isinstance(result, list), f"dry_run 应返回 list，实际 {type(result)}"
+        assert len(result) == 4, f"dry_run 应返回 4 个 JSON，实际 {len(result)} 个"
+        # 每个元素都是合法 JSON 字符串
+        import json
+        for i, s in enumerate(result, 1):
+            assert isinstance(s, str), f"第 {i} 个 element 应为 str"
+            parsed = json.loads(s)
+            assert "header" in parsed, f"第 {i} 个 JSON 应有 header"
+
+
+# ─── publisher 模块 export（防止第三十五轮新增函数没在 __all__ 里）───
+
+
+class TestPublisherExports:
+    """src/global_allocation/portfolio/publisher.py 的 __all__ 包含 4 个 publish 函数。"""
+
+    def test_all_publishers_in_dunder_all(self) -> None:
+        import global_allocation.portfolio.publisher as pub
+        for name in (
+            "publish_portfolio_report",
+            "publish_portfolio_reports",
+            "publish_pe_rebalance_report",
+            "publish_etf_rotation_report",
+        ):
+            assert name in pub.__all__, (
+                f"publisher.__all__ 漏了 {name}（第三十五轮加的 publish_portfolio_reports 必须导出）"
+            )
+        # 同时函数确实存在
+        for name in (
+            "publish_portfolio_report",
+            "publish_portfolio_reports",
+            "publish_pe_rebalance_report",
+            "publish_etf_rotation_report",
+        ):
+            assert hasattr(pub, name), f"publisher 模块应有 {name} 函数"

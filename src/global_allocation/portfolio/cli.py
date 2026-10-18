@@ -330,14 +330,15 @@ def cmd_publish(
         except Exception as e:
             console.print(f"[yellow]![/yellow] 估值拉取异常：{e}")
 
-    from global_allocation.portfolio.publisher import publish_portfolio_report
+    from global_allocation.portfolio.publisher import publish_portfolio_reports
 
+    base_title = title or "实盘周报"
     try:
-        result = publish_portfolio_report(
+        results = publish_portfolio_reports(
             journal,
             chat_id=chat,
             root_id=root,
-            title=title,
+            base_title=base_title,
             dry_run=dry_run,
         )
     except Exception as e:
@@ -345,10 +346,15 @@ def cmd_publish(
         raise typer.Exit(code=1) from e
 
     if dry_run:
-        console.print("[cyan]dry-run[/cyan] 卡片 JSON（前 200 字符）：")
-        console.print(result[:200] + ("..." if len(result) > 200 else ""))
+        for i, card_json in enumerate(results, 1):
+            console.print(f"[cyan]dry-run[/cyan] 第 {i}/4 张卡 JSON（前 150 字符）：")
+            console.print(card_json[:150] + ("..." if len(card_json) > 150 else ""))
     else:
-        console.print(f"[green]✓[/green] 已发送：message_id = {result}")
+        for i, mid in enumerate(results, 1):
+            if mid:
+                console.print(f"[green]✓[/green] 第 {i}/4 张卡：message_id = {mid}")
+            else:
+                console.print(f"[red]✗[/red] 第 {i}/4 张卡发送失败")
 
 
 # ─── fund subcommand ───

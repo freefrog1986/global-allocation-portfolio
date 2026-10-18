@@ -10,7 +10,11 @@ from datetime import date
 from typing import Any
 
 from global_allocation.feishu.credentials import FeishuCredentials, load_credentials
-from global_allocation.portfolio.card import build_portfolio_card, card_to_json
+from global_allocation.portfolio.card import (
+    build_portfolio_card,
+    build_portfolio_cards,
+    card_to_json,
+)
 from global_allocation.portfolio.etf_rotation_card import (
     build_etf_rotation_card,
 )
@@ -147,7 +151,64 @@ def _get_tenant_access_token(app_id: str, app_secret: str) -> str:
         return json.loads(r.read())["tenant_access_token"]
 
 
-__all__ = ["publish_portfolio_report", "publish_pe_rebalance_report", "publish_etf_rotation_report"]
+__all__ = [
+    "publish_portfolio_report",
+    "publish_portfolio_reports",
+    "publish_pe_rebalance_report",
+    "publish_etf_rotation_report",
+]
+
+
+# ─── PE-TTM 周调仓 飞书发送（spec 022 — liubo 2026-09-24 拍板）───
+
+
+def publish_portfolio_reports(
+    journal: PortfolioJournal,
+    credentials: FeishuCredentials | None = None,
+    chat_id: str | None = None,
+    root_id: str | None = None,
+    base_title: str = "实盘周报",
+    dry_run: bool = False,
+) -> list[str]:
+    """发 4 张周报卡片（第三十五轮 liubo 2026-10-18）：总览 + A 股 + 港股 + 美股。
+
+    返回顺序对应的 message_id 列表（dry_run=True 时每个元素是 JSON 字符串）。
+    失败一张不影响其他卡：捕获并打印，但继续发下一张。
+
+    Args:
+        journal: 实盘账本实例。
+        credentials: 凭证（默认从 env/文件读）。
+        chat_id: 覆盖凭证里的 chat_id。
+        root_id: 话题根消息 id（不传则 4 张卡都发到 chat 顶层）。
+        base_title: 卡片标题前缀（默认 "实盘周报"）。
+        dry_run: True → 不真发，返回 JSON 字符串列表。
+    """
+    if credentials is None:
+        credentials = load_credentials()
+
+    actual_chat_id = chat_id or credentials.chat_id
+
+    cards = build_portfolio_cards(journal, base_title=base_title)
+    msg_ids: list[str] = []
+    for i, card in enumerate(cards, 1):
+        card_json = card_to_json(card)
+        if dry_run:
+            msg_ids.append(card_json)
+            continue
+        try:
+            mid = _send_card(
+                app_id=credentials.app_id,
+                app_secret=credentials.app_secret,
+                chat_id=actual_chat_id,
+                card_json=card_json,
+                root_id=root_id,
+            )
+            msg_ids.append(mid)
+            logger.info("第 %d/%d 张卡发送成功：%s", i, len(cards), mid)
+        except Exception as e:
+            logger.warning("第 %d/%d 张卡发送失败：%s", i, len(cards), e)
+            msg_ids.append("")
+    return msg_ids
 
 
 # ─── PE-TTM 周调仓 飞书发送（spec 022 — liubo 2026-09-24 拍板）───

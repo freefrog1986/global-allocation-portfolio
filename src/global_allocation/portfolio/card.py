@@ -466,10 +466,16 @@ def _build_cost_basis_section() -> list[dict[str, object]]:
 # 不在 COST_BASIS_BY_CODE 但在 actions 里的（watchlist 的 3 个指数 HSI/N225/FCHI）→ 不渲染（无成本可显示）
 
 
-def _build_per_fund_section() -> list[dict[str, object]]:
+def _build_per_fund_section(region: SwensenClass | None = None) -> list[dict[str, object]]:
     """Section 2: per-fund 持仓成本 + 估值 + 调仓建议（liubo 2026-10-17 拍板）。
 
-    列：基金 | 持仓成本(¥) | 估值 | 调仓建议
+    列：基金 | ETF 指数 | 持仓成本(¥) | 估值 | 调仓建议
+
+    第三十五轮（liubo 2026-10-18）：传 region = SwensenClass.CN_EQUITY 时只显示 A 股行。
+    - 持仓基金（COST_BASIS）：SUBCLASS_BY_CODE[code] == region 才入选
+    - watchlist 基金（INDEX_WATCHLIST）：INDEX_WATCHLIST entry 的 subclass == region 才入选
+    - 合并组（如 NDX 5 只 = 美股）：5 只都判 US_EQUITY，整组入选美股卡
+    - region=None（默认）：全部 55 行
     """
     from global_allocation.portfolio.breakdown import SUBCLASS_BY_CODE
     from global_allocation.portfolio.cost_basis import COST_BASIS_BY_CODE
@@ -518,6 +524,9 @@ def _build_per_fund_section() -> list[dict[str, object]]:
         sub = SUBCLASS_BY_CODE.get(code)
         if sub is None:
             continue
+        # 第三十五轮：region 过滤 — 只入选该 region 的基金
+        if region is not None and sub != region:
+            continue
         # 拿基金对应的 ETF 指数 code（从 by_code 反查；可能没在 FUND_INDEX_MAP）
         action = by_code.get(code)
         index_code_for_sort = action.etf_index_code if action else ""
@@ -526,6 +535,8 @@ def _build_per_fund_section() -> list[dict[str, object]]:
 
     # 加 INDEX_WATCHLIST 里的指数（持仓 0）
     for sub, index_code, display_name, _metric, _value, _pct in INDEX_WATCHLIST:
+        if region is not None and sub != region:
+            continue
         items.append((subclass_order[sub], index_code, f"({index_code})", Decimal("0"), "watchlist"))
 
     items.sort(key=lambda t: (t[0], t[1], t[2]))
@@ -639,9 +650,11 @@ def _build_per_fund_section() -> list[dict[str, object]]:
 
     # summary div — 速读本周动作（第二十九轮 liubo 2026-10-17 反馈：
     # 删掉「总成本」行 — Section 1 已经展示总成本了，Section 2 不重复。
-    # 保留「基金数」+「本周操作」（加仓 N / 建仓 N / 减仓 N））
+    # 保留「基金数」+「本周操作」（加仓 N / 建仓 N / 减仓 N）
+    # 第三十五轮（liubo 2026-10-18）：region card 时改用「本 region 基金数」以明示筛选
+    fund_count_label = "本 region 基金数" if region is not None else "基金数"
     summary_parts = [
-        f"**基金数**：{len(rows)} 只  ",
+        f"**{fund_count_label}**：{len(rows)} 只  ",
     ]
     op_parts = []
     if n_add:
@@ -723,11 +736,14 @@ class RebalanceRow:
     - action: 中文动作标签（建仓 / 加仓 / 减仓 / 转换 / 砍仓 / 赎回 / 卖出 / 校准 / 对账 / 扩仓）
       — 注意：不显示「换基」；"建仓 N 仓 + → + 2 code" 是给 target 加仓
     - amount: 金额显示（"10000 元" / "+40" / "已买 ¥40" / "建仓 1 仓 / 10000 元" / "+1661 CNY" / ...）
+    - fund_codes: 这行涉及的基金代码（用于按 region 过滤；转换行有 2 个，普通行 1 个）
+      第三十五轮（liubo 2026-10-18）：拆 4 张卡时按 region filter rebalance/dca 行用
     """
     date: str
     fund: str
     action: str
     amount: str
+    fund_codes: tuple[str, ...] = ()
 
 
 def _resolve_fund_display(line: str) -> str:
@@ -1095,6 +1111,7 @@ def _parse_rebalance_line(line: str, subject: str) -> RebalanceRow | None:
 
     # DCA (定投) 检测 — 行里有 "已买 ¥X" → 标 "定投"（不是 "校准"）
     # liubo 2026-10-17 反馈 — 南方纳100 / 摩根纳指100 / 万家纳指100 是 DCA，不是校准
+    line_codes = re.findall(r"(?<!\d)\d{6}", stripped)
     if "已买" in stripped:
         # 转换拆 2 行（liubo 2026-10-17 反馈 — 转出一笔 + 转入一笔分开）
         if _is_conversion_line(stripped):
@@ -1104,13 +1121,18 @@ def _parse_rebalance_line(line: str, subject: str) -> RebalanceRow | None:
         # liubo 2026-10-17 反馈 — 金额列显示 3 个值：定投额 / 频率 / 总目标，
         # 不写「已买 ¥X」（已经买入了多少他不关心）。
         # 数据从 _DCA_SCHEDULE_BY_CODE 拿（cost_basis.py 注释里的 DCA 设定）。
-        line_codes = re.findall(r"(?<!\d)\d{6}", stripped)
         if line_codes and line_codes[0] in _DCA_SCHEDULE_BY_CODE:
             amount = _format_dca_amount(_DCA_SCHEDULE_BY_CODE[line_codes[0]])
         else:
             # 兜底：基金不在 DCA mapping → 用 commit body 的金额（避免信息丢失）
             amount = _resolve_amount(stripped)
-        return RebalanceRow(date="", fund=fund, action=action, amount=amount)
+        return RebalanceRow(
+            date="",
+            fund=fund,
+            action=action,
+            amount=amount,
+            fund_codes=tuple(line_codes),
+        )
 
     # 转换也拆 2 行（DCA 的转换行也走这里）
     if _is_conversion_line(stripped):
@@ -1124,6 +1146,7 @@ def _parse_rebalance_line(line: str, subject: str) -> RebalanceRow | None:
         fund=fund,
         action=action,
         amount=amount,
+        fund_codes=tuple(line_codes),
     )
 
 
@@ -1174,8 +1197,8 @@ def _parse_conversion_rows(stripped: str) -> list[RebalanceRow]:
             amount = _format_amount_with_units(money_match.group(0).strip())
 
     return [
-        RebalanceRow(date="", fund=from_name, action="转出", amount=amount),
-        RebalanceRow(date="", fund=to_name, action="转入", amount=amount),
+        RebalanceRow(date="", fund=from_name, action="转出", amount=amount, fund_codes=(codes[0],) if codes else ()),
+        RebalanceRow(date="", fund=to_name, action="转入", amount=amount, fund_codes=(codes[1],) if len(codes) >= 2 else ()),
     ]
 
 
@@ -1271,6 +1294,7 @@ def _collect_rebalance_rows(limit: int = 20) -> list[RebalanceRow]:
                     fund=fallback_fund,
                     action=fallback_action,
                     amount=fallback_amount,
+                    fund_codes=tuple(re.findall(r"(?<!\d)\d{6}", fallback_fund)),
                 )
             )
 
@@ -1285,6 +1309,7 @@ def _collect_rebalance_rows(limit: int = 20) -> list[RebalanceRow]:
                 fund=rb.fund,
                 action=rb.action,
                 amount=rb.amount,
+                fund_codes=rb.fund_codes,
             )
             rows.append(rb_with_date)
             if len(rows) >= limit:
@@ -1309,13 +1334,29 @@ def _collect_rebalance_rows(limit: int = 20) -> list[RebalanceRow]:
     return rows
 
 
-def _build_rebalance_records_section(rows: list[RebalanceRow]) -> list[dict[str, object]]:
+def _build_rebalance_records_section(
+    rows: list[RebalanceRow],
+    region: SwensenClass | None = None,
+) -> list[dict[str, object]]:
     """Section 3 — 调仓纪录表格版（liubo 2026-10-17 改：4 列 = 日期/基金/动作/金额）。
 
     liubo 2026-10-17 第二轮反馈 — 调仓是调仓，定投是定投，分开 2 张表。
     本函数只渲染"调仓"行（action != "定投"），定投行由 _build_dca_records_section 渲染。
+
+    第三十五轮（liubo 2026-10-18）：region != None 时按 fund_codes 过滤 —
+    - 行涉及的任意 fund_code 在 SUBCLASS_BY_CODE 里属于 region，则入选
+    - 转换行的 转出/转入 可能属于不同 region；只要 source 或 target 之一属于 region 就入选
     """
-    rebalance_rows = [r for r in rows if r.action != "定投"]
+    from global_allocation.portfolio.breakdown import SUBCLASS_BY_CODE
+
+    def _in_region(r: RebalanceRow) -> bool:
+        if region is None:
+            return True
+        if not r.fund_codes:
+            return False  # 没解析到 code → 默认排除（保守）
+        return any(SUBCLASS_BY_CODE.get(c) == region for c in r.fund_codes)
+
+    rebalance_rows = [r for r in rows if r.action != "定投" and _in_region(r)]
     if not rebalance_rows:
         return []
 
@@ -1346,7 +1387,10 @@ def _build_rebalance_records_section(rows: list[RebalanceRow]) -> list[dict[str,
     ]
 
 
-def _build_dca_records_section(rows: list[RebalanceRow]) -> list[dict[str, object]]:
+def _build_dca_records_section(
+    rows: list[RebalanceRow],
+    region: SwensenClass | None = None,
+) -> list[dict[str, object]]:
     """Section 4 — 定投纪录表格版（liubo 2026-10-17 第二轮反馈 — 跟调仓分开 2 张表）。
 
     5 列：日期 / 基金 / 动作 / 金额 / 状态
@@ -1357,18 +1401,27 @@ def _build_dca_records_section(rows: list[RebalanceRow]) -> list[dict[str, objec
       git log 是否有 "定投" commit，黄金 + DAX 也要展示），日期从 _DCA_PLAN_START_BY_CODE 拿
     - `rows` 参数保留以备未来用（目前没有 git log 行需合并到 DCA 表，因为 DCA 不走 commit body）
 
+    第三十五轮（liubo 2026-10-18）：region != None 时按 code 的 SUBCLASS 过滤
+    - 5 只 DCA 基金里，黄金 (000216) 是 COMMODITY；A 股 1 只 014532，DAX (000614) 是 FOREIGN_DM
+    - A 股 card 应只有 014532 美股 card 应只有 NDX DCA 3 只 (016452/019172/019441)
+    - 港股 card 无 DCA（恒生科技 013127 不在 _DCA_SCHEDULE 里）
+
     为什么不依赖 git log：
     - git log 只在 校准 事件里手动加了 "已买 ¥X" 行（numpy column 当时想统计"已买多少"）
     - 但 DCA 的本体不是「买」而是「自动定投计划」，天天基金后台每天扣款，commit 注释跟 DCA 无关
     - 真实数据源是 liubo 在 2026-10-17 提供的天天基金 DCA 计划详情截图
     - 因此 DCA 表是「持仓里所有 DCA 计划的快照」，跟调仓表（git log 历史事件）语义不同
     """
+    from global_allocation.portfolio.breakdown import SUBCLASS_BY_CODE
+
     if not _DCA_SCHEDULE_BY_CODE:
         return []
 
     rows_dict: list[dict[str, str]] = []
     # 按 code 排序，输出稳定（016452 → 000614 → 000216 → 019172 → 019441）
     for code in sorted(_DCA_SCHEDULE_BY_CODE.keys()):
+        if region is not None and SUBCLASS_BY_CODE.get(code) != region:
+            continue
         schedule = _DCA_SCHEDULE_BY_CODE[code]
         fund_name = get_fund_name(code)
         date = _DCA_PLAN_START_BY_CODE.get(code, "—")
@@ -2522,63 +2575,122 @@ def build_portfolio_card(
     journal: PortfolioJournal,
     title: str | None = None,
 ) -> dict[str, object]:
-    """构造实盘账本的飞书交互卡片。
+    """构造实盘账本的飞书交互卡片（单卡片版本，向后兼容）。
 
-    卡片结构（第三十四轮 liubo 2026-10-18 拍板 — 全部用 COST_BASIS 不用 DB 流水）：
-    - header.title: "实盘周报"
-    - Section 1（持仓成本 by 大类）：
-      - note header "持仓成本"
-      - summary div（生成时间 / 总成本 / 大类资产数 / 欠配 / 超配）
-      - hr 分隔
-      - 持仓成本 by 大类 表（11 行 × 4 列：分类 / 基金数 / 累计成本(¥) / 成本占比）
-    - Section 2（per-fund 持仓成本 + 估值 + 调仓建议）：
-      - hr 分隔（跨 section）
-      - note header "持仓与调仓建议"
-      - summary div（基金数 / 本周操作）
-      - per-fund 表（5 列：基金 / ETF 指数 / 持仓成本(¥) / 估值 / 调仓建议）
-    - Section 3（调仓记录）+ Section 4（定投记录）：
-      - hr 分隔 + note header + 表
-      - 调仓和定投分开 2 张表（liubo 2026-10-17 第二轮反馈）
+    第三十五轮（liubo 2026-10-18）：周报改为发 4 张卡（overview + 3 region cards）。
+    本函数仍按旧行为生成单卡：全部 section 拼到一张卡里（per-fund 是 55 行全列）。
+    多卡流程请用 build_portfolio_cards() → [overview, A 股, 港股, 美股]。
 
-    第三十四轮（liubo 2026-10-18）：删柱状图、删 DB 持仓查询。
-    - 持仓数据来源：COST_BASIS_BY_CODE（手动维护的累计成本）— 不依赖 journal.compute_holdings()
-    - 浮动盈亏、市值不显示（虚拟组合概念，券商 app 数据不准；记忆："券商 app 持仓收益口径不准"）
-    - 目标偏离：保留（基于成本 vs DEFAULT_POSITION_ALLOCATION 目标仓位）
-
-    元素总数：4 note + 2 div + 7 hr + 4 table = 17 + footer
+    卡片结构：
+    - Section 1（持仓成本 by 大类）：note + div + hr + table
+    - Section 2（per-fund 55 行）：hr + note + div + table
+    - Section 3（调仓记录）：hr + note + hr + table
+    - Section 4（定投记录）：hr + note + hr + table
     """
     actual_title = title or "实盘周报"
-    # 第三十四轮（liubo 2026-10-18）：不再读 DB 持仓 — COST_BASIS_BY_CODE 才是持仓的真相
-    # journal 参数保留（接口稳定），但不调用 .compute_holdings()
-
-    elements: list[dict[str, object]] = _build_cost_basis_section()
-
-    # Section 2: per-fund 持仓成本 + 估值 + 调仓建议（liubo 2026-10-17 拍板 — 替换 估值与操作）
-    # 数据：COST_BASIS_BY_CODE（52 只成本）+ weekly_rebalance_plan() 的 RebalanceAction
-    elements.extend(_build_per_fund_section())
-
-    # Section 3: 调仓纪录（liubo 2026-10-17 拍板保留）— 在 Section 2 之后
-    # Section 4: 定投纪录（liubo 2026-10-17 第二轮反馈 — 调仓是调仓，定投是定投，分开 2 张表）
-    # 数据来源：git log，按 _is_rebalance_subject 过滤掉调参/规则/卡片/docs
-    # limit=20 是因为一个 commit 可能拆出多行（如 8597945 14 只基金 / 9e70495 3 笔转换）
-    # 调仓 + 定投 共用一次 git log 调用（_collect_rebalance_rows），按 action 字段分到 2 张表
+    elements = _build_cost_basis_section()
+    elements.extend(_build_per_fund_section())  # region=None → 全部 55 行
     all_rebalance_rows = _collect_rebalance_rows(limit=20)
-    rebalance_section = _build_rebalance_records_section(all_rebalance_rows)
+    rebalance_section = _build_rebalance_records_section(all_rebalance_rows)  # region=None
     if rebalance_section:
         elements.append({"tag": "hr"})
         elements.extend(rebalance_section)
-    dca_section = _build_dca_records_section(all_rebalance_rows)
+    dca_section = _build_dca_records_section(all_rebalance_rows)  # region=None
+    if dca_section:
+        elements.append({"tag": "hr"})
+        elements.extend(dca_section)
+    return _wrap_card(actual_title, elements)
+
+
+def build_portfolio_cards(
+    journal: PortfolioJournal,
+    base_title: str = "实盘周报",
+) -> list[dict[str, object]]:
+    """构造 4 张飞书卡片：overview + 3 region cards（第三十五轮 liubo 2026-10-18）。
+
+    返回顺序：
+    - cards[0] = 总览（持仓成本 by 大类）
+    - cards[1] = A 股（per-fund + 调仓 + 定投，filter 到 CN_EQUITY）
+    - cards[2] = 港股（per-fund + 调仓 + 定投，filter 到 HK_EQUITY）
+    - cards[3] = 美股（per-fund + 调仓 + 定投，filter 到 US_EQUITY）
+
+    每张卡用各自 title（"{base_title}（总览/A 股/港股/美股）"）。
+    """
+    overview = build_overview_card(journal, title=f"{base_title}（总览）")
+    cn = build_region_card(journal, SwensenClass.CN_EQUITY, title=f"{base_title}（A 股）")
+    hk = build_region_card(journal, SwensenClass.HK_EQUITY, title=f"{base_title}（港股）")
+    us = build_region_card(journal, SwensenClass.US_EQUITY, title=f"{base_title}（美股）")
+    return [overview, cn, hk, us]
+
+
+def build_overview_card(
+    journal: PortfolioJournal,
+    title: str = "实盘周报（总览）",
+) -> dict[str, object]:
+    """Card 1（总览）：持仓成本 by 大类（liubo 2026-10-18 拍板）。
+
+    数据源：COST_BASIS_BY_CODE + breakdown.py（不依赖 journal.compute_holdings()）。
+    第三十四轮记忆：市值/盈亏不显示（券商 app 数据不准）；用累计成本。
+    """
+    elements = _build_cost_basis_section()
+    return _wrap_card(title, elements)
+
+
+def build_region_card(
+    journal: PortfolioJournal,
+    region: SwensenClass,
+    title: str | None = None,
+) -> dict[str, object]:
+    """Card 2/3/4（区域）：某 region 的 per-fund + 调仓 + 定投。
+
+    第三十五轮（liubo 2026-10-18）：
+    - 标题默认 "{region 中文名} 周报"，例："A 股 周报"
+    - per-fund：只显示该 region 的持仓 + watchlist 行
+    - 调仓纪录：按 fund_codes 过滤（source 或 target 之一属于 region 则入选）
+    - 定投纪录：按 DCA 基金的 SUBCLASS 过滤
+    """
+    from global_allocation.portfolio.breakdown import DISPLAY_NAME
+
+    actual_title = title or f"{DISPLAY_NAME[region].split('股票')[0]} 周报"
+    # 收集一次 rebalance rows，3 个 section 共用
+    all_rebalance_rows = _collect_rebalance_rows(limit=20)
+
+    elements: list[dict[str, object]] = []
+
+    # Section 2: per-fund（filter 到 region）
+    per_fund = _build_per_fund_section(region=region)
+    elements.extend(per_fund)
+
+    # Section 3: 调仓记录（filter 到 region）
+    rebalance_section = _build_rebalance_records_section(all_rebalance_rows, region=region)
+    if rebalance_section:
+        elements.append({"tag": "hr"})
+        elements.extend(rebalance_section)
+
+    # Section 4: 定投记录（filter 到 region）
+    dca_section = _build_dca_records_section(all_rebalance_rows, region=region)
     if dca_section:
         elements.append({"tag": "hr"})
         elements.extend(dca_section)
 
-    card: dict[str, object] = {
+    # 如果 region 完全空（无持仓/无调仓/无定投）→ 仍返回 1 个 note 提示
+    if len(elements) <= len(per_fund):
+        elements.append(
+            {
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": "本 region 无调仓 / 定投记录"},
+            }
+        )
+
+    return _wrap_card(actual_title, elements)
+
+
+def _wrap_card(title: str, elements: list[dict[str, object]]) -> dict[str, object]:
+    """通用卡片外壳（header + elements + footer）。"""
+    return {
         "header": {
             "template": "blue",
-            "title": {
-                "tag": "plain_text",
-                "content": actual_title,
-            },
+            "title": {"tag": "plain_text", "content": title},
         },
         "elements": elements,
         "footer": {
@@ -2591,7 +2703,6 @@ def build_portfolio_card(
             ],
         },
     }
-    return card
 
 
 def card_to_json(card: dict[str, object]) -> str:
@@ -2599,4 +2710,4 @@ def card_to_json(card: dict[str, object]) -> str:
     return json.dumps(card, ensure_ascii=False)
 
 
-__all__ = ["build_portfolio_card", "card_to_json"]
+__all__ = ["build_portfolio_card", "build_portfolio_cards", "build_overview_card", "build_region_card", "card_to_json"]
