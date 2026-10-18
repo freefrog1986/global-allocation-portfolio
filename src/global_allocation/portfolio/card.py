@@ -397,22 +397,30 @@ def _build_cost_basis_section() -> list[dict[str, object]]:
 
     # 跟 DEFAULT_POSITION_ALLOCATION 比对，标出欠配/超配
     # 第三十轮（liubo 2026-10-18 反馈）：摘要补「欠配/超配」一行。
-    # 阈值 1%：偏差 < -1% 算欠配，> +1% 算超配（CASH 不参与 — CASH 不在 cost_basis）。
-    under_alloc: list[str] = []
-    over_alloc: list[str] = []
+    # 第三十一轮（liubo 2026-10-18 反馈）：单位改「仓」（1 仓 = 1 万 CNY），按偏差大小排序。
+    # 阈值 0.5 仓：|dev| < 0.5 不标（避免噪音；0.5 仓 = 5000 CNY）。
+    # CASH 不参与 — CASH 不在 cost_basis。
+    # 排序：欠配从最欠配到最轻欠配，超配从最超配到最轻超配（绝对值降序）。
+    unit_size = float(DEFAULT_POSITION_ALLOCATION.unit_size)  # 10000 CNY
+    under_alloc: list[tuple[float, str]] = []  # (dev_cang, label) — dev 为负，按 dev 升序（最负在前）
+    over_alloc: list[tuple[float, str]] = []   # (dev_cang, label) — dev 为正，按 dev 降序（最正在前）
     for sub in SwensenClass:
         if sub == SwensenClass.CASH:
             continue
         if sub not in by_sub:
             continue
         cost = by_sub[sub][1]
-        actual_pct = float(cost / total_cost * 100) if total_cost > 0 else 0.0
-        target_pct = float(DEFAULT_POSITION_ALLOCATION.target_weight(sub)) * 100
-        dev = actual_pct - target_pct
-        if dev < -1:
-            under_alloc.append(f"{DISPLAY_NAME[sub]} {dev:+.1f}%")
-        elif dev > 1:
-            over_alloc.append(f"{DISPLAY_NAME[sub]} {dev:+.1f}%")
+        actual_cang = float(cost) / unit_size if unit_size > 0 else 0.0
+        target_cang = float(DEFAULT_POSITION_ALLOCATION.target_position(sub))
+        dev_cang = actual_cang - target_cang
+        if dev_cang < -0.5:
+            under_alloc.append((dev_cang, f"{DISPLAY_NAME[sub]} {dev_cang:+.1f} 仓"))
+        elif dev_cang > 0.5:
+            over_alloc.append((dev_cang, f"{DISPLAY_NAME[sub]} {dev_cang:+.1f} 仓"))
+
+    # 排序：欠配 dev 越小越靠前（最负）；超配 dev 越大越靠前（最正）
+    under_alloc.sort(key=lambda t: t[0])
+    over_alloc.sort(key=lambda t: t[0], reverse=True)
 
     # summary div：生成时间 + 总成本 + 大类资产数 + 欠配/超配
     # 第二十九轮（liubo 2026-10-17 反馈）：改"基金数"为"大类资产数"——
@@ -423,8 +431,8 @@ def _build_cost_basis_section() -> list[dict[str, object]]:
         f"**生成时间**：{datetime.now().strftime('%Y-%m-%d %H:%M')}  \n"
         f"**总成本**：{float(total_cost):,.2f} CNY  \n"
         f"**大类资产数**：{n_classes} 类  \n"
-        f"**欠配**：{' / '.join(under_alloc) if under_alloc else '—'}  \n"
-        f"**超配**：{' / '.join(over_alloc) if over_alloc else '—'}"
+        f"**欠配**：{' / '.join(label for _, label in under_alloc) if under_alloc else '—'}  \n"
+        f"**超配**：{' / '.join(label for _, label in over_alloc) if over_alloc else '—'}"
     )
 
     elements: list[dict[str, object]] = [

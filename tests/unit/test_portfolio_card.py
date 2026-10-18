@@ -1557,10 +1557,12 @@ class TestCostBasisByClassAggregation:
 
 class TestAllocationDeviationInSummary:
     """第三十轮（liubo 2026-10-18 反馈）：Section 1 摘要补「欠配/超配」。
+    第三十一轮（liubo 2026-10-18 反馈）：单位改「仓」（1 仓 = 1 万 CNY），按偏差大小排序。
 
-    - 阈值 ±1% — 偏差绝对值 ≤ 1% 不标（避免噪音）
+    - 阈值 ±0.5 仓 — |dev| ≤ 0.5 仓不标（避免噪音；0.5 仓 = 5000 CNY）
     - CASH 不参与（cost_basis 不含现金 004137）
-    - 按子类枚举顺序输出 + `{:+.1f}%` 格式（保留符号 + 1 位小数）
+    - 排序：欠配从最欠配到最轻欠配（dev 升序），超配从最超配到最轻超配（dev 降序）
+    - 格式：`{:+.1f} 仓`（保留 +/- 号 + 1 位小数 + 空格 + 单位）
     """
 
     def _get_summary_text(self, card: dict) -> str:
@@ -1571,6 +1573,32 @@ class TestAllocationDeviationInSummary:
                 if "总成本" in text:
                     return text
         raise AssertionError("找不到 Section 1 摘要 div")
+
+    def _get_alloc_line(self, summary: str, marker: str) -> str:
+        """抓「**欠配**：...」或「**超配**：...」一行。"""
+        line = next(
+            (line for line in summary.split("\n") if line.startswith(f"**{marker}**：")),
+            None,
+        )
+        assert line is not None, f"找不到「**{marker}**」行，实际：{summary}"
+        return line
+
+    def _parse_alloc_items(self, line: str) -> list[tuple[str, float]]:
+        """把「**欠配**：A 股股票 -2.9 仓 / 美股股票 -4.8 仓」解析成 [(name, dev), ...]。
+
+        抓 dash 后面的数字 + "仓"。
+        """
+        body = line.split("：", 1)[1].strip()
+        if body == "—":
+            return []
+        items: list[tuple[str, float]] = []
+        for chunk in body.split(" / "):
+            # chunk = "A 股股票 -2.9 仓"
+            parts = chunk.rsplit(" ", 2)
+            # parts = ["A 股股票", "-2.9", "仓"] — name 可能含空格（"A 股股票"），但 unit 永远是最后两个
+            assert len(parts) == 3 and parts[2] == "仓", f"格式不对：{chunk!r}"
+            items.append((parts[0], float(parts[1])))
+        return items
 
     def test_summary_contains_under_and_over_alloc_lines(
         self, journal: PortfolioJournal,
@@ -1585,54 +1613,73 @@ class TestAllocationDeviationInSummary:
             f"摘要应有「**超配**」一行，实际：{summary}"
         )
 
-    def test_over_alloc_includes_bond_overweights(
+    def test_over_alloc_includes_bond_overweights_in_cang(
         self, journal: PortfolioJournal,
     ) -> None:
-        """国内利率债（45% vs 5% target = +40%）和美债（28% vs 1.67% = +26%）必须标超配。"""
+        """国内利率债（28.5 仓 vs target 3 = +25.5）和美债（17.5 仓 vs target 1 = +16.5）必须标超配。"""
         card = build_portfolio_card(journal)
         summary = self._get_summary_text(card)
-        # 抓「**超配**：...」行
-        over_line = next(
-            (line for line in summary.split("\n") if line.startswith("**超配**：")),
-            None,
-        )
-        assert over_line is not None, f"找不到「**超配**」行，实际：{summary}"
-        assert "国内利率债" in over_line, f"国内利率债应在超配行，实际：{over_line}"
-        assert "美债" in over_line, f"美债应在超配行，实际：{over_line}"
-        # 验证正号格式（保留 + 号）
-        assert "+" in over_line, f"超配行应有 + 号，实际：{over_line}"
+        over_line = self._get_alloc_line(summary, "超配")
+        over_items = self._parse_alloc_items(over_line)
+        names = [name for name, _ in over_items]
+        assert "国内利率债" in names, f"国内利率债应在超配行，实际：{over_line}"
+        assert "美债" in names, f"美债应在超配行，实际：{over_line}"
+        # 验证正号格式（保留 + 号）+ 单位 "仓"
+        assert any(dev > 0 for _, dev in over_items), f"超配行应有正值，实际：{over_line}"
+        assert "仓" in over_line, f"单位应为「仓」，实际：{over_line}"
 
-    def test_under_alloc_includes_equity_underweights(
+    def test_under_alloc_includes_equity_underweights_in_cang(
         self, journal: PortfolioJournal,
     ) -> None:
-        """A 股 / 美股 / 国外发达 / 新兴市场 等股票子类实际占比 < target，应进欠配行。"""
+        """A 股 / 美股 / 国外发达 等股票子类实际仓 < target，应进欠配行。"""
         card = build_portfolio_card(journal)
         summary = self._get_summary_text(card)
-        under_line = next(
-            (line for line in summary.split("\n") if line.startswith("**欠配**：")),
-            None,
-        )
-        assert under_line is not None, f"找不到「**欠配**」行，实际：{summary}"
-        # A 股 (13% vs 18.33% = -5%) + 美股 (2% vs 10% = -8%) 都应进
-        assert "A 股股票" in under_line, f"A 股应在欠配行，实际：{under_line}"
-        assert "美股股票" in under_line, f"美股应在欠配行，实际：{under_line}"
+        under_line = self._get_alloc_line(summary, "欠配")
+        under_items = self._parse_alloc_items(under_line)
+        names = [name for name, _ in under_items]
+        assert "A 股股票" in names, f"A 股应在欠配行，实际：{under_line}"
+        assert "美股股票" in names, f"美股应在欠配行，实际：{under_line}"
         # 验证负号格式
-        assert "-" in under_line, f"欠配行应有 - 号，实际：{under_line}"
+        assert any(dev < 0 for _, dev in under_items), f"欠配行应有负值，实际：{under_line}"
 
-    def test_deviation_threshold_excludes_small_drift(
+    def test_under_alloc_sorted_by_largest_deviation_first(
         self, journal: PortfolioJournal,
     ) -> None:
-        """港股偏差仅 -1.08%（绝对值 > 1）应进欠配；阈值内（≤ 1%）的不进。"""
+        """欠配行按偏差升序（最欠配的在前）。"""
         card = build_portfolio_card(journal)
         summary = self._get_summary_text(card)
-        under_line = next(
-            (line for line in summary.split("\n") if line.startswith("**欠配**：")),
-            None,
+        under_line = self._get_alloc_line(summary, "欠配")
+        under_items = self._parse_alloc_items(under_line)
+        devs = [dev for _, dev in under_items]
+        assert devs == sorted(devs), (
+            f"欠配应按 dev 升序（最负在前），实际：{devs}"
         )
-        # 港股 dev=-1.08%（绝对值 > 1）→ 应进
-        assert "港股" in under_line, (
-            f"港股 dev=-1.08% 应进欠配（|dev|>1），实际：{under_line}"
+
+    def test_over_alloc_sorted_by_largest_deviation_first(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """超配行按偏差降序（最超配的在前）。"""
+        card = build_portfolio_card(journal)
+        summary = self._get_summary_text(card)
+        over_line = self._get_alloc_line(summary, "超配")
+        over_items = self._parse_alloc_items(over_line)
+        devs = [dev for _, dev in over_items]
+        assert devs == sorted(devs, reverse=True), (
+            f"超配应按 dev 降序（最正在前），实际：{devs}"
         )
+
+    def test_deviation_uses_cang_unit_not_percent(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """单位必须是「仓」，不能是「%」。"""
+        card = build_portfolio_card(journal)
+        summary = self._get_summary_text(card)
+        under_line = self._get_alloc_line(summary, "欠配")
+        over_line = self._get_alloc_line(summary, "超配")
+        assert "仓" in under_line, f"欠配单位应为仓，实际：{under_line}"
+        assert "仓" in over_line, f"超配单位应为仓，实际：{over_line}"
+        assert "%" not in under_line, f"欠配不应有 %，实际：{under_line}"
+        assert "%" not in over_line, f"超配不应有 %，实际：{over_line}"
 
     def test_cash_not_in_deviation_lines(
         self, journal: PortfolioJournal,
