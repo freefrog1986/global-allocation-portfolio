@@ -181,22 +181,22 @@ class RebalanceAction:
 #   HSTECH: 理杏仁 2026-10-09（PE 21.8289 / 分位 19.69%；触发 ADD +1 — 欠配 0.65 仓 + PE < 20%）
 #   baifenwei.com 2026-09-24 也提供 PE 分位（沪深300/科创50 等 A 股）作为交叉验证。
 PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal | None, Decimal | None]] = {
-    # ── A 股（PE-TTM，理杏仁 2026-10-09）──
-    "000510": (ValuationMetric.PE_TTM, Decimal("15.4214"), Decimal("0.4155")),  # 中证 A500
-    "000852": (ValuationMetric.PE_TTM, Decimal("41.1066"), Decimal("0.6580")),  # 中证 1000
-    "000903": (ValuationMetric.PE_TTM, Decimal("16.1626"), Decimal("0.8949")),  # 中证 A100
-    "930050": (ValuationMetric.PE_TTM, Decimal("15.4805"), Decimal("0.1186")),  # 中证 A50（11.86% < 20% 触发 ADD，但有冷却期冻结）
-    # ── A 股科创/创业类（PS-TTM，理杏仁 2026-10-09）───
-    "931643": (ValuationMetric.PS_TTM, Decimal("6.5005"), Decimal("0.6875")),   # 科创创业 50
-    "000688": (ValuationMetric.PS_TTM, Decimal("8.7917"), Decimal("0.7532")),   # 科创 50
-    "000698": (ValuationMetric.PS_TTM, Decimal("6.2560"), Decimal("0.4627")),   # 科创 100
-    "399673": (ValuationMetric.PS_TTM, Decimal("4.1510"), Decimal("0.2044")),   # 创业板 50
-    # ── 美股（PE-TTM，理杏仁 2026-10-09）──
-    ".INX": (ValuationMetric.PE_TTM, Decimal("26.1682"), Decimal("0.6214")),    # 标普 500
-    # .NDX: 理杏仁 2026-10-09 CSV 无数据 → entry 删除 → 5 只纳指 100 基金 SKIP（liubo 2026-10-09 拍板）
-    ".OEX": (ValuationMetric.PE_TTM, Decimal("26.1682"), Decimal("0.6214")),    # 标普 100（INX 代理，2026-10-09 更新）
-    # ── 港股（PE-TTM，理杏仁 2026-10-09）──
-    "HSTECH": (ValuationMetric.PE_TTM, Decimal("21.8289"), Decimal("0.1969")),  # 恒生科技（理杏仁 2026-10-09，触发 ADD +1）
+    # ── A 股（PE-TTM，理杏仁 2026-10-16）──
+    "000510": (ValuationMetric.PE_TTM, Decimal("15.1264"), Decimal("0.3863")),  # 中证 A500（< 50% → 欠配就 ADD）
+    "000852": (ValuationMetric.PE_TTM, Decimal("38.5559"), Decimal("0.5428")),  # 中证 1000（50-80% → HOLD）
+    "000903": (ValuationMetric.PE_TTM, Decimal("16.1075"), Decimal("0.8913")),  # 中证 A100（> 80% → REDUCE）
+    "930050": (ValuationMetric.PE_TTM, Decimal("15.5991"), Decimal("0.1488")),  # 中证 A50（< 20% 深价值 → ADD，但有冷却期冻结）
+    # ── A 股科创/创业类（PS-TTM，理杏仁 2026-10-16）───
+    "931643": (ValuationMetric.PS_TTM, Decimal("5.9562"), Decimal("0.6022")),   # 科创创业 50
+    "000688": (ValuationMetric.PS_TTM, Decimal("8.1792"), Decimal("0.6918")),   # 科创 50
+    "000698": (ValuationMetric.PS_TTM, Decimal("5.7253"), Decimal("0.3645")),   # 科创 100（< 50% → 欠配就 ADD；冷却期冻结）
+    "399673": (ValuationMetric.PS_TTM, Decimal("3.8127"), Decimal("0.1330")),   # 创业板 50（< 20% 深价值 → ADD；冷却期冻结）
+    # ── 美股（PE-TTM，理杏仁 2026-10-16）──
+    ".INX": (ValuationMetric.PE_TTM, Decimal("25.7531"), Decimal("0.5888")),    # 标普 500
+    # .NDX: 理杏仁 2026-10-16 CSV 仍无数据 → entry 删除 → 5 只纳指 100 基金 SKIP
+    ".OEX": (ValuationMetric.PE_TTM, Decimal("25.7531"), Decimal("0.5888")),    # 标普 100（INX 代理，2026-10-16 更新）
+    # ── 港股（PE-TTM，理杏仁 2026-10-16）──
+    "HSTECH": (ValuationMetric.PE_TTM, Decimal("22.0142"), Decimal("0.2156")),  # 恒生科技（21.56% > 20%，不再深价值；冷却期冻结）
     # ── 国外发达（PE-TTM，guchacha.com 2026-09-22）──
     ".N225": (ValuationMetric.PE_TTM, Decimal("19.21"), Decimal("0.698")),      # 日经 225（日本整体市场口径）
     ".GDAXI": (ValuationMetric.PE_TTM, Decimal("16.90"), Decimal("0.471")),     # 德国 DAX（DAX 指数本身口径）
@@ -291,8 +291,8 @@ INDEX_WATCHLIST: list[tuple[SwensenClass, str, str, ValuationMetric, Decimal, De
         "HSI",
         "恒生指数",
         ValuationMetric.PE_TTM,
-        Decimal("10.8557"),  # hsi.com.hk + 百分位网 2026-09-28
-        Decimal("0.5806"),
+        Decimal("10.6327"),  # 理杏仁 2026-10-16（55.24% > 50% → HOLD 等便宜）
+        Decimal("0.5524"),
     ),
     # ── 国外发达市场（liubo 2026-09-29 加；457001 转走 0 持仓，跟踪 PE 等建仓时机；
     #    数据源 guchacha.com 2026-09-22。
@@ -323,6 +323,9 @@ LAST_REBALANCE_BY_ETF: dict[str, date] = {
     # liubo 2026-10-09 新建仓（commit 664b6d6）：换 020291→019857（科创100）+ 160422→023414（创业板50）
     "000698": date(2026, 10, 9),  # 科创 100 — liubo 2026-10-09 新建仓 1 仓
     "399673": date(2026, 10, 9),  # 创业板 50 — liubo 2026-10-09 新建仓 1 仓
+    "HSTECH": date(2026, 10, 9),  # 恒生科技 — liubo 2026-10-09 +1 仓 25000→35000（commit 664b6d6）
+    # liubo 2026-09-29 加 019172/019441 纳指定投（commit 9e70495 之前的 5a5d3c0 等）
+    ".NDX": date(2026, 9, 29),    # 纳指 100 — liubo 2026-09-29 加 2 只定投基金
 }
 
 COOLDOWN_DAYS: int = 30  # 月度调仓最短间隔

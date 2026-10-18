@@ -1161,6 +1161,8 @@ class TestWeeklyRebalancePlan:
         2026-10-09 liubo 加仓 +1 仓 → 仓位变 3.50 仓（>= 1 仓）。
         2026-10-09 理杏仁 CSV：PE 21.8289 / 分位 19.69% < 20% → 深价值例外 → ADD +1
         （虽然仓位已经 3.50 仓远超 1 仓，但分位 < 20% 触发「已配足 + 深价值」分支）。
+        2026-10-16 理杏仁 CSV 更新：PE 22.0142 / 分位 21.56% > 20% → 越过深价值边界 → HOLD
+        （10-09 加仓合理，因为 19.69% 是低估值；现在 21.56% 进入 20-80% HOLD 区间）。
         """
         actions = weekly_rebalance_plan()
         hstech_actions = [a for a in actions if a.etf_index_code == "HSTECH"]
@@ -1168,9 +1170,9 @@ class TestWeeklyRebalancePlan:
         hstech = hstech_actions[0]
         assert hstech.subclass == SwensenClass.HK_EQUITY
         assert hstech.fund_code == "013127"
-        # 仓位 3.50 >= 1 + 分位 19.69% < 20% → 深价值 ADD +1
-        assert hstech.signal == PESignal.ADD
-        assert hstech.change == Decimal("1")
+        # 仓位 3.50 >= 1 + 分位 21.56% (20-80%) → HOLD
+        assert hstech.signal == PESignal.HOLD
+        assert hstech.change == Decimal("0")
         assert hstech.current_position == Decimal("3.5")
         assert hstech.metric == ValuationMetric.PE_TTM
 
