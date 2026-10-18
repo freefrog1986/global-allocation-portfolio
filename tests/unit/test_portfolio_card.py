@@ -1083,6 +1083,81 @@ class TestRebalanceRecordsSection:
         assert parsed_real is not None, "真实加仓行被错误过滤"
         assert parsed_real.action == "加仓"
 
+    def test_transfer_add_dedup_same_physical_trade(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """第三十一轮（liubo 2026-10-18 反馈）：同一笔实际调仓被记 2 次时去重。
+
+        2026-10-09 的 019857/023414/013127 各被记了 2 次：
+        - 「转入」来自 spec 022 conversion ledger（006829 → 019857 等）
+        - 「加仓」来自高层 decision commit（"建仓 1 仓 = 10000" / "+1 仓: 25000→35000"）
+        两边描述同一笔实际调仓 — 优先保留「转入」（带 source，更完整）。
+
+        注意：同一 (date, fund, amount) 但 action 都是「转出」是合法的
+        （如 平安中短债 2026-10-09 转出 2 次：分别去 019857 和 023414，是 2 笔不同交易）。
+
+        验证：
+        1. 2026-10-09 调仓表中 019857/023414/013127 各只出现 1 次
+        2. 保留的是「转入」（不是「加仓」），因为「转入」带 source 信息
+        """
+        _seed(journal)
+        table = self._get_rebalance_table(journal)
+        rows = table["rows"]
+
+        # 找出 2026-10-09 的所有 019857/023414/013127 行（这 3 只是被双计的）
+        target_funds = {
+            "博时上证科创板100ETF联接A",
+            "工银创业板50ETF联接A",
+            "汇添富恒生科技 ETF 联接发起式(QDII)A",
+        }
+        date_2026_10_09_rows = [
+            r for r in rows
+            if r["date"] == "2026-10-09" and r["fund"] in target_funds
+        ]
+
+        # 每只目标基金应只剩 1 条记录
+        from collections import Counter
+        fund_counts = Counter(r["fund"] for r in date_2026_10_09_rows)
+        for fund, count in fund_counts.items():
+            assert count == 1, (
+                f"2026-10-09 {fund} 被记了 {count} 次（应为 1 次），"
+                f"重复行: {[r for r in date_2026_10_09_rows if r['fund'] == fund]}"
+            )
+
+        # 每只目标基金保留的应该是「转入」（带 source 信息），不是「加仓」
+        for r in date_2026_10_09_rows:
+            assert r["action"] == "转入", (
+                f"2026-10-09 {r['fund']} 应保留「转入」（带 source），"
+                f"实际保留 action='{r['action']}'（应是 '转入'）"
+            )
+
+        # 关键验证：3 只目标基金没有「加仓」行（都已被 dedup 删掉）
+        add_rows_for_targets = [
+            r for r in date_2026_10_09_rows if r["action"] == "加仓"
+        ]
+        assert not add_rows_for_targets, (
+            f"2026-10-09 目标基金还剩「加仓」行（应被 dedup 删掉）: "
+            f"{[(r['fund'], r['amount']) for r in add_rows_for_targets]}"
+        )
+
+        # 关键验证：同一天同一基金不该既有「转入」又有「加仓」
+        # （仅检查「转入+加仓」组合，不限制 2 个「转出」 ——
+        #  平安中短债 2026-10-09 转出 2 次去不同目标是合法的）
+        from collections import defaultdict
+        action_by_key: dict[tuple[str, str, str], set[str]] = defaultdict(set)
+        for r in rows:
+            if r["date"] != "2026-10-09":
+                continue
+            key = (r["date"], r["fund"], r["amount"])
+            action_by_key[key].add(r["action"])
+        conflicting = {
+            k: v for k, v in action_by_key.items()
+            if "转入" in v and "加仓" in v
+        }
+        assert not conflicting, (
+            f"2026-10-09 仍有「转入 + 加仓」配对未去重: {conflicting}"
+        )
+
 
 class TestDcaRecordsSection:
     """第二十五轮（liubo 2026-10-17 第二轮反馈）— 定投纪录 section 独立成 1 张表。

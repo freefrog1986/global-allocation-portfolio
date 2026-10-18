@@ -1160,6 +1160,20 @@ def _collect_rebalance_rows(limit: int = 20) -> list[RebalanceRow]:
         if len(rows) >= limit:
             break
 
+    # 去重：同一 (date, fund, amount) 出现「转入」+「加仓」两条时，保留「转入」删「加仓」。
+    # 背景（liubo 2026-10-18 反馈）：2026-10-09 的 019857/013127/023414 各被记了 2 次 ——
+    # 「转入」来自 spec 022 conversion ledger（006829 → 019857 等）
+    # 「加仓」来自高层 decision commit（"建仓 1 仓 = 10000" / "+1 仓: 25000→35000"）
+    # 描述同一笔实际调仓。优先保留「转入」（带 source，更完整）。
+    transfer_keys: set[tuple[str, str, str]] = {
+        (r.date, r.fund, r.amount) for r in rows if r.action == "转入"
+    }
+    rows = [
+        r
+        for r in rows
+        if not (r.action == "加仓" and (r.date, r.fund, r.amount) in transfer_keys)
+    ]
+
     return rows
 
 
