@@ -1303,6 +1303,80 @@ class TestPESnapshotData:
         assert pct is not None
         assert Decimal("0") <= pct <= Decimal("1")
 
+    def test_load_live_gold_snapshot_injects_into_gold_dict(self, tmp_path: Path) -> None:
+        """load_live_gold_snapshot() 从最新 JSON 注入到 GOLD_SNAPSHOT_BY_FUND（spec 099）。
+
+    liubo 2026-10-18 拍板黄金估值也走 fetch + 注入，跟 REITs 同模式。
+    """
+    import json
+    from global_allocation.portfolio import pe_rebalance as pr_mod
+    from global_allocation.portfolio import fetch_gold_valuation as fgv
+
+    original_dir = fgv.DATA_DIR
+    original_snapshot = pr_mod.GOLD_SNAPSHOT_BY_FUND.copy()
+    fgv.DATA_DIR = tmp_path
+    try:
+        # 写一份"今天"的 JSON
+        snap = {
+            "fetched_at": "2026-10-18T22:00:00+08:00",
+            "data_date": "2026-10-18",
+            "funds": {
+                "000216": {
+                    "gold_price": "999.99",
+                    "gold_pct_5y": "0.5000",
+                    "real_yield_dfii10": "0.0300",
+                    "data_date": "2026-10-18",
+                    "source": "test",
+                    "error": "",
+                },
+            },
+        }
+        (tmp_path / "2026-10-18.json").write_text(json.dumps(snap))
+        pr_mod.load_live_gold_snapshot()
+        # 注入应成功
+        assert "000216" in pr_mod.GOLD_SNAPSHOT_BY_FUND
+        v = pr_mod.GOLD_SNAPSHOT_BY_FUND["000216"]
+        assert v[0] == Decimal("999.99")
+        assert v[1] == Decimal("0.5000")
+        assert v[2] == Decimal("0.0300")
+    finally:
+        pr_mod.GOLD_SNAPSHOT_BY_FUND.clear()
+        pr_mod.GOLD_SNAPSHOT_BY_FUND.update(original_snapshot)
+        fgv.DATA_DIR = original_dir
+
+    def test_load_live_gold_snapshot_skips_partial_error(self, tmp_path: Path) -> None:
+        """JSON 里有 error 字段 → 跳过注入，保留现有 snapshot。"""
+        import json
+        from global_allocation.portfolio import pe_rebalance as pr_mod
+        from global_allocation.portfolio import fetch_gold_valuation as fgv
+
+        original_dir = fgv.DATA_DIR
+        original_snapshot = pr_mod.GOLD_SNAPSHOT_BY_FUND.copy()
+        fgv.DATA_DIR = tmp_path
+        try:
+            snap = {
+                "fetched_at": "2026-10-18T22:00:00+08:00",
+                "data_date": "2026-10-18",
+                "funds": {
+                    "000216": {
+                        "gold_price": "999.99",
+                        "gold_pct_5y": "0.5000",
+                        "real_yield_dfii10": None,  # 拉取失败
+                        "data_date": "2026-10-18",
+                        "source": "test",
+                        "error": "FRED DFII10 拉取失败",
+                    },
+                },
+            }
+            (tmp_path / "2026-10-18.json").write_text(json.dumps(snap))
+            pr_mod.load_live_gold_snapshot()
+            # 应保留原 hardcode（不动）
+            assert pr_mod.GOLD_SNAPSHOT_BY_FUND["000216"][0] == Decimal("907.50")
+        finally:
+            pr_mod.GOLD_SNAPSHOT_BY_FUND.clear()
+            pr_mod.GOLD_SNAPSHOT_BY_FUND.update(original_snapshot)
+            fgv.DATA_DIR = original_dir
+
     def test_a_share_uses_pe_ttm_metric(self) -> None:
         """A 股指数估值指标：
         - 宽基（PE 适用）：000510 / 000852 / 930050 → PE_TTM

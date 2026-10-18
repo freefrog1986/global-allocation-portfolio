@@ -959,6 +959,52 @@ def get_live_reit_data_date() -> date | None:
     return max(d for _, _, _, d in LIVE_REIT_SNAPSHOT_BY_INDEX.values())
 
 
+def load_live_gold_snapshot() -> dict[str, tuple[Decimal, Decimal, Decimal]]:
+    """从 data/gold_valuation/ 最新 JSON 读黄金实时估值，注入 GOLD_SNAPSHOT_BY_FUND。
+
+    返回更新后的 GOLD_SNAPSHOT_BY_FUND 引用（同时也写回 module-level 变量）。
+    GOLD_SNAPSHOT_BY_FUND 的 value 是个 tuple (gold_price, gold_pct_5y, real_yield_dfii10)，
+    跟 compute_composite_score 的入参匹配。
+
+    失败 / 无 snapshot → 不修改 GOLD_SNAPSHOT_BY_FUND（保留静态 hardcode 数据）。
+    """
+    from global_allocation.portfolio.fetch_gold_valuation import load_latest_snapshot
+
+    result = load_latest_snapshot()
+    if result is None:
+        return GOLD_SNAPSHOT_BY_FUND
+
+    _path, snapshots = result
+    for code, s in snapshots.items():
+        # 任何一个字段为 None → 跳过（保留静态 hardcode）
+        if (
+            s.gold_price is None
+            or s.gold_pct_5y is None
+            or s.real_yield_dfii10 is None
+            or s.error
+        ):
+            continue
+        GOLD_SNAPSHOT_BY_FUND[code] = (
+            s.gold_price,
+            s.gold_pct_5y,
+            s.real_yield_dfii10,
+        )
+    return GOLD_SNAPSHOT_BY_FUND
+
+
+def get_live_gold_data_date() -> date | None:
+    """GOLD_SNAPSHOT_BY_FUND 数据来源 data_date（注入的 JSON 里的 data_date 字段）。"""
+    # GOLD_SNAPSHOT_BY_FUND 的 tuple 没存 data_date，只能从加载的 GoldValuation 拿
+    from global_allocation.portfolio.fetch_gold_valuation import load_latest_snapshot
+    result = load_latest_snapshot()
+    if result is None:
+        return None
+    _path, snapshots = result
+    if not snapshots:
+        return None
+    return max(s.data_date for s in snapshots.values())
+
+
 def get_current_position(fund_code: str) -> Decimal:
     """从 COST_BASIS_BY_CODE 算当前仓位（cost / per-index 1 仓单位）。
 
@@ -1287,6 +1333,8 @@ __all__ = [
     "get_current_position",
     "load_live_reit_snapshot",
     "get_live_reit_data_date",
+    "load_live_gold_snapshot",
+    "get_live_gold_data_date",
     "build_evaluations",
     "build_watchlist_evaluations",
     "merge_by_etf",
@@ -1295,11 +1343,13 @@ __all__ = [
 ]
 
 
-# ─── 模块加载时自动注入 REITs 实时 snapshot ─────────────────
+# ─── 模块加载时自动注入 REITs + 黄金 实时 snapshot ─────────────────
 # spec REITs-DY — liubo 2026-10-12 拍板
-# 没有 snapshot 文件 → LIVE_REIT_SNAPSHOT_BY_INDEX 保持空 dict（build_evaluations 走 SKIP）
+# spec 099 — liubo 2026-10-18 拍板黄金也走 fetch
+# 没有 snapshot 文件 → 保持空（build_evaluations 走 SKIP）/ 保留静态 hardcode
 try:
     load_live_reit_snapshot()
+    load_live_gold_snapshot()
 except Exception:
-    # 加载失败（首次跑、文件系统问题等）→ 保持空，不影响其他指数评估
+    # 加载失败（首次跑、文件系统问题等）→ 保持空/静态，不影响其他指数评估
     pass

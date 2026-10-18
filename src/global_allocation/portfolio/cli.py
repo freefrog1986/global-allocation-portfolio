@@ -292,6 +292,33 @@ def cmd_publish(
         except ValueError as e:
             console.print(f"[yellow]![/yellow] 跳过快照：{e}")
 
+    # spec 099（liubo 2026-10-18 拍板）：发周报前自动拉 REITs + 黄金估值
+    # REITs DY（5年）+ 黄金（金价 + 实际利率）— 都靠周五/每日 fetch 写到 JSON 后注入 LIVE snapshot
+    try:
+        from global_allocation.portfolio import fetch_reit_valuation, fetch_gold_valuation
+        from global_allocation.portfolio.pe_rebalance import (
+            load_live_reit_snapshot,
+            load_live_gold_snapshot,
+        )
+
+        # REITs
+        try:
+            fetch_reit_valuation.run_fetch_cli()
+            load_live_reit_snapshot()
+            console.print("[green]✓[/green] 已拉 REITs 估值（国内 + 美国）")
+        except Exception as e:
+            console.print(f"[yellow]![/yellow] REITs 估值拉取失败（用旧 snapshot）：{e}")
+
+        # 黄金
+        try:
+            fetch_gold_valuation.run_fetch_cli()
+            load_live_gold_snapshot()
+            console.print("[green]✓[/green] 已拉黄金估值（金价 + 实际利率）")
+        except Exception as e:
+            console.print(f"[yellow]![/yellow] 黄金估值拉取失败（用静态 hardcode）：{e}")
+    except ImportError as e:
+        console.print(f"[yellow]![/yellow] 黄金 / REITs 模块未找到：{e}")
+
     # spec 098 方案 A：自动拉估值（如缺数据）
     today = _date.today()
     if not _has_complete_valuation_for_date(today):
