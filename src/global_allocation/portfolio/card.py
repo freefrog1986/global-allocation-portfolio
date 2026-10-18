@@ -2524,67 +2524,34 @@ def build_portfolio_card(
 ) -> dict[str, object]:
     """构造实盘账本的飞书交互卡片。
 
-    卡片结构（spec 098 第二十一轮 — 2 个 section：持仓 + 估值）：
+    卡片结构（第三十四轮 liubo 2026-10-18 拍板 — 全部用 COST_BASIS 不用 DB 流水）：
     - header.title: "实盘周报"
-    - Section 1（实盘持仓 — spec 097 第二十一轮整数仓位模型）：
-      - note header "实盘持仓"
-      - summary div（生成时间 / 总市值 / 总成本 / 浮动盈亏 / 周涨跌 / 累计涨跌）
+    - Section 1（持仓成本 by 大类）：
+      - note header "持仓成本"
+      - summary div（生成时间 / 总成本 / 大类资产数 / 欠配 / 超配）
       - hr 分隔
-      - 大类资产柱状图（vertical bar，11 个子类，柱子顶部带数值标签 — 第十九轮加）
-      - hr 分隔
-      - 持仓聚合表（11 行 × 5 列：分类 / 市值 / 占比 / 目标 / 偏离）
-        - target 列：投资子类 "{N} 份 ({X.X}%)"；现金 "[{min}, {max}] 份"
-        - delta 列：投资子类 "{+/-N} 份"（份数差）；现金 "区间内/低于下限/高于上限"
-    - Section 2（估值与操作 — spec 098 combined 模式）：
+      - 持仓成本 by 大类 表（11 行 × 4 列：分类 / 基金数 / 累计成本(¥) / 成本占比）
+    - Section 2（per-fund 持仓成本 + 估值 + 调仓建议）：
       - hr 分隔（跨 section）
-      - note header "估值与操作"
-      - hr 分隔
-      - combined 指标表（5 列：区域 / 指标 / 当前 / 评估 / 阈值）— 3 region × (4 指标 + 1 综合)
-      - 3 个 strategy_note div（每个 region 一个）
-      - combined per-fund 表（11 列 × N 行）
+      - note header "持仓与调仓建议"
+      - summary div（基金数 / 本周操作）
+      - per-fund 表（5 列：基金 / ETF 指数 / 持仓成本(¥) / 估值 / 调仓建议）
+    - Section 3（调仓记录）+ Section 4（定投记录）：
+      - hr 分隔 + note header + 表
+      - 调仓和定投分开 2 张表（liubo 2026-10-17 第二轮反馈）
 
-    第十九轮（liubo 2026-09-19）：合并 Section 2 + 3 到 Section 1 持仓表（加 target/delta）
-    第二十轮（liubo 2026-09-19）：恢复 Section 2，保留 Section 3 删除状态
-    第二十一轮（spec 097 + spec 098）：
-      - 删除 Section 2（大类资产策略）— 持仓表的 target/delta 列已包含超类信息
-      - Section 3 改名 "估值与操作" — combined 模式（A 股 + 港股 + 美股）
-      - 持仓表 target/delta 列改用整数仓位模型
-    第二十三轮（liubo 2026-10-17 拍板）：
-      - 删 估值与操作（spec 098 combined 模式那 4 张表）— 用户已经不需要
-      - 新 Section 2: per-fund 持仓成本 + 估值 + 调仓建议（52 行）
-      - Section 1.5（调仓记录）→ 升为 Section 3
-      - 任何 path（DB 有/无 holdings）都加 Section 2（per-fund 是用户最关心的视角）
+    第三十四轮（liubo 2026-10-18）：删柱状图、删 DB 持仓查询。
+    - 持仓数据来源：COST_BASIS_BY_CODE（手动维护的累计成本）— 不依赖 journal.compute_holdings()
+    - 浮动盈亏、市值不显示（虚拟组合概念，券商 app 数据不准；记忆："券商 app 持仓收益口径不准"）
+    - 目标偏离：保留（基于成本 vs DEFAULT_POSITION_ALLOCATION 目标仓位）
 
-    元素总数（DB 空 / fallback）：2 note + 2 div + 5 hr + 2 table = 11 + footer
-    元素总数（DB 有 holdings）：3 note + 2 div + 5 hr + 1 chart + 2 table = 13 + footer
+    元素总数：4 note + 2 div + 7 hr + 4 table = 17 + footer
     """
     actual_title = title or "实盘周报"
-    holdings = journal.compute_holdings()
+    # 第三十四轮（liubo 2026-10-18）：不再读 DB 持仓 — COST_BASIS_BY_CODE 才是持仓的真相
+    # journal 参数保留（接口稳定），但不调用 .compute_holdings()
 
-    if holdings:
-        # 正常路径：DB 有持仓流水 → 显示市值/占比/目标/偏离
-        elements: list[dict[str, object]] = [
-            # Section 1: 实盘持仓
-            {
-                "tag": "note",
-                "elements": [{"tag": "plain_text", "content": "实盘持仓"}],
-            },
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": _build_summary(journal, actual_title),
-                },
-            },
-            {"tag": "hr"},
-            {"tag": "chart", "chart_spec": _build_breakdown_bar(journal)},
-            {"tag": "hr"},
-            {"tag": "table", **_build_holdings_table(journal)},
-        ]
-    else:
-        # fallback 路径（liubo 2026-10-16）：DB holdings 为空时 → 持仓成本表
-        # 数据来源：cost_basis.py + breakdown.py（不依赖 akshare 拉市值）
-        elements = _build_cost_basis_section()
+    elements: list[dict[str, object]] = _build_cost_basis_section()
 
     # Section 2: per-fund 持仓成本 + 估值 + 调仓建议（liubo 2026-10-17 拍板 — 替换 估值与操作）
     # 数据：COST_BASIS_BY_CODE（52 只成本）+ weekly_rebalance_plan() 的 RebalanceAction

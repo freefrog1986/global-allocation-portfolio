@@ -279,10 +279,7 @@ def cmd_publish(
     from datetime import date as _date
 
     journal = _default_journal()
-    holdings = journal.compute_holdings()
-    if not holdings:
-        console.print("[yellow]暂无持仓，无可发内容[/yellow]")
-        return
+    # 第三十四轮（liubo 2026-10-18）：不再因 DB 持仓为空早退 — COST_BASIS_BY_CODE 才是真相
 
     # --weekly 模式：先拍一张今天（或上一交易日）的快照
     if weekly:
