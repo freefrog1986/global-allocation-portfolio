@@ -474,6 +474,7 @@ def _build_per_fund_section() -> list[dict[str, object]]:
     from global_allocation.portfolio.breakdown import SUBCLASS_BY_CODE
     from global_allocation.portfolio.cost_basis import COST_BASIS_BY_CODE
     from global_allocation.portfolio.pe_rebalance import (
+        INDEX_DISPLAY_NAME,
         METRIC_DISPLAY_NAME,
         PESignal,
         RebalanceAction,
@@ -528,10 +529,15 @@ def _build_per_fund_section() -> list[dict[str, object]]:
             n_hold += 1
         else:
             # 估值列
+            metric_name = METRIC_DISPLAY_NAME.get(action.metric, action.metric.value)
             if action.metric_value is None:
-                valuation = "—"
+                # 数据源没给绝对值（NDX 螺丝钉只给分位）— 但 percentile 仍可显示
+                if action.metric_percentile is not None:
+                    pct = float(action.metric_percentile) * 100
+                    valuation = f"{metric_name} 分位 {pct:.2f}%"
+                else:
+                    valuation = "—"
             else:
-                metric_name = METRIC_DISPLAY_NAME.get(action.metric, action.metric.value)
                 if action.metric == ValuationMetric.GOLD_HISTORICAL_PCT:
                     # 金价：CNY/g 格式
                     val_str = f"{float(action.metric_value):.2f}"
@@ -583,6 +589,7 @@ def _build_per_fund_section() -> list[dict[str, object]]:
 
         rows.append({
             "fund": f"{fund_name} ({code})",
+            "etf_index": INDEX_DISPLAY_NAME.get(action.etf_index_code, "—") if action else "—",
             "cost": cost_str,
             "valuation": valuation,
             "advice": advice,
@@ -611,6 +618,7 @@ def _build_per_fund_section() -> list[dict[str, object]]:
     per_fund_table: dict[str, object] = {
         "columns": [
             {"name": "fund", "display_name": "基金", "data_type": "text", "width": "auto"},
+            {"name": "etf_index", "display_name": "ETF 指数", "data_type": "text", "width": "auto"},
             {"name": "cost", "display_name": "持仓成本(¥)", "data_type": "text", "width": "auto"},
             {"name": "valuation", "display_name": "估值", "data_type": "text", "width": "auto"},
             {"name": "advice", "display_name": "调仓建议", "data_type": "text", "width": "auto"},

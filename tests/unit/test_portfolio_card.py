@@ -1419,7 +1419,8 @@ class TestDcaStatusField:
             schedule_no_status = {"per": "10 元", "cycle": "每天", "total": "1800"}
             assert _compute_dca_status("016452", schedule_no_status) == "到期"
         finally:
-            cost_basis.COST_BASIS_BY_CODE = original
+            cost_basis.COST_BASIS_BY_CODE.clear()
+            cost_basis.COST_BASIS_BY_CODE.update(original)
 
     def test_compute_dca_status_default_in_progress(self) -> None:
         """默认：无 status override + cost < total → "进行中"。"""
@@ -1433,7 +1434,8 @@ class TestDcaStatusField:
             schedule_no_status = {"per": "10 元", "cycle": "每天", "total": "1800"}
             assert _compute_dca_status("016452", schedule_no_status) == "进行中"
         finally:
-            cost_basis.COST_BASIS_BY_CODE = original
+            cost_basis.COST_BASIS_BY_CODE.clear()
+            cost_basis.COST_BASIS_BY_CODE.update(original)
 
     def test_dca_schedule_has_status_field(self) -> None:
         """_DCA_SCHEDULE_BY_CODE 全部 5 只基金都有 status 字段（liubo 拍板全部「进行中」）。"""
@@ -1871,15 +1873,18 @@ class TestPerFundSection:
     """
 
     def _get_per_fund_table(self, journal: PortfolioJournal) -> dict[str, object]:
-        """拿 per-fund 表（4 列：fund/cost/valuation/advice）。"""
+        """拿 per-fund 表（5 列：fund/etf_index/cost/valuation/advice）。
+
+        第三十二轮（liubo 2026-10-18）：加「ETF 指数」列，让合并组基金一眼看出来。
+        """
         card = build_portfolio_card(journal)
         for el in card["elements"]:
             if el.get("tag") != "table":
                 continue
             col_names = [c["name"] for c in el.get("columns", [])]
-            if col_names == ["fund", "cost", "valuation", "advice"]:
+            if col_names == ["fund", "etf_index", "cost", "valuation", "advice"]:
                 return el
-        raise AssertionError("未找到 per-fund 表（4 列 fund/cost/valuation/advice）")
+        raise AssertionError("未找到 per-fund 表（5 列 fund/etf_index/cost/valuation/advice）")
 
     def test_section_header_present(self, journal: PortfolioJournal) -> None:
         """Section 2 标题 '持仓与调仓建议' 必须存在。"""
@@ -1898,18 +1903,74 @@ class TestPerFundSection:
         table = self._get_per_fund_table(journal)
         assert len(table["rows"]) == expected
 
-    def test_columns_are_4(self, journal: PortfolioJournal) -> None:
-        """per-fund 表 4 列：基金 / 持仓成本(¥) / 估值 / 调仓建议。"""
+    def test_columns_are_5(self, journal: PortfolioJournal) -> None:
+        """per-fund 表 5 列：基金 / ETF 指数 / 持仓成本(¥) / 估值 / 调仓建议。"""
         table = self._get_per_fund_table(journal)
         col_names = [c["name"] for c in table["columns"]]
-        assert col_names == ["fund", "cost", "valuation", "advice"]
+        assert col_names == ["fund", "etf_index", "cost", "valuation", "advice"], (
+            f"per-fund 列名应是 [fund, etf_index, cost, valuation, advice]，实际 {col_names}"
+        )
 
-    def test_row_keys_have_all_4_columns(self, journal: PortfolioJournal) -> None:
-        """每行 4 个 key 都在（飞书 table 行为 row[key] = cell value）。"""
+    def test_row_keys_have_all_5_columns(self, journal: PortfolioJournal) -> None:
+        """每行 5 个 key 都在（飞书 table 行为 row[key] = cell value）。"""
         table = self._get_per_fund_table(journal)
         for r in table["rows"]:
-            for k in ("fund", "cost", "valuation", "advice"):
+            for k in ("fund", "etf_index", "cost", "valuation", "advice"):
                 assert k in r, f"行 {r} 缺 '{k}' key"
+
+    def test_etf_index_column_shows_index_name_for_index_funds(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """跟踪指数的基金应在 etf_index 列显示「纳斯达克 100」「标普 500」等。
+
+        第三十二轮（liubo 2026-10-18）：合并组基金（如 5 只 NDX）应有同一个 etf_index 名。
+        """
+        table = self._get_per_fund_table(journal)
+        ndx_rows = [r for r in table["rows"] if "018966" in r["fund"] or "539001" in r["fund"] or "016452" in r["fund"] or "019172" in r["fund"] or "019441" in r["fund"]]
+        assert len(ndx_rows) >= 1, "应至少有一只 NDX 基金"
+        for r in ndx_rows:
+            assert r["etf_index"] == "纳斯达克 100", (
+                f"NDX 基金 etf_index 应是「纳斯达克 100」，实际：{r}"
+            )
+
+    def test_etf_index_column_shows_dash_for_non_index_funds(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """不跟踪指数的基金（如债/现金）etf_index 列显示「—」。"""
+        table = self._get_per_fund_table(journal)
+        # 找一只债基（中短债/美债之类）
+        from global_allocation.portfolio.breakdown import SUBCLASS_BY_CODE
+        from global_allocation.portfolio.card import SwensenClass
+        for r in table["rows"]:
+            # fund 列格式 "中文名 (code)"
+            code = r["fund"].rsplit("(", 1)[-1].rstrip(")")
+            sub = SUBCLASS_BY_CODE.get(code)
+            if sub in (SwensenClass.CN_GOV_BOND, SwensenClass.US_BOND):
+                assert r["etf_index"] == "—", (
+                    f"债基 {code} etf_index 应是「—」，实际：{r}"
+                )
+
+    def test_ndx_valuation_shows_percentile_when_metric_value_missing(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """NDX 基金估值列：metric_value=None 但 percentile 不为 None 时，显示分位估值。
+
+        第三十二轮（liubo 2026-10-18）：螺丝钉数据只有分位没有 PE 绝对值，仍要显示分位。
+        修复前显示「—」，修复后显示「PE-TTM 分位 72.59%」。
+        """
+        table = self._get_per_fund_table(journal)
+        ndx_rows = [r for r in table["rows"] if "018966" in r["fund"] or "539001" in r["fund"] or "016452" in r["fund"] or "019172" in r["fund"] or "019441" in r["fund"]]
+        assert len(ndx_rows) >= 1
+        for r in ndx_rows:
+            assert r["valuation"] != "—", (
+                f"NDX 基金估值列不应是「—」，应有分位估值，实际：{r}"
+            )
+            assert "分位" in r["valuation"], (
+                f"NDX 基金估值列应有分位，实际：{r['valuation']}"
+            )
+            assert "72.59" in r["valuation"], (
+                f"NDX 基金估值列应显示 72.59%（螺丝钉 10 年分位），实际：{r['valuation']}"
+            )
 
     def test_sorted_by_subclass_then_code(self, journal: PortfolioJournal) -> None:
         """按 SwensenClass 枚举顺序 + fund_code 排序。"""
