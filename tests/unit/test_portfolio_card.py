@@ -1238,12 +1238,16 @@ class TestDcaRecordsSection:
         assert len(candidates) >= 2, (
             f"调仓 + 定投 应该分 2 张表，实际 {len(candidates)} 张"
         )
-        # 2 张表的列名相同（schema 一致）
-        for t in candidates[:2]:
-            cols = [c["name"] for c in t["columns"]]
-            assert cols == ["date", "fund", "action", "amount"], (
-                f"表列名应是 [date, fund, action, amount]，实际 {cols}"
-            )
+        # 2 张表的列名基本一致，DCA 表 2026-10-18 加了"状态"列（5 列），
+        # 调仓记录表保持 4 列。
+        rebalance_cols = [c["name"] for c in candidates[0]["columns"]]
+        dca_cols = [c["name"] for c in candidates[1]["columns"]]
+        assert rebalance_cols == ["date", "fund", "action", "amount"], (
+            f"调仓表列名应是 4 列 [date, fund, action, amount]，实际 {rebalance_cols}"
+        )
+        assert dca_cols == ["date", "fund", "action", "amount", "status"], (
+            f"DCA 表列名应是 5 列 [date, fund, action, amount, status]，实际 {dca_cols}"
+        )
 
     def test_dca_table_only_has_dca_action_rows(
         self, journal: PortfolioJournal,
@@ -1320,6 +1324,126 @@ class TestDcaRecordsSection:
         for row in dca_table["rows"]:
             assert row["action"] == "定投", (
                 f"DCA 表所有行 action 应是 '定投'，实际 {row['action']!r}"
+            )
+
+
+class TestDcaStatusField:
+    """第三十四轮（liubo 2026-10-18 反馈）：定投纪录加「状态」字段。
+
+    3 种状态：进行中 / 到期 / 终止
+    优先级：手动 status override > 自动检测（cost_basis >= total → 到期）> 默认 进行中
+
+    数据：5 只 DCA 基金（016452/019172/019441/000614/000216）
+    当前全部 "进行中"（10-18 仍在扣款中，cost_basis 累计目标尚未达到实际买入额）。
+    """
+
+    def test_dca_table_has_status_column(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """DCA 表第 5 列是「状态」。"""
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        candidates = [
+            t for t in card["elements"]
+            if t.get("tag") == "table"
+            and "date" in [c["name"] for c in t.get("columns", [])]
+            and "action" in [c["name"] for c in t.get("columns", [])]
+        ]
+        if len(candidates) < 2:
+            pytest.skip("DCA 表不存在")
+        dca_table = candidates[1]
+        cols = [c["name"] for c in dca_table["columns"]]
+        assert "status" in cols, f"DCA 表应包含 status 列，实际列 {cols}"
+
+    def test_all_5_dca_funds_have_status(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """5 只 DCA 基金都应有 status 字段（liubo 拍板全部「进行中」）。"""
+        from global_allocation.portfolio.card import _DCA_SCHEDULE_BY_CODE
+
+        _seed(journal)
+        card = build_portfolio_card(journal)
+        candidates = [
+            t for t in card["elements"]
+            if t.get("tag") == "table"
+            and "date" in [c["name"] for c in t.get("columns", [])]
+            and "action" in [c["name"] for c in t.get("columns", [])]
+        ]
+        if len(candidates) < 2:
+            pytest.skip("DCA 表不存在")
+        dca_table = candidates[1]
+        # 每行都有 status 字段
+        for row in dca_table["rows"]:
+            assert "status" in row, f"DCA 行 {row['fund']} 缺 status 字段"
+            assert row["status"] in ("进行中", "到期", "终止"), (
+                f"DCA 行 {row['fund']} status 非法: {row['status']!r}"
+            )
+        # 5 只基金全部「进行中」（liubo 10-18 拍板）
+        status_by_fund = {r["fund"]: r["status"] for r in dca_table["rows"]}
+        for code, schedule in _DCA_SCHEDULE_BY_CODE.items():
+            from global_allocation.portfolio.card import get_fund_name
+            fund_name = get_fund_name(code)
+            assert status_by_fund[fund_name] == "进行中", (
+                f"{fund_name} 状态应为「进行中」（liubo 10-18 拍板），"
+                f"实际 {status_by_fund[fund_name]}"
+            )
+
+    def test_compute_dca_status_manual_override_wins(self) -> None:
+        """手动 status override 优先级最高（liubo 10-18 拍板）。"""
+        from global_allocation.portfolio.card import _compute_dca_status
+
+        # 显式 status="进行中" → 返回 "进行中"（即使 cost >= total 也会被 override）
+        assert _compute_dca_status("016452", {
+            "per": "10 元", "cycle": "每天", "total": "1800", "status": "进行中",
+        }) == "进行中"
+        # 显式 status="终止" → 返回 "终止"
+        assert _compute_dca_status("000216", {
+            "per": "10 元", "cycle": "周一", "total": "7500", "status": "终止",
+        }) == "终止"
+        # 显式 status="到期" → 返回 "到期"
+        assert _compute_dca_status("000614", {
+            "per": "10 元", "cycle": "周三", "total": "10000", "status": "到期",
+        }) == "到期"
+
+    def test_compute_dca_status_auto_detect_expired(self) -> None:
+        """自动检测：cost_basis >= total → "到期"（无手动 override 时）。"""
+        from global_allocation.portfolio.card import _compute_dca_status
+
+        # 016452: cost_basis = 1800, total = 1800 → 自动 "到期"
+        # 用临时 cost_basis mock（避免污染全局）
+        from global_allocation.portfolio import cost_basis
+        original = cost_basis.COST_BASIS_BY_CODE.copy()
+        try:
+            cost_basis.COST_BASIS_BY_CODE["016452"] = Decimal("2000")  # > 1800
+            # 临时 016452 schedule 不带 status 字段
+            schedule_no_status = {"per": "10 元", "cycle": "每天", "total": "1800"}
+            assert _compute_dca_status("016452", schedule_no_status) == "到期"
+        finally:
+            cost_basis.COST_BASIS_BY_CODE = original
+
+    def test_compute_dca_status_default_in_progress(self) -> None:
+        """默认：无 status override + cost < total → "进行中"。"""
+        from global_allocation.portfolio.card import _compute_dca_status
+
+        # 用临时 cost_basis mock：cost = 500 < total = 1800
+        from global_allocation.portfolio import cost_basis
+        original = cost_basis.COST_BASIS_BY_CODE.copy()
+        try:
+            cost_basis.COST_BASIS_BY_CODE["016452"] = Decimal("500")
+            schedule_no_status = {"per": "10 元", "cycle": "每天", "total": "1800"}
+            assert _compute_dca_status("016452", schedule_no_status) == "进行中"
+        finally:
+            cost_basis.COST_BASIS_BY_CODE = original
+
+    def test_dca_schedule_has_status_field(self) -> None:
+        """_DCA_SCHEDULE_BY_CODE 全部 5 只基金都有 status 字段（liubo 拍板全部「进行中」）。"""
+        from global_allocation.portfolio.card import _DCA_SCHEDULE_BY_CODE
+
+        assert len(_DCA_SCHEDULE_BY_CODE) == 5
+        for code, schedule in _DCA_SCHEDULE_BY_CODE.items():
+            assert "status" in schedule, f"{code} 缺 status 字段"
+            assert schedule["status"] in ("进行中", "到期", "终止"), (
+                f"{code} status 非法: {schedule['status']!r}"
             )
 
 

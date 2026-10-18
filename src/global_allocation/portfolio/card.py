@@ -56,12 +56,17 @@ _CROSS_PORTFOLIO_EXCLUDE_CODES: frozenset[str] = frozenset({
 # 不写「已买 ¥X」（已经买入了多少他不关心）。
 # 数据源：liubo 2026-10-17 提供的天天基金 DCA 计划详情截图（不是 commit 注释）。
 _DCA_SCHEDULE_BY_CODE: dict[str, dict[str, str]] = {
-    # code: {"per": 定投额, "cycle": 频率, "total": 总目标}
-    "016452": {"per": "10 元", "cycle": "每天", "total": "1800"},          # 南方纳100（DCA ¥10/天 → 累计 1800 暂停）
-    "019172": {"per": "10 元", "cycle": "每天", "total": "2000"},          # 摩根纳斯达克100(QDII)人民币A（DCA ¥10/天 → 累计 2000 暂停）
-    "019441": {"per": "10 元", "cycle": "每天", "total": "2000"},          # 万家纳斯达克100发起式(QDII)A（DCA ¥10/天 → 累计 2000 暂停）
-    "000614": {"per": "250-1000 元", "cycle": "每周三", "total": "10000"},  # 华安德国(DAX)联接(QDII)A（慧定投 250-1000/周三 → 累计 10000 暂停）
-    "000216": {"per": "250-1000 元", "cycle": "每周一", "total": "7500"},   # 华安黄金ETF联接A（慧定投 250-1000/周一 → 累计 7500 暂停）
+    # code: {"per": 定投额, "cycle": 频率, "total": 总目标, "status": 状态}
+    # status 值（liubo 2026-10-18 拍板）：
+    # - "进行中"：DCA 计划激活，自动扣款中
+    # - "到期"：累计金额达到目标，自动暂停
+    # - "终止"：手动停掉 DCA 计划，不再扣款
+    # 优先级：手动 status override > 自动检测（cost_basis >= total → 到期）> 默认 "进行中"
+    "016452": {"per": "10 元", "cycle": "每天", "total": "1800", "status": "进行中"},         # 南方纳100（DCA ¥10/天 → 累计 1800 暂停）
+    "019172": {"per": "10 元", "cycle": "每天", "total": "2000", "status": "进行中"},         # 摩根纳斯达克100(QDII)人民币A（DCA ¥10/天 → 累计 2000 暂停）
+    "019441": {"per": "10 元", "cycle": "每天", "total": "2000", "status": "进行中"},         # 万家纳斯达克100发起式(QDII)A（DCA ¥10/天 → 累计 2000 暂停）
+    "000614": {"per": "250-1000 元", "cycle": "每周三", "total": "10000", "status": "进行中"}, # 华安德国(DAX)联接(QDII)A（慧定投 250-1000/周三 → 累计 10000 暂停）
+    "000216": {"per": "250-1000 元", "cycle": "每周一", "total": "7500", "status": "进行中"},  # 华安黄金ETF联接A（慧定投 250-1000/周一 → 累计 7500 暂停）
 }
 
 # DCA 计划创建日（liubo 2026-10-17 提供的天天基金截图）
@@ -81,6 +86,39 @@ def _format_dca_amount(schedule: dict[str, str]) -> str:
     liubo 2026-10-17 反馈 — 金额列显示 3 个值：定投额 / 频率 / 总目标。
     """
     return f"{schedule['per']} / {schedule['cycle']} / 累计 {schedule['total']}"
+
+
+def _compute_dca_status(code: str, schedule: dict[str, str]) -> str:
+    """计算 DCA 状态（liubo 2026-10-18 拍板 — 加「状态」字段）。
+
+    状态值：
+    - "进行中"：DCA 计划激活，天天基金自动扣款中
+    - "到期"：累计金额达到目标，自动暂停
+    - "终止"：手动停掉 DCA 计划，不再扣款
+
+    优先级（liubo 2026-10-18 拍板）：
+    1. 手动 override（schedule["status"] 显式设置）→ 直接用
+    2. 自动检测（cost_basis >= total）→ "到期"
+    3. 默认 → "进行中"
+
+    注意：cost_basis 自 2026-10-17 commit 0e9e430 后对 DCA 基金是「累计目标」不是「实际已买」，
+    所以自动检测只对非 DCA 基金或 cost_basis 已切换为「实际已买」的 DCA 基金准确。
+    对 5 只当前 DCA 基金，靠手动 status override（status="进行中"）保证正确显示。
+    """
+    explicit = schedule.get("status")
+    if explicit in ("进行中", "到期", "终止"):
+        return explicit
+    # 自动检测：cost_basis >= total → "到期"
+    try:
+        from global_allocation.portfolio.cost_basis import COST_BASIS_BY_CODE
+
+        cost = COST_BASIS_BY_CODE.get(code)
+        total = int(schedule["total"])
+        if cost is not None and cost >= Decimal(str(total)):
+            return "到期"
+    except (ValueError, TypeError, ImportError):
+        pass
+    return "进行中"
 from global_allocation.portfolio.journal import PortfolioJournal
 from global_allocation.portfolio.models import (
     FundValuation,
@@ -1232,9 +1270,10 @@ def _build_rebalance_records_section(rows: list[RebalanceRow]) -> list[dict[str,
 def _build_dca_records_section(rows: list[RebalanceRow]) -> list[dict[str, object]]:
     """Section 4 — 定投纪录表格版（liubo 2026-10-17 第二轮反馈 — 跟调仓分开 2 张表）。
 
-    4 列：日期 / 基金 / 动作 / 金额
+    5 列：日期 / 基金 / 动作 / 金额 / 状态
     - 动作固定 "定投"
     - 金额 = "X 元 / Y / 累计 Z" 3 段（per / cycle / total），从 _DCA_SCHEDULE_BY_CODE 拿
+    - 状态 = "进行中" / "到期" / "终止"（liubo 2026-10-18 拍板加状态字段）
     - 始终展示 _DCA_SCHEDULE_BY_CODE 全部 5 只基金（liubo 2026-10-17 第二十五轮反馈 — 不管
       git log 是否有 "定投" commit，黄金 + DAX 也要展示），日期从 _DCA_PLAN_START_BY_CODE 拿
     - `rows` 参数保留以备未来用（目前没有 git log 行需合并到 DCA 表，因为 DCA 不走 commit body）
@@ -1259,6 +1298,7 @@ def _build_dca_records_section(rows: list[RebalanceRow]) -> list[dict[str, objec
             "fund": fund_name,
             "action": "定投",
             "amount": _format_dca_amount(schedule),
+            "status": _compute_dca_status(code, schedule),
         })
 
     table: dict[str, object] = {
@@ -1267,6 +1307,7 @@ def _build_dca_records_section(rows: list[RebalanceRow]) -> list[dict[str, objec
             {"name": "fund", "display_name": "基金", "data_type": "text", "width": "auto"},
             {"name": "action", "display_name": "动作", "data_type": "text", "width": "auto"},
             {"name": "amount", "display_name": "金额", "data_type": "text", "width": "auto"},
+            {"name": "status", "display_name": "状态", "data_type": "text", "width": "auto"},
         ],
         "rows": rows_dict,
     }
