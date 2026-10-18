@@ -1592,16 +1592,32 @@ class TestPerFundSection:
         raise AssertionError("Section 2 标题 '持仓与调仓建议' 未找到")
 
     def test_table_has_55_rows(self, journal: PortfolioJournal) -> None:
-        """per-fund 表行数 = COST_BASIS_BY_CODE 52 + INDEX_WATCHLIST 3（HSI/N225/FCHI）。
+        """per-fund 表行数 = COST_BASIS_BY_CODE 52 + INDEX_WATCHLIST 3（HSI/N225/FCHI） - 7 dedupe。
 
         liubo 2026-10-18 拍板：未持仓的指数也列出，持仓写 0。
+        第三十六轮（liubo 2026-10-19）：加 8 个 CN_EQUITY ETF 指数到 INDEX_WATCHLIST（A50/A100/A500/
+        中证1000/科创创业50/创业板50/科创50/科创100），但 7 个已被持仓基金覆盖 → dedupe 跳过，
+        只剩 A100 (000903) 没持仓 → 实际 watchlist 新增 1 行。总行数 = 52 + 1 = 53。
         """
         from global_allocation.portfolio.cost_basis import COST_BASIS_BY_CODE
-        from global_allocation.portfolio.pe_rebalance import INDEX_WATCHLIST
-        expected = len(COST_BASIS_BY_CODE) + len(INDEX_WATCHLIST)
+        from global_allocation.portfolio.breakdown import SUBCLASS_BY_CODE
+        from global_allocation.portfolio.card import SwensenClass
+        from global_allocation.portfolio.pe_rebalance import INDEX_WATCHLIST, FUND_INDEX_MAP
+
+        # dedupe：已被持仓基金覆盖的 index 跳过 watchlist
+        held_index_codes: set[str] = set()
+        for fund_code, (_, index_code, _) in FUND_INDEX_MAP.items():
+            if fund_code in COST_BASIS_BY_CODE:
+                held_index_codes.add(index_code)
+        new_watchlist_rows = sum(
+            1 for sub, index_code, _, _, _, _ in INDEX_WATCHLIST
+            if index_code not in held_index_codes
+        )
+        expected = len(COST_BASIS_BY_CODE) + new_watchlist_rows
         table = self._get_per_fund_table(journal)
         assert len(table["rows"]) == expected, (
-            f"per-fund 行数应是 {expected}（52只 + 3 watchlist），实际 {len(table['rows'])}"
+            f"per-fund 行数应是 {expected}（{len(COST_BASIS_BY_CODE)} holdings + "
+            f"{new_watchlist_rows} watchlist），实际 {len(table['rows'])}"
         )
 
     def test_columns_are_5(self, journal: PortfolioJournal) -> None:
@@ -1850,10 +1866,12 @@ class TestPerFundSection:
     def test_index_watchlist_shows_with_zero_cost(self, journal: PortfolioJournal) -> None:
         """第三十三轮（liubo 2026-10-18）：INDEX_WATCHLIST 里的指数也列出，持仓 0。
 
-        HSI（恒生指数）、.N225（日经 225）、.FCHI（法国 CAC 40）3 个 watchlist。
+        第三十六轮（liubo 2026-10-19）：HSI/.N225/.FCHI + A100 (中证 A100) 共 4 个 watchlist。
+        7 个 CN_EQUITY 指数（A50/A500/中证1000/科创创业50/创业板50/科创50/科创100）已被持仓基金
+        覆盖 → dedupe 跳过。
         """
         table = self._get_per_fund_table(journal)
-        watchlist_names = {"恒生指数", "日经 225", "法国 CAC 40"}
+        watchlist_names = {"恒生指数", "日经 225", "法国 CAC 40", "中证 A100"}
         seen: set[str] = set()
         for r in table["rows"]:
             if "（无持仓）" in r["fund"]:
@@ -1866,7 +1884,7 @@ class TestPerFundSection:
                 )
                 seen.add(r["etf_index"])
         assert seen == watchlist_names, (
-            f"watchlist 3 个指数都应出现，实际：{seen}"
+            f"watchlist 4 个指数都应出现，实际：{seen}"
         )
 
 
@@ -3533,9 +3551,15 @@ class TestBuildRegionCard:
         assert per_fund is not None, "空 region 也应有 per-fund 表（filter 后可能 0 行 / 1 行）"
 
     def test_filter_to_region_excludes_other_funds(self, journal: PortfolioJournal) -> None:
-        """per-fund section 只展示该 region 的基金（用 SUBSET_BY_CODE 判断）。"""
+        """per-fund section 只展示该 region 的基金（用 SUBSET_BY_CODE 判断）。
+
+        第三十六轮（liubo 2026-10-19）：A 股 region card 还要展示 watchlist 行（"中证 A100（无持仓）"
+        这种）。watchlist 行 fund 列是 "指数名（无持仓）" 而不是 6 位基金代码 — 走 INDEX_WATCHLIST
+        反查 region（要求 INDEX_WATCHLIST entry 的 subclass == region 才入选）。
+        """
         from global_allocation.portfolio.breakdown import SUBCLASS_BY_CODE
         from global_allocation.portfolio.card import SwensenClass, build_region_card
+        from global_allocation.portfolio.pe_rebalance import INDEX_WATCHLIST
 
         _seed(journal)
         card = build_region_card(journal, SwensenClass.CN_EQUITY)
@@ -3546,14 +3570,131 @@ class TestBuildRegionCard:
         )
         assert per_fund is not None, "Card 应有 per-fund 表"
         rows = per_fund["rows"]
+        watchlist_index_codes = {ic for sub, ic, _, _, _, _ in INDEX_WATCHLIST if sub == SwensenClass.CN_EQUITY}
         for row in rows:
-            # fund 列通常是 "163406 兴全合润" 或 "(000300) 沪深300" 这种
-            # 从 fund 列提取所有 6 位基金代码（排除 ETF index 代码）
-            codes = re.findall(r"(?<!\d)\d{6}(?!\d)", row["fund"])
-            # 至少有一个 code 的 subclass 是 CN_EQUITY
-            assert any(SUBCLASS_BY_CODE.get(c) == SwensenClass.CN_EQUITY for c in codes), (
-                f"per-fund 行 {row} 不属于 CN_EQUITY region"
-            )
+            if "（无持仓）" in row["fund"]:
+                # watchlist 行 — fund 列是指数中文名 + "（无持仓）"；从 etf_index 列拿指数代码
+                idx_name = row["etf_index"]
+                # 反查 index_code 通过 INDEX_DISPLAY_NAME
+                from global_allocation.portfolio.pe_rebalance import INDEX_DISPLAY_NAME
+                idx_code = next(
+                    (ic for ic, dn in INDEX_DISPLAY_NAME.items() if dn == idx_name),
+                    None,
+                )
+                assert idx_code in watchlist_index_codes, (
+                    f"watchlist 行 {row} 的 index 不在 CN_EQUITY watchlist（{watchlist_index_codes}）"
+                )
+            else:
+                # 持仓行 — 从 fund 列提取 6 位基金代码
+                codes = re.findall(r"(?<!\d)\d{6}(?!\d)", row["fund"])
+                # 至少有一个 code 的 subclass 是 CN_EQUITY
+                assert any(SUBCLASS_BY_CODE.get(c) == SwensenClass.CN_EQUITY for c in codes), (
+                    f"per-fund 行 {row} 不属于 CN_EQUITY region"
+                )
+
+    def test_summary_has_5_lines_for_region_card(self, journal: PortfolioJournal) -> None:
+        """第三十六轮（liubo 2026-10-19）：region card 的 per-fund summary div 扩成 5 行。
+
+        5 行内容：
+        1. 本大类资产的基金数：N 只
+        2. 跟踪的 ETF 数量：N 个
+        3. 本大类资产的占比：N%
+        4. 超配/欠配：超配 / 欠配 / 区间内
+        5. 超/欠的仓位：±X 仓（实际 Y / 目标 Z）
+        """
+        from global_allocation.portfolio.card import SwensenClass, build_region_card
+
+        _seed(journal)
+        card = build_region_card(journal, SwensenClass.CN_EQUITY)
+        # 找 per-fund section 的 div（带 lark_md 文本的 div）
+        summary_div_text = None
+        for e in card["elements"]:
+            if e.get("tag") == "div" and "本大类资产" in e.get("text", {}).get("content", ""):
+                summary_div_text = e["text"]["content"]
+                break
+        assert summary_div_text is not None, "region card 应有含「本大类资产」字样的 div"
+        # 5 行必备内容
+        assert "**本大类资产的基金数**" in summary_div_text, (
+            f"应有「本大类资产的基金数」一行，实际 summary：\n{summary_div_text}"
+        )
+        assert "**跟踪的 ETF 数量**" in summary_div_text, (
+            f"应有「跟踪的 ETF 数量」一行，实际 summary：\n{summary_div_text}"
+        )
+        assert "**本大类资产的占比**" in summary_div_text, (
+            f"应有「本大类资产的占比」一行，实际 summary：\n{summary_div_text}"
+        )
+        assert "**超配/欠配**" in summary_div_text, (
+            f"应有「超配/欠配」一行，实际 summary：\n{summary_div_text}"
+        )
+        assert "**超/欠的仓位**" in summary_div_text, (
+            f"应有「超/欠的仓位」一行，实际 summary：\n{summary_div_text}"
+        )
+
+    def test_summary_fund_count_excludes_watchlist(
+        self, journal: PortfolioJournal, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """第三十六轮：基金数 = holdings 基金数（不含 watchlist）。
+
+        A 股 region: 9 基金 holdings + 1 watchlist (A100) → 基金数 = 9，跟踪 ETF = 8。
+        """
+        from global_allocation.portfolio.card import SwensenClass, build_region_card
+
+        # 清掉可能漏出的飞书凭证
+        for k in ("FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_CHAT_ID"):
+            monkeypatch.delenv(k, raising=False)
+
+        _seed(journal)
+        card = build_region_card(journal, SwensenClass.CN_EQUITY)
+        summary_div_text = None
+        for e in card["elements"]:
+            if e.get("tag") == "div" and "本大类资产" in e.get("text", {}).get("content", ""):
+                summary_div_text = e["text"]["content"]
+                break
+        assert summary_div_text is not None
+        # 基金数 = 9（holdings 9 只：013310/022434/017644/022424/014532/022448/011612/019857/023414）
+        # 跟踪的 ETF 数量 = 8（A50/A100/A500/中证1000/科创创业50/创业板50/科创50/科创100）
+        assert "**本大类资产的基金数**：9 只" in summary_div_text, (
+            f"基金数应为 9 只（holdings 9 不含 watchlist），实际：\n{summary_div_text}"
+        )
+        assert "**跟踪的 ETF 数量**：8 个" in summary_div_text, (
+            f"跟踪 ETF 应为 8 个（A 股 8 大指数），实际：\n{summary_div_text}"
+        )
+
+    def test_summary_over_under_status(self, journal: PortfolioJournal) -> None:
+        """超/欠的仓位 = 实际仓 - 目标仓，单位是仓（1 仓 = 1 万 CNY）。
+
+        A 股：实际 81500/10000 = 8.15 仓；目标 = DEFAULT_POSITION_ALLOCATION.target_position(CN_EQUITY) = 11；
+        → 8.15 - 11 = -2.85 仓 → 欠配。
+        """
+        from global_allocation.portfolio.card import SwensenClass, build_region_card
+        from global_allocation.portfolio.strategy import DEFAULT_POSITION_ALLOCATION
+
+        _seed(journal)
+        card = build_region_card(journal, SwensenClass.CN_EQUITY)
+        summary_div_text = None
+        for e in card["elements"]:
+            if e.get("tag") == "div" and "本大类资产" in e.get("text", {}).get("content", ""):
+                summary_div_text = e["text"]["content"]
+                break
+        assert summary_div_text is not None
+        # 算期望值
+        region_cost = sum(
+            (cost for code, cost in __import__("global_allocation.portfolio.cost_basis", fromlist=["COST_BASIS_BY_CODE"]).COST_BASIS_BY_CODE.items()
+             if __import__("global_allocation.portfolio.breakdown", fromlist=["SUBCLASS_BY_CODE"]).SUBCLASS_BY_CODE.get(code) == SwensenClass.CN_EQUITY),
+            __import__("decimal").Decimal("0"),
+        )
+        unit_size = float(DEFAULT_POSITION_ALLOCATION.unit_size)
+        actual = float(region_cost) / unit_size
+        target = float(DEFAULT_POSITION_ALLOCATION.target_position(SwensenClass.CN_EQUITY))
+        dev = actual - target
+        # 检查「超/欠的仓位」行
+        assert f"**超/欠的仓位**：{dev:+.2f} 仓（实际 {actual:.2f} / 目标 {target:.0f}）" in summary_div_text, (
+            f"超/欠的仓位 应为 {dev:+.2f} 仓（实际 {actual:.2f} / 目标 {target:.0f}），实际：\n{summary_div_text}"
+        )
+        # 8.15 < 11 → 欠配
+        assert "**超配/欠配**：欠配" in summary_div_text, (
+            f"A 股 8.15 < 11 → 应为「欠配」，实际：\n{summary_div_text}"
+        )
 
 
 class TestBuildPortfolioCards:

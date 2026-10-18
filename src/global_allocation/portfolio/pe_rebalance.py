@@ -315,6 +315,74 @@ INDEX_WATCHLIST: list[tuple[SwensenClass, str, str, ValuationMetric, Decimal, De
         Decimal("17.31"),    # guchacha 法国整体市场口径
         Decimal("0.719"),
     ),
+    # ── A 股 8 个 ETF 指数跟踪（liubo 2026-10-19 拍板：周报 A 股卡要覆盖全 8 个）──
+    # 7 只已有持仓（014532/022434/022424/022448/017644/011612/019857/023414/013310），
+    # 持仓行会通过 dedupe 覆盖 watchlist 行；A100 (000903) 没持仓，仍是 watchlist 唯一行。
+    # 数据源：理杏仁 2026-10-16（PE-TTM）/ 科创+创业类用 PS-TTM（liubo 2026-10-09 改）
+    (
+        SwensenClass.CN_EQUITY,
+        "930050",
+        "中证 A50",
+        ValuationMetric.PE_TTM,
+        Decimal("15.5991"),  # 理杏仁 2026-10-16
+        Decimal("0.1488"),
+    ),
+    (
+        SwensenClass.CN_EQUITY,
+        "000903",
+        "中证 A100",
+        ValuationMetric.PE_TTM,
+        Decimal("16.1075"),  # 理杏仁 2026-10-16（> 80% → REDUCE 信号）
+        Decimal("0.8913"),
+    ),
+    (
+        SwensenClass.CN_EQUITY,
+        "000510",
+        "中证 A500",
+        ValuationMetric.PE_TTM,
+        Decimal("15.1264"),
+        Decimal("0.3863"),
+    ),
+    (
+        SwensenClass.CN_EQUITY,
+        "000852",
+        "中证 1000",
+        ValuationMetric.PE_TTM,
+        Decimal("38.5559"),  # 50-80% → HOLD
+        Decimal("0.5428"),
+    ),
+    (
+        SwensenClass.CN_EQUITY,
+        "931643",
+        "科创创业 50",
+        ValuationMetric.PS_TTM,
+        Decimal("5.9562"),
+        Decimal("0.6022"),
+    ),
+    (
+        SwensenClass.CN_EQUITY,
+        "399673",
+        "创业板 50",
+        ValuationMetric.PS_TTM,
+        Decimal("3.8127"),   # < 20% 深价值 → ADD
+        Decimal("0.1330"),
+    ),
+    (
+        SwensenClass.CN_EQUITY,
+        "000688",
+        "科创 50",
+        ValuationMetric.PS_TTM,
+        Decimal("8.1792"),
+        Decimal("0.6918"),
+    ),
+    (
+        SwensenClass.CN_EQUITY,
+        "000698",
+        "科创 100",
+        ValuationMetric.PS_TTM,
+        Decimal("5.7253"),
+        Decimal("0.3645"),
+    ),
 ]
 
 # 月度冷却期（liubo 2026-09-25 拍板）：同 ETF 调仓间隔 ≥ COOLDOWN_DAYS 天。

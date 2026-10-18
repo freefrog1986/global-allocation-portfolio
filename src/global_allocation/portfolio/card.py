@@ -518,6 +518,9 @@ def _build_per_fund_section(region: SwensenClass | None = None) -> list[dict[str
     # sort_key, etf_index_code_for_sort, code, cost, source
     # source: "holdings" 或 "watchlist"
     holdings_codes: set[str] = set()
+    # 第三十六轮（liubo 2026-10-19）：dedupe — 持仓基金对应的 etf_index_code 已经在 holdings 行展示了，
+    # 不再加 watchlist 行（避免 A 股卡 8 个指数里 7 个出现 2 行）。只有没持仓的指数（目前 A100 / 000903）走 watchlist 行。
+    held_index_codes: set[str] = set()
 
     # 先加持仓基金（COST_BASIS_BY_CODE）
     for code, cost in COST_BASIS_BY_CODE.items():
@@ -530,13 +533,17 @@ def _build_per_fund_section(region: SwensenClass | None = None) -> list[dict[str
         # 拿基金对应的 ETF 指数 code（从 by_code 反查；可能没在 FUND_INDEX_MAP）
         action = by_code.get(code)
         index_code_for_sort = action.etf_index_code if action else ""
+        if action is not None:
+            held_index_codes.add(action.etf_index_code)
         items.append((subclass_order[sub], index_code_for_sort, code, cost, "holdings"))
         holdings_codes.add(code)
 
-    # 加 INDEX_WATCHLIST 里的指数（持仓 0）
+    # 加 INDEX_WATCHLIST 里的指数（持仓 0）。但已被持仓覆盖的 index 跳过。
     for sub, index_code, display_name, _metric, _value, _pct in INDEX_WATCHLIST:
         if region is not None and sub != region:
             continue
+        if index_code in held_index_codes:
+            continue  # dedupe：持仓行已展示该 index
         items.append((subclass_order[sub], index_code, f"({index_code})", Decimal("0"), "watchlist"))
 
     items.sort(key=lambda t: (t[0], t[1], t[2]))
@@ -652,23 +659,79 @@ def _build_per_fund_section(region: SwensenClass | None = None) -> list[dict[str
     # 删掉「总成本」行 — Section 1 已经展示总成本了，Section 2 不重复。
     # 保留「基金数」+「本周操作」（加仓 N / 建仓 N / 减仓 N）
     # 第三十五轮（liubo 2026-10-18）：region card 时改用「本 region 基金数」以明示筛选
-    fund_count_label = "本 region 基金数" if region is not None else "基金数"
-    summary_parts = [
-        f"**{fund_count_label}**：{len(rows)} 只  ",
-    ]
-    op_parts = []
-    if n_add:
-        op_parts.append(f"加仓 {n_add}")
-    if n_reduce:
-        op_parts.append(f"减仓 {n_reduce}")
-    if n_build:
-        op_parts.append(f"建仓 {n_build}")
-    if op_parts:
-        summary_parts.append(f"**本周操作**：{' / '.join(op_parts)}")
-    elif n_skip or n_hold:
-        summary_parts.append(f"**本周**：{' / '.join(filter(None, ['跳过 ' + str(n_skip) if n_skip else '', '不动 ' + str(n_hold) if n_hold else '']))}")
+    # 第三十六轮（liubo 2026-10-19）：region card 时扩成 5 行 — 本大类资产的基金数 + 跟踪的etf数量
+    #   + 本大类资产的占比 + 超配/欠配 + 超/欠的仓位
+    if region is not None:
+        # ─── region card：5 行扩展摘要 ───
+        from global_allocation.portfolio.cost_basis import (
+            COST_BASIS_BY_CODE,
+            TOTAL_COST_CNY,
+        )
 
-    summary_text = "  \n".join(summary_parts)
+        # 1) 本大类资产的基金数（仅 holdings，不含 watchlist）
+        n_region_funds = sum(
+            1 for code, _ in COST_BASIS_BY_CODE.items()
+            if SUBCLASS_BY_CODE.get(code) == region
+        )
+
+        # 2) 跟踪的 etf 数量 = holdings 唯一 index + watchlist 唯一 index（都已 dedupe，
+        #    实际就是 items 里 etf_index_code 唯一集合，holdings + watchlist 全部 source）
+        tracked_etf_codes: set[str] = set()
+        for _, idx_code, _code, _cost, source in items:
+            if source == "holdings" and action is not None:
+                # 用 action 反查 (不直接用 items 里的 idx_code 因为可能为空)
+                pass
+            # 直接从 items 拿 index_code（holdings 行已填，watchlist 行也填了 index_code）
+            if idx_code:
+                tracked_etf_codes.add(idx_code)
+        n_tracked_etfs = len(tracked_etf_codes)
+
+        # 3) 本大类资产的占比 = region holdings cost / TOTAL_COST_CNY
+        region_cost = sum(
+            (cost for code, cost in COST_BASIS_BY_CODE.items()
+             if SUBCLASS_BY_CODE.get(code) == region),
+            Decimal("0"),
+        )
+        region_weight = (region_cost / TOTAL_COST_CNY) if TOTAL_COST_CNY > 0 else Decimal("0")
+
+        # 4) 超配/欠配：实际仓（cost / unit_size）vs 目标仓（DEFAULT_POSITION_ALLOCATION.target_position）
+        # region 跟 SwensenClass 1:1 对应（4 张卡的 region 都是单 subclass）
+        unit_size = float(DEFAULT_POSITION_ALLOCATION.unit_size)  # 10000 CNY
+        actual_cang = float(region_cost) / unit_size if unit_size > 0 else 0.0
+        target_cang = float(DEFAULT_POSITION_ALLOCATION.target_position(region))
+        dev_cang = actual_cang - target_cang
+        if abs(dev_cang) < 0.05:
+            alloc_status = "区间内"
+        elif dev_cang < 0:
+            alloc_status = "欠配"
+        else:
+            alloc_status = "超配"
+
+        summary_parts = [
+            f"**本大类资产的基金数**：{n_region_funds} 只  ",
+            f"**跟踪的 ETF 数量**：{n_tracked_etfs} 个  ",
+            f"**本大类资产的占比**：{float(region_weight) * 100:.2f}%  ",
+            f"**超配/欠配**：{alloc_status}  ",
+            f"**超/欠的仓位**：{dev_cang:+.2f} 仓（实际 {actual_cang:.2f} / 目标 {target_cang:.0f}）",
+        ]
+        summary_text = "  \n".join(summary_parts)
+    else:
+        # ─── 单卡（向后兼容）：基金数 + 本周操作 ───
+        summary_parts = [
+            f"**基金数**：{len(rows)} 只  ",
+        ]
+        op_parts = []
+        if n_add:
+            op_parts.append(f"加仓 {n_add}")
+        if n_reduce:
+            op_parts.append(f"减仓 {n_reduce}")
+        if n_build:
+            op_parts.append(f"建仓 {n_build}")
+        if op_parts:
+            summary_parts.append(f"**本周操作**：{' / '.join(op_parts)}")
+        elif n_skip or n_hold:
+            summary_parts.append(f"**本周**：{' / '.join(filter(None, ['跳过 ' + str(n_skip) if n_skip else '', '不动 ' + str(n_hold) if n_hold else '']))}")
+        summary_text = "  \n".join(summary_parts)
 
     per_fund_table: dict[str, object] = {
         "columns": [
