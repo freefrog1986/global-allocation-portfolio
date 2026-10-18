@@ -466,6 +466,23 @@ def _build_cost_basis_section() -> list[dict[str, object]]:
 # 不在 COST_BASIS_BY_CODE 但在 actions 里的（watchlist 的 3 个指数 HSI/N225/FCHI）→ 不渲染（无成本可显示）
 
 
+# 第三十六轮（liubo 2026-10-19）：per-fund 表按「合理 ETF 顺序」排，数字小 → 大。
+# 用户原话：「A50，A100，A500」 — A 系列按 size 排（A50 < A100 < A500），
+# 然后是中证 1000（剩下的 1000 级宽基），最后是科创/创业系（按发布时间）。
+# 不在表里的 index code → rank = 9999（落到最后）。
+ETF_DISPLAY_ORDER: dict[str, int] = {
+    # A 股 8 个 ETF 指数（按用户给的顺序）
+    "930050": 1,   # 中证 A50
+    "000903": 2,   # 中证 A100
+    "000510": 3,   # 中证 A500
+    "000852": 4,   # 中证 1000
+    "931643": 5,   # 科创创业 50
+    "399673": 6,   # 创业板 50
+    "000688": 7,   # 科创 50
+    "000698": 8,   # 科创 100
+}
+
+
 def _build_per_fund_section(region: SwensenClass | None = None) -> list[dict[str, object]]:
     """Section 2: per-fund 持仓成本 + 估值 + 调仓建议（liubo 2026-10-17 拍板）。
 
@@ -546,7 +563,15 @@ def _build_per_fund_section(region: SwensenClass | None = None) -> list[dict[str
             continue  # dedupe：持仓行已展示该 index
         items.append((subclass_order[sub], index_code, f"({index_code})", Decimal("0"), "watchlist"))
 
-    items.sort(key=lambda t: (t[0], t[1], t[2]))
+    # 第三十六轮（liubo 2026-10-19）：per-fund 表按「合理 ETF 顺序」排，而不是按 index_code 字符串排。
+    # A 股 8 ETF 的合理顺序（A50/A100/A500/中证1000/科创创业50/创业板50/科创50/科创100）
+    # 由 ETF_DISPLAY_ORDER 定义；其他 region 继续走字符串顺序（港股 1+HSI，美股 3 指数 +NDX 5 只）。
+    def _display_sort_key(item: tuple[int, str, str, Decimal, str]) -> tuple[int, int, str, str]:
+        sub_order, idx_code, code, _cost, _source = item
+        etf_rank = ETF_DISPLAY_ORDER.get(idx_code, 9999)
+        return (sub_order, etf_rank, idx_code, code)
+
+    items.sort(key=_display_sort_key)
 
     # 信号 → 中文显示
     signal_display = {

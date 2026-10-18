@@ -508,6 +508,7 @@ INDEX_DISPLAY_NAME: dict[str, str] = {
     ".MSCI_US_REIT": "MSCI US REIT",
     "932006": "中证 REITs",
     "HSI": "恒生指数",
+    "HSTECH": "恒生科技",   # 第三十六轮（liubo 2026-10-19）补：港股卡 013127 行 etf_index 列之前显示 "—"
     "GOLD": "黄金",
 }
 

@@ -3696,6 +3696,100 @@ class TestBuildRegionCard:
             f"A 股 8.15 < 11 → 应为「欠配」，实际：\n{summary_div_text}"
         )
 
+    def test_summary_over_status_when_over(self, journal: PortfolioJournal) -> None:
+        """region card 「超配/欠配」行应是「超配」「欠配」「区间内」三选一。
+
+        A 股 8.15 < 11 目标 → 欠配（spec 给定）。本 test 不强求具体哪个，
+        只保证状态值是这三个合法值之一。
+        """
+        from global_allocation.portfolio.card import SwensenClass, build_region_card
+
+        _seed(journal)
+        card = build_region_card(journal, SwensenClass.CN_EQUITY)
+        summary_div_text = None
+        for e in card["elements"]:
+            if e.get("tag") == "div" and "本大类资产" in e.get("text", {}).get("content", ""):
+                summary_div_text = e["text"]["content"]
+                break
+        assert summary_div_text is not None
+        # 「超配/欠配」行（markdown 加粗 + 冒号）
+        alloc_line = next(
+            (l for l in summary_div_text.split("  \n") if "超配/欠配" in l),
+            None,
+        )
+        assert alloc_line is not None, f"应有「超配/欠配」行，实际：\n{summary_div_text}"
+        # 飞书 markdown 加粗语法是 **xxx**，所以匹配 **超配/欠配**：<value>
+        import re
+        m = re.search(r"\*\*超配/欠配\*\*[：:]\s*(\S+)", alloc_line)
+        assert m, f"应匹配到状态值，实际：{alloc_line}"
+        status = m.group(1).strip()
+        assert status in {"超配", "欠配", "区间内"}, f"状态值应为超配/欠配/区间内，实际 {status}"
+
+
+class TestPerFundSortOrder:
+    """per-fund 表按合理 ETF 顺序排（第三十六轮 liubo 2026-10-19 拍板）。
+
+    A 股 8 个 ETF 合理顺序：
+    A50 → A100 → A500 → 中证1000 → 科创创业50 → 创业板50 → 科创50 → 科创100
+    """
+
+    def test_cn_equity_sorted_by_8_etf_order(self, journal: PortfolioJournal) -> None:
+        """A 股 per-fund 表按 8 ETF 顺序排（A50 → A100 → A500 → 中证1000 → 科创创业50 → 创业板50 → 科创50 → 科创100）。"""
+        from global_allocation.portfolio.card import SwensenClass, build_region_card
+
+        _seed(journal)
+        card = build_region_card(journal, SwensenClass.CN_EQUITY)
+        tables = [e for e in card["elements"] if e.get("tag") == "table"]
+        per_fund = next(
+            (t for t in tables if [c["name"] for c in t["columns"]] == ["fund", "etf_index", "cost", "valuation", "advice"]),
+            None,
+        )
+        assert per_fund is not None
+        # 提取 etf_index 列顺序（去重 — A500 有 3 只基金）
+        seen: list[str] = []
+        for r in per_fund["rows"]:
+            etf = r["etf_index"]
+            if etf not in seen:
+                seen.append(etf)
+        expected = [
+            "中证 A50",
+            "中证 A100",
+            "中证 A500",
+            "中证 1000",
+            "科创创业 50",
+            "创业板 50",
+            "科创 50",
+            "科创 100",
+        ]
+        assert seen == expected, (
+            f"A 股 per-fund 表 etf_index 列去重后应为 8 个顺序：\n{expected}\n"
+            f"实际：\n{seen}"
+        )
+
+    def test_a500_funds_grouped_under_a500(self, journal: PortfolioJournal) -> None:
+        """A500 合并组（3 只基金：022424/022434/022448）都展示在「中证 A500」之下。
+
+        按 ETF 顺序排后，A500 段是连续的 3 行（按 fund_code 字符串次排序）。
+        """
+        from global_allocation.portfolio.card import SwensenClass, build_region_card
+
+        _seed(journal)
+        card = build_region_card(journal, SwensenClass.CN_EQUITY)
+        tables = [e for e in card["elements"] if e.get("tag") == "table"]
+        per_fund = next(
+            (t for t in tables if [c["name"] for c in t["columns"]] == ["fund", "etf_index", "cost", "valuation", "advice"]),
+            None,
+        )
+        rows = per_fund["rows"]
+        # 找 3 个 A500 行
+        a500_rows = [r for r in rows if r["etf_index"] == "中证 A500"]
+        assert len(a500_rows) == 3, f"A500 应有 3 行，实际 {len(a500_rows)}"
+        # 检查这 3 行在表里是连续 3 行
+        a500_indices = [i for i, r in enumerate(rows) if r["etf_index"] == "中证 A500"]
+        assert a500_indices == list(range(min(a500_indices), min(a500_indices) + 3)), (
+            f"A500 3 行应连续，实际位置 {a500_indices}"
+        )
+
 
 class TestBuildPortfolioCards:
     """build_portfolio_cards 顺序固定 + 4 张卡。"""
