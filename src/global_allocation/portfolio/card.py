@@ -941,6 +941,26 @@ def _parse_rebalance_line(line: str, subject: str) -> RebalanceRow | None:
     if re.match(r"^-\s+\d{6}\s*:\s*\d", stripped):
         return None
 
+    # 第三十轮（liubo 2026-10-18 反馈）：过滤 commit body 描述行（不是真调仓）
+    # 3 类描述行被误判为调仓：
+    # 1. "X 保留（占位 0）" — 描述"保留占位"，不是新建仓
+    #    例：- 011612 华夏科创50ETF联接A 保留（占位 0）
+    #    subject 含 "+1 仓" 关键词 → _is_rebalance_subject 通过，但 body 这行只是描述
+    # 2. "X 漏在...清单外" — fix commit 描述漏加，subject 含"加 X" 触发误判
+    #    例：- 014673 富国中证港股通互联网ETF发起式联接A 漏在大类资产配置清单外，
+    # 3. "X / Y / Z / W 这 N 只..." — 描述性列表（不是单笔调仓）
+    #    例：- 022448 / 007997 / 023917 / 025682 这 4 只是单独的"红利策略组合"，
+    if (
+        ("保留" in stripped and "占位" in stripped)
+        or re.search(r"占位\s*0", stripped) is not None
+        or re.search(r"漏在|漏到|清单外|清单里", stripped) is not None
+        or (
+            re.search(r"这\s*\d+\s*只", stripped) is not None
+            and len(re.findall(r"(?<!\d)\d{6}", stripped)) >= 2
+        )
+    ):
+        return None
+
     # DCA (定投) 检测 — 行里有 "已买 ¥X" → 标 "定投"（不是 "校准"）
     # liubo 2026-10-17 反馈 — 南方纳100 / 摩根纳指100 / 万家纳指100 是 DCA，不是校准
     if "已买" in stripped:

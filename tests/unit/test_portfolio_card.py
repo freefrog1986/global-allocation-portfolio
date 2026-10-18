@@ -1033,6 +1033,56 @@ class TestRebalanceRecordsSection:
             f"实际 '{parsed_add.fund}'"
         )
 
+    def test_unit_helpers_description_lines_filtered(
+        self, journal: PortfolioJournal,
+    ) -> None:
+        """第三十轮（liubo 2026-10-18 反馈）：过滤 commit body 描述行（不是真调仓）。
+
+        3 类描述行被误判为调仓：
+        1. "X 保留（占位 0）" — 描述"保留占位"，不是新建仓
+        2. "X 漏在...清单外" — fix commit 描述漏加
+        3. "X / Y / Z / W 这 N 只..." — 描述性列表
+        """
+        from global_allocation.portfolio.card import _parse_rebalance_line
+
+        # 1. "X 保留（占位 0）" 描述行
+        keep_line = "- 011612 华夏科创50ETF联接A 保留（占位 0）"
+        parsed_keep = _parse_rebalance_line(
+            keep_line, "换 2 只科创/创业宽基 + 013127 +1 仓"
+        )
+        assert parsed_keep is None, (
+            f"'保留（占位 0）' 描述行应被过滤，实际返回 {parsed_keep!r}"
+        )
+
+        # 2. "X 漏在...清单外" 描述行
+        missing_line = "- 014673 富国中证港股通互联网ETF发起式联接A 漏在大类资产配置清单外，"
+        parsed_missing = _parse_rebalance_line(
+            missing_line, "加 014673 港股 + 建红利策略组合独立模块"
+        )
+        assert parsed_missing is None, (
+            f"'漏在...清单外' 描述行应被过滤，实际返回 {parsed_missing!r}"
+        )
+
+        # 3. "X / Y / Z / W 这 N 只..." 描述性列表
+        list_line = '- 022448 / 007997 / 023917 / 025682 这 4 只是单独的"红利策略组合"，'
+        parsed_list = _parse_rebalance_line(
+            list_line, "加 014673 港股 + 建红利策略组合独立模块"
+        )
+        assert parsed_list is None, (
+            f"'这 N 只' 描述性列表应被过滤，实际返回 {parsed_list!r}"
+        )
+
+        # 对照：真的 加仓 / 转换 / 转入 / 转出 行还是被识别
+        real_add = (
+            "- 020291 华夏科创100ETF联接A → 019857 博时上证科创板100ETF联接A，"
+            "建仓 1 仓 = 10000 CNY"
+        )
+        parsed_real = _parse_rebalance_line(
+            real_add, "换 2 只科创/创业宽基 + 013127 +1 仓"
+        )
+        assert parsed_real is not None, "真实加仓行被错误过滤"
+        assert parsed_real.action == "加仓"
+
 
 class TestDcaRecordsSection:
     """第二十五轮（liubo 2026-10-17 第二轮反馈）— 定投纪录 section 独立成 1 张表。
