@@ -193,7 +193,9 @@ PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal | None, Decimal |
     "399673": (ValuationMetric.PS_TTM, Decimal("3.8127"), Decimal("0.1330")),   # 创业板 50（< 20% 深价值 → ADD；冷却期冻结）
     # ── 美股（PE-TTM，理杏仁 2026-10-16）──
     ".INX": (ValuationMetric.PE_TTM, Decimal("25.7531"), Decimal("0.5888")),    # 标普 500
-    # .NDX: 理杏仁 2026-10-16 CSV 仍无数据 → entry 删除 → 5 只纳指 100 基金 SKIP
+    # .NDX: 螺丝钉估值表 2026-10-16（理杏仁 CSV 无数据，liubo 2026-10-18 提供）
+    # 口径：PE-TTM 10 年分位（跟其他指数保持一致）
+    ".NDX": (ValuationMetric.PE_TTM, None, Decimal("0.7259")),                  # 纳指 100（10 年 PE 分位 72.59% → 50-80% 区间 → HOLD）
     ".OEX": (ValuationMetric.PE_TTM, Decimal("25.7531"), Decimal("0.5888")),    # 标普 100（INX 代理，2026-10-16 更新）
     # ── 港股（PE-TTM，理杏仁 2026-10-16）──
     "HSTECH": (ValuationMetric.PE_TTM, Decimal("22.0142"), Decimal("0.2156")),  # 恒生科技（21.56% > 20%，不再深价值；冷却期冻结）

@@ -1105,43 +1105,45 @@ class TestWeeklyRebalancePlan:
         assert len(a500_actions) == 1
         assert a500_actions[0].signal == PESignal.HOLD
 
-    def test_ndx_skips_when_data_missing(self) -> None:
+    def test_ndx_5funds_merged_hold_in_mid_percentile(self) -> None:
         """纳 100 合并 5 只（1 联接 + 4 直接 QDII 场外）。
 
         liubo 2026-09-29 卖出 019524 + 加 019172/019441：合并组剩 5 只。
         fund_code = 5 只 "+" 串联；仓位 = 1 联接 + 3 直接 QDII 累计 / 10000 = 0.30 仓
         （019172/019441 初始成本 0；019524 已卖 -20）。
 
-        2026-10-09 liubo 拍板清空：理杏仁 CSV 没 NDX 数据 → entry 删除 → 5 只 SKIP
-        （估值数据缺失，规则上不能调仓）。
+        2026-10-18 liubo 提供螺丝钉估值表 2026-10-16 数据（理杏仁 CSV 无 NDX）：
+        PE-TTM 10 年分位 72.59% → 50-80% 区间 → 仓位 >= 1 → HOLD。
         """
         actions = weekly_rebalance_plan()
         ndx_actions = [a for a in actions if ".NDX" in a.etf_index_code]
         assert len(ndx_actions) == 1
-        assert ndx_actions[0].signal == PESignal.SKIP
+        ndx = ndx_actions[0]
+        assert ndx.signal == PESignal.HOLD
+        assert ndx.change == Decimal("0")
+        assert ndx.metric == ValuationMetric.PE_TTM
+        assert ndx.metric_percentile == Decimal("0.7259")
         # 5 只合并（含 1 联接 018966 + 539001/016452/019172/019441 4 直接 QDII 场外）
-        ndx_fund = ndx_actions[0].fund_code
+        ndx_fund = ndx.fund_code
         assert "018966" in ndx_fund and "539001" in ndx_fund
         assert "016452" in ndx_fund and "019172" in ndx_fund
         assert "019441" in ndx_fund
         # 019524 已卖出（2026-09-29 liubo），不在合并组
         assert "019524" not in ndx_fund
 
-    def test_no_subclass_left_as_skip_except_ndx(self) -> None:
-        """spec 099 黄金加综合分后，只有 .NDX（数据缺失）会 SKIP。
+    def test_no_subclass_left_as_skip(self) -> None:
+        """所有子类都有估值数据 → 不应再有 SKIP（2026-10-18 liubo 加 NDX 数据后）。
 
         之前历史：REITs / EM 加估值指标后，只剩商品（黄金 GOLD_NO_METRIC）→ SKIP。
         现在：黄金走 2 指标综合分路径 → 不会再 SKIP。
-
         2026-10-09 拍板清空 .NDX 后，美股 NDX 5 只合并组因估值数据缺失 SKIP（数据源问题）。
-        其他所有子类都不应 SKIP。
+        2026-10-18 liubo 加 NDX 数据（螺丝钉 2026-10-16）→ 现在没有任何 SKIP。
         """
         actions = weekly_rebalance_plan()
         skips = [a for a in actions if a.signal == PESignal.SKIP]
-        # 只有 .NDX 5 只合并组 SKIP
-        assert len(skips) == 1
-        assert skips[0].etf_index_code == ".NDX"
-        assert skips[0].subclass == SwensenClass.US_EQUITY
+        assert len(skips) == 0, (
+            f"所有子类都应有估值数据，不应再有 SKIP；实际 SKIP：{skips}"
+        )
 
     def test_hsi_appears_as_hold_or_build(self) -> None:
         """HSI 恒生指数 watchlist 出现在 plan 里（HSI 分位 63% > 50% → HOLD）。"""
@@ -1252,11 +1254,14 @@ class TestPESnapshotData:
             assert idx in PE_SNAPSHOT_BY_INDEX
 
     def test_us_indices_present(self) -> None:
-        """美股 INX + OEX 都在；.NDX 2026-10-09 liubo 拍板清空（理杏仁 CSV 无数据）。"""
+        """美股 INX + OEX + NDX 都在（2026-10-18 liubo 加 NDX 数据）。"""
         assert ".INX" in PE_SNAPSHOT_BY_INDEX
         assert ".OEX" in PE_SNAPSHOT_BY_INDEX
-        # .NDX 不在 dict 是 expected：5 只纳指 100 基金 SKIP（数据源问题）
-        assert ".NDX" not in PE_SNAPSHOT_BY_INDEX
+        # .NDX 螺丝钉 2026-10-16 提供（理杏仁 CSV 无数据，liubo 截图）
+        assert ".NDX" in PE_SNAPSHOT_BY_INDEX
+        ndx_metric, _, ndx_pct = PE_SNAPSHOT_BY_INDEX[".NDX"]
+        assert ndx_metric == ValuationMetric.PE_TTM
+        assert ndx_pct == Decimal("0.7259")  # 10 年 PE 分位 72.59%
 
     def test_foreign_dm_indices_present(self) -> None:
         """国外发达 3 个指数都在。"""
