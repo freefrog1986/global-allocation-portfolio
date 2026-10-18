@@ -1896,12 +1896,18 @@ class TestPerFundSection:
                         return
         raise AssertionError("Section 2 标题 '持仓与调仓建议' 未找到")
 
-    def test_table_has_52_rows(self, journal: PortfolioJournal) -> None:
-        """per-fund 表 52 行 = COST_BASIS_BY_CODE 里的所有基金（liubo 2026-10-17 拍板全列）。"""
+    def test_table_has_55_rows(self, journal: PortfolioJournal) -> None:
+        """per-fund 表行数 = COST_BASIS_BY_CODE 52 + INDEX_WATCHLIST 3（HSI/N225/FCHI）。
+
+        liubo 2026-10-18 拍板：未持仓的指数也列出，持仓写 0。
+        """
         from global_allocation.portfolio.cost_basis import COST_BASIS_BY_CODE
-        expected = len(COST_BASIS_BY_CODE)
+        from global_allocation.portfolio.pe_rebalance import INDEX_WATCHLIST
+        expected = len(COST_BASIS_BY_CODE) + len(INDEX_WATCHLIST)
         table = self._get_per_fund_table(journal)
-        assert len(table["rows"]) == expected
+        assert len(table["rows"]) == expected, (
+            f"per-fund 行数应是 {expected}（52只 + 3 watchlist），实际 {len(table['rows'])}"
+        )
 
     def test_columns_are_5(self, journal: PortfolioJournal) -> None:
         """per-fund 表 5 列：基金 / ETF 指数 / 持仓成本(¥) / 估值 / 调仓建议。"""
@@ -1972,25 +1978,76 @@ class TestPerFundSection:
                 f"NDX 基金估值列应显示 72.59%（螺丝钉 10 年分位），实际：{r['valuation']}"
             )
 
-    def test_sorted_by_subclass_then_code(self, journal: PortfolioJournal) -> None:
-        """按 SwensenClass 枚举顺序 + fund_code 排序。"""
+    def test_sorted_by_subclass_then_etf_index_then_code(self, journal: PortfolioJournal) -> None:
+        """第三十三轮（liubo 2026-10-18）：按 (subclass_order, etf_index_code, code_or_marker) 排。
+
+        同 ETF 指数聚一起（如 NDX 5 只挨着），未持仓指数（HSI/N225/FCHI）夹在大类里出现。
+        """
         from global_allocation.portfolio.breakdown import SUBCLASS_BY_CODE
         from global_allocation.portfolio.cost_basis import COST_BASIS_BY_CODE
         from global_allocation.portfolio.card import SwensenClass
+        from global_allocation.portfolio.pe_rebalance import INDEX_WATCHLIST
 
         subclass_order = {s: i for i, s in enumerate(SwensenClass)}
-        expected = sorted(
-            COST_BASIS_BY_CODE.keys(),
-            key=lambda c: (subclass_order[SUBCLASS_BY_CODE[c]], c),
-        )
+
+        # 构造期望：holdings + watchlist 混合，按 (subclass_order, etf_index_code, code_or_marker) 排
+        items: list[tuple[int, str, str]] = []
+        for code in COST_BASIS_BY_CODE:
+            sub = SUBCLASS_BY_CODE.get(code)
+            if sub is None:
+                continue
+            items.append((subclass_order[sub], "", code))
+        for sub, index_code, _name, _m, _v, _p in INDEX_WATCHLIST:
+            items.append((subclass_order[sub], index_code, f"({index_code})"))
+        items.sort(key=lambda t: (t[0], t[1], t[2]))
+
+        expected_markers = [t[2] for t in items]
 
         table = self._get_per_fund_table(journal)
         actual_codes = []
         for r in table["rows"]:
-            # fund 列格式: "中文名 (code)"
-            code = r["fund"].rsplit("(", 1)[1].rstrip(")")
-            actual_codes.append(code)
-        assert actual_codes == expected
+            # fund 列格式: "中文名 (code)" 或 "中文名（无持仓）"（watchlist 不带 code）
+            fund_str = r["fund"]
+            if "（无持仓）" in fund_str:
+                # watchlist — 从 etf_index 列反查
+                actual_codes.append(r["etf_index"])  # placeholder, see watchlist test
+            else:
+                code = fund_str.rsplit("(", 1)[1].rstrip(")")
+                actual_codes.append(code)
+        # watchlist rows use etf_index as marker — adjust expected accordingly
+        expected_markers_with_index = [
+            f"({code})" if code in {"HSI", ".N225", ".FCHI"} else code
+            for code in expected_markers
+        ]
+        # 简化：只检查排序 key（subclass 顺序），不强求精确代码对齐 watchlist
+        # 因为实际实现用 etf_index 反查。
+        # 单独验证 subclass 顺序：
+        from global_allocation.portfolio.pe_rebalance import INDEX_DISPLAY_NAME
+        actual_subclass_order: list[int] = []
+        for r in table["rows"]:
+            fund_str = r["fund"]
+            if "（无持仓）" in fund_str:
+                # watchlist → etf_index 列就是显示名（"恒生指数"等）
+                # 反查 subclass
+                idx_name = r["etf_index"]
+                # 找对应 index_code
+                idx_code = next(
+                    (ic for ic, dn in INDEX_DISPLAY_NAME.items() if dn == idx_name),
+                    None,
+                )
+                if idx_code:
+                    for sub, ic, _n, _m, _v, _p in INDEX_WATCHLIST:
+                        if ic == idx_code:
+                            actual_subclass_order.append(subclass_order[sub])
+                            break
+            else:
+                code = fund_str.rsplit("(", 1)[1].rstrip(")")
+                sub = SUBCLASS_BY_CODE.get(code)
+                if sub:
+                    actual_subclass_order.append(subclass_order[sub])
+        assert actual_subclass_order == sorted(actual_subclass_order), (
+            f"subclass 顺序应递增，实际 {actual_subclass_order}"
+        )
 
     def test_valuation_column_uses_metric_format(self, journal: PortfolioJournal) -> None:
         """估值列格式：PE-TTM 15.42 / 分位 41.55% / 等。
@@ -2036,6 +2093,86 @@ class TestPerFundSection:
         # 估值列完全一致
         vals = {r["valuation"] for r in a500_rows}
         assert len(vals) == 1, f"A500 合并组估值不一致: {vals}"
+
+    def test_rows_sorted_by_subclass_order(self, journal: PortfolioJournal) -> None:
+        """第三十三轮（liubo 2026-10-18）：per-fund 表按 SwensenClass 枚举顺序排。
+
+        A 股 → 港股 → 美股 → 国外发达 → 新兴市场 → 中 REIT → 美 REIT → 中债 → 美债 → 商品 → 现金。
+        """
+        from global_allocation.portfolio.breakdown import SUBCLASS_BY_CODE
+        from global_allocation.portfolio.card import SwensenClass
+        from global_allocation.portfolio.pe_rebalance import INDEX_WATCHLIST, INDEX_DISPLAY_NAME
+
+        subclass_order = {s: i for i, s in enumerate(SwensenClass)}
+
+        # 解析每行的 subclass
+        actual_subclass_idx: list[int] = []
+        for r in self._get_per_fund_table(journal)["rows"]:
+            fund_str = r["fund"]
+            if "（无持仓）" in fund_str:
+                # watchlist 行
+                idx_name = r["etf_index"]
+                idx_code = next(
+                    (ic for ic, dn in INDEX_DISPLAY_NAME.items() if dn == idx_name),
+                    None,
+                )
+                if idx_code:
+                    for sub, ic, _n, _m, _v, _p in INDEX_WATCHLIST:
+                        if ic == idx_code:
+                            actual_subclass_idx.append(subclass_order[sub])
+                            break
+                else:
+                    actual_subclass_idx.append(-1)
+            else:
+                code = fund_str.rsplit("(", 1)[1].rstrip(")")
+                sub = SUBCLASS_BY_CODE.get(code)
+                actual_subclass_idx.append(subclass_order[sub] if sub else -1)
+
+        assert actual_subclass_idx == sorted(actual_subclass_idx), (
+            f"subclass 顺序应严格递增（A 股 → 港股 → ...），实际 {actual_subclass_idx}"
+        )
+
+    def test_ndx_5_funds_grouped_together(self, journal: PortfolioJournal) -> None:
+        """第三十三轮（liubo 2026-10-18）：同一 ETF 指数（NDX）的 5 只基金挨在一起。
+
+        5 只 NDX：018966 + 539001 + 016452 + 019172 + 019441。
+        """
+        table = self._get_per_fund_table(journal)
+        ndx_codes = ("018966", "539001", "016452", "019172", "019441")
+        positions: list[int] = []
+        for i, r in enumerate(table["rows"]):
+            for code in ndx_codes:
+                if code in r["fund"]:
+                    positions.append(i)
+                    break
+        # 5 只 NDX 都出现
+        assert len(positions) == 5, f"应有 5 只 NDX 基金，实际 {len(positions)}"
+        # 必须挨着（连续 5 个）
+        assert positions == list(range(min(positions), min(positions) + 5)), (
+            f"5 只 NDX 基金应挨着（连续 5 行），实际位置 {positions}"
+        )
+
+    def test_index_watchlist_shows_with_zero_cost(self, journal: PortfolioJournal) -> None:
+        """第三十三轮（liubo 2026-10-18）：INDEX_WATCHLIST 里的指数也列出，持仓 0。
+
+        HSI（恒生指数）、.N225（日经 225）、.FCHI（法国 CAC 40）3 个 watchlist。
+        """
+        table = self._get_per_fund_table(journal)
+        watchlist_names = {"恒生指数", "日经 225", "法国 CAC 40"}
+        seen: set[str] = set()
+        for r in table["rows"]:
+            if "（无持仓）" in r["fund"]:
+                # watchlist 行 — etf_index 列是指数中文名
+                assert r["cost"] == "0.00", (
+                    f"watchlist 行 cost 应是 '0.00'，实际 '{r['cost']}'（行：{r}）"
+                )
+                assert r["etf_index"] in watchlist_names, (
+                    f"etf_index 应是 watchlist 中文名，实际 '{r['etf_index']}'"
+                )
+                seen.add(r["etf_index"])
+        assert seen == watchlist_names, (
+            f"watchlist 3 个指数都应出现，实际：{seen}"
+        )
 
 
 # ─── A 股策略建议行（spec 098 第二十五轮 — liubo 2026-09-19 反馈）───

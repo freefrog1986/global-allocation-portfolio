@@ -485,25 +485,50 @@ def _build_per_fund_section() -> list[dict[str, object]]:
     actions: list[RebalanceAction] = weekly_rebalance_plan()
     # 个别 code → action（处理 merge_by_etf 把 3 只 A500 合并成 "022434+022424+022448"）
     by_code: dict[str, RebalanceAction] = {}
+    # watchlist 虚拟基金（fund_code 是 "(HSI)" 这种）→ 通过 etf_index_code 索引
+    by_index_code: dict[str, RebalanceAction] = {}
     for a in actions:
         if "+" in a.fund_code:
             # 合并组 — 每只组内基金都映射到同一个 action
             for sub_code in a.fund_code.split("+"):
                 by_code[sub_code] = a
+        elif a.fund_code.startswith("(") and a.fund_code.endswith(")"):
+            # watchlist 虚拟基金（fund_code="(HSI)"）→ 用 etf_index_code 索引
+            by_index_code[a.etf_index_code] = a
         else:
             by_code[a.fund_code] = a
 
     # 11 个 SwensenClass 按枚举顺序排（DISPLAY_NAME 里 "A 股股票" / "港股" / ... 跟用户认知一致）
     subclass_order = {s: i for i, s in enumerate(SwensenClass)}
 
-    # 按 (subclass_order, fund_code) 排序后逐只基金构建 row
-    items: list[tuple[int, str, Decimal]] = []
+    # 按 (subclass_order, etf_index_code, fund_code_or_watchlist_marker) 排序
+    # 第三十三轮（liubo 2026-10-18 反馈）：
+    # - 大类顺序：A股 → 港股 → 美股 → ...
+    # - 同 ETF 指数聚一起（如 NDX 5 只挨着）
+    # - INDEX_WATCHLIST 里的指数（HSI/N225/FCHI）也列出，持仓 0
+    from global_allocation.portfolio.pe_rebalance import INDEX_WATCHLIST
+
+    items: list[tuple[int, str, str, Decimal, str]] = []
+    # sort_key, etf_index_code_for_sort, code, cost, source
+    # source: "holdings" 或 "watchlist"
+    holdings_codes: set[str] = set()
+
+    # 先加持仓基金（COST_BASIS_BY_CODE）
     for code, cost in COST_BASIS_BY_CODE.items():
         sub = SUBCLASS_BY_CODE.get(code)
         if sub is None:
-            continue  # 没映射的基金不进表（理论上不应该有，COST_BASIS_BY_CODE 跟 SUBCLASS_BY_CODE 对齐）
-        items.append((subclass_order[sub], code, cost))
-    items.sort()
+            continue
+        # 拿基金对应的 ETF 指数 code（从 by_code 反查；可能没在 FUND_INDEX_MAP）
+        action = by_code.get(code)
+        index_code_for_sort = action.etf_index_code if action else ""
+        items.append((subclass_order[sub], index_code_for_sort, code, cost, "holdings"))
+        holdings_codes.add(code)
+
+    # 加 INDEX_WATCHLIST 里的指数（持仓 0）
+    for sub, index_code, display_name, _metric, _value, _pct in INDEX_WATCHLIST:
+        items.append((subclass_order[sub], index_code, f"({index_code})", Decimal("0"), "watchlist"))
+
+    items.sort(key=lambda t: (t[0], t[1], t[2]))
 
     # 信号 → 中文显示
     signal_display = {
@@ -517,11 +542,21 @@ def _build_per_fund_section() -> list[dict[str, object]]:
     n_add = n_reduce = n_build = n_hold = n_skip = 0
 
     rows: list[dict[str, object]] = []
-    for _, code, cost in items:
-        fund_name = get_fund_name(code) or f"基金 {code}"
-        cost_str = f"{float(cost):,.2f}" if cost > 0 else "—"
+    for _, _index_sort, code, cost, source in items:
+        is_watchlist = source == "watchlist"
+        # watchlist 行：fund 显示指数中文名（不带 code）；holdings 行：name (code)
+        if is_watchlist:
+            index_code_inner = code.strip("()")  # "(HSI)" → "HSI"
+            display_name = INDEX_DISPLAY_NAME.get(index_code_inner, index_code_inner)
+            fund_label = f"{display_name}（无持仓）"
+            cost_str = "0.00"  # watchlist 显式 0，不写 "—"
+            action = by_index_code.get(index_code_inner)
+        else:
+            fund_name = get_fund_name(code) or f"基金 {code}"
+            fund_label = f"{fund_name} ({code})"
+            cost_str = f"{float(cost):,.2f}" if cost > 0 else "—"
+            action = by_code.get(code)
 
-        action = by_code.get(code)
         if action is None:
             # 没在 FUND_INDEX_MAP（大多是债/现金）— 没估值指标，调仓建议按"不动"
             valuation = "—"
@@ -587,9 +622,16 @@ def _build_per_fund_section() -> list[dict[str, object]]:
                 else:
                     n_hold += 1
 
+        # ETF 指数列：watchlist 直接拿指数 code；holdings 从 action 拿
+        if is_watchlist:
+            index_code_inner = code.strip("()")
+            etf_index_label = INDEX_DISPLAY_NAME.get(index_code_inner, "—")
+        else:
+            etf_index_label = INDEX_DISPLAY_NAME.get(action.etf_index_code, "—") if action else "—"
+
         rows.append({
-            "fund": f"{fund_name} ({code})",
-            "etf_index": INDEX_DISPLAY_NAME.get(action.etf_index_code, "—") if action else "—",
+            "fund": fund_label,
+            "etf_index": etf_index_label,
             "cost": cost_str,
             "valuation": valuation,
             "advice": advice,
