@@ -12,7 +12,7 @@ spec 099 — liubo 2026-10-18 拍板黄金估值也走 fetch + 注入。
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -193,3 +193,149 @@ class TestLoadLatest:
             assert snap["000216"].gold_price == Decimal("891.44")
         finally:
             mod.DATA_DIR = original
+
+
+class TestFetchGoldDataDate:
+    """fetch_gold() 的 data_date 选取规则（liubo 2026-10-19 修 UnboundLocalError）。
+
+    旧代码只在 `ry_data_date > price_date` 满足时给 data_date 赋值，
+    但 price_date 默认 today、FRED 日期几乎都 ≤ today → 永远不满足 → UnboundLocalError。
+
+    新规则：candidates = [price_date, ry_data_date] 过滤 None 后取 max；都没有 → today。
+    """
+
+    def test_both_succeed_picks_later_date(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """akshare + FRED 都成功 → data_date = max(akshare_date, fred_date)。
+
+        fred 比 akshare 晚 → 应取 fred 日期。
+        """
+        from global_allocation.portfolio import fetch_gold_valuation as mod
+
+        # Monkeypatch akshare 返回 10 条以上金价（最后一项 2026-10-15）
+        akshare_df = _fake_akshare_df(rows=35, last_date=date(2026, 10, 15))
+        fake_ak = type("AK", (), {"spot_golden_benchmark_sge": lambda self: akshare_df})()
+        monkeypatch.setattr(mod, "_get_ak", lambda: fake_ak)
+
+        # FRED 返回 2026-10-16（比 akshare 晚 1 天）
+        monkeypatch.setattr(
+            mod, "_fetch_real_yield_dfii10",
+            lambda: (Decimal("0.0291"), date(2026, 10, 16), ""),
+        )
+
+        v = mod.fetch_gold()
+        assert v.data_date == date(2026, 10, 16)
+        assert v.gold_price is not None
+        assert v.error == ""
+
+    def test_akshare_yields_later_than_fred(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """akshare 日期比 FRED 晚 → data_date = akshare 日期。
+
+        这种场景之前会取不到 max（条件 ry > price 不满足）— 现在修了。
+        """
+        from global_allocation.portfolio import fetch_gold_valuation as mod
+
+        akshare_df = _fake_akshare_df(rows=35, last_date=date(2026, 10, 18))
+        fake_ak = type("AK", (), {"spot_golden_benchmark_sge": lambda self: akshare_df})()
+        monkeypatch.setattr(mod, "_get_ak", lambda: fake_ak)
+
+        monkeypatch.setattr(
+            mod, "_fetch_real_yield_dfii10",
+            lambda: (Decimal("0.0291"), date(2026, 10, 10), ""),
+        )
+
+        v = mod.fetch_gold()
+        assert v.data_date == date(2026, 10, 18)  # 修前会 UnboundLocalError
+
+    def test_fred_fails_uses_akshare_date(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """FRED 拉取失败 → data_date = akshare 金价日。"""
+        from global_allocation.portfolio import fetch_gold_valuation as mod
+
+        akshare_df = _fake_akshare_df(rows=35, last_date=date(2026, 10, 15))
+        fake_ak = type("AK", (), {"spot_golden_benchmark_sge": lambda self: akshare_df})()
+        monkeypatch.setattr(mod, "_get_ak", lambda: fake_ak)
+
+        monkeypatch.setattr(
+            mod, "_fetch_real_yield_dfii10",
+            lambda: (None, None, "FRED 网络错误"),
+        )
+
+        v = mod.fetch_gold()
+        assert v.data_date == date(2026, 10, 15)
+        assert v.real_yield_dfii10 is None
+        assert "FRED" in v.error
+
+    def test_akshare_fails_uses_fred_date(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """akshare 拉取失败 + FRED 成功 → data_date = fred 日期。
+
+        修前 bug：price_date 保留 today() 默认值，data_date 几乎取不到 → UnboundLocalError。
+        修后：price_date=None 加入候选过滤；data_date 直接 = fred_date。
+        """
+        from global_allocation.portfolio import fetch_gold_valuation as mod
+
+        # akshare 抛异常
+        class _BoomAK:
+            def spot_golden_benchmark_sge(self):
+                raise ConnectionError("akshare 网络断了")
+        monkeypatch.setattr(mod, "_get_ak", lambda: _BoomAK())
+
+        monkeypatch.setattr(
+            mod, "_fetch_real_yield_dfii10",
+            lambda: (Decimal("0.0291"), date(2026, 10, 16), ""),
+        )
+
+        v = mod.fetch_gold()
+        assert v.data_date == date(2026, 10, 16)
+        assert v.gold_price is None
+        assert "akshare" in v.error
+
+    def test_both_fail_falls_back_to_today(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """两个都失败 → data_date = today()（保证不抛 UnboundLocalError）。
+
+        修前：data_date 完全没赋值 → 当前是 UnboundLocalError。
+        修后：candidates 为空 → max(candidates, default=today())。
+        """
+        from global_allocation.portfolio import fetch_gold_valuation as mod
+
+        class _BoomAK:
+            def spot_golden_benchmark_sge(self):
+                raise ConnectionError("akshare 挂了")
+        monkeypatch.setattr(mod, "_get_ak", lambda: _BoomAK())
+
+        monkeypatch.setattr(
+            mod, "_fetch_real_yield_dfii10",
+            lambda: (None, None, "FRED 也挂了"),
+        )
+
+        v = mod.fetch_gold()
+        assert v.data_date == date.today()  # safe default
+        assert v.gold_price is None
+        assert v.real_yield_dfii10 is None
+        # 两个 error 都被记下来
+        assert "akshare" in v.error
+        assert "FRED" in v.error
+
+
+def _fake_akshare_df(rows: int, last_date: date) -> "pd.DataFrame":  # type: ignore[name-defined]
+    """构造一份「行数足够 + 最后交易日 = last_date」的假 akshare DataFrame。
+
+    列名：交易时间 / 晚盘价（跟 akshare.spot_golden_benchmark_sge() 输出一致）。
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        pytest.skip("pandas 不可用 — 跳过假 DataFrame 测试")
+    dates = [
+        (last_date - timedelta(days=rows - 1 - i)).isoformat() for i in range(rows)
+    ]
+    prices = [Decimal("900") + Decimal(str(i)) for i in range(rows)]
+    return pd.DataFrame({"交易时间": dates, "晚盘价": [str(p) for p in prices]})

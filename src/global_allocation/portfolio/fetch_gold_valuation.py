@@ -122,6 +122,13 @@ def fetch_gold() -> GoldValuation:
     """拉黄金估值：SGE Au99.99 当前价 + 5年分位 + FRED DFII10 实际利率。
 
     失败 → 返回的 GoldValuation.error 字段非空，value/percentile 为 None。
+
+    data_date 选取规则（liubo 2026-10-19 拍板修）：
+    - 取 akshare 金价日 + FRED 数据日 里较新的
+    - 任一数据源拉取失败 → 那一边的日期不算
+    - 两个都失败 → 回退 today()（保证 data_date 永远有值，避开 UnboundLocalError）
+    - 之前的 bug：data_date 只在 `ry_data_date > price_date` 满足时才赋值，
+      而 price_date 默认 today、FRED 日期几乎都 ≤ today → 条件不满足 → UnboundLocalError
     """
     today = date.today()
     errors: list[str] = []
@@ -129,7 +136,7 @@ def fetch_gold() -> GoldValuation:
     # 1. 金价 + 5 年分位
     gold_price: Decimal | None = None
     gold_pct: Decimal | None = None
-    price_date = today
+    price_date: date | None = None  # None 表示 akshare 拉取失败
     try:
         ak = _get_ak()
         df = ak.spot_golden_benchmark_sge()
@@ -157,9 +164,10 @@ def fetch_gold() -> GoldValuation:
     if ry_err:
         errors.append(ry_err)
 
-    # 数据日期取两个数据源里更新的
-    if ry_data_date and ry_data_date > price_date:
-        data_date = ry_data_date
+    # 3. data_date = 两个数据源里较新的；都没有 → today
+    # 用候选 max 而不是单 if + 默认值，避开 UnboundLocalError + 语义更准确
+    candidates: list[date] = [d for d in (price_date, ry_data_date) if d is not None]
+    data_date: date = max(candidates) if candidates else today
 
     error_str = "; ".join(errors) if errors else ""
     return GoldValuation(
