@@ -1598,8 +1598,8 @@ class TestPerFundSection:
         第三十六轮（liubo 2026-10-19）：加 8 个 CN_EQUITY ETF 指数到 INDEX_WATCHLIST（A50/A100/A500/
         中证1000/科创创业50/创业板50/科创50/科创100），但 7 个已被持仓基金覆盖 → dedupe 跳过，
         只剩 A100 (000903) 没持仓 → 实际 watchlist 新增 1 行。
-        第三十七轮（liubo 2026-10-19）：加 HSHDYI 恒生高股息率指数到 INDEX_WATCHLIST（HK，0 持仓）
-        → watchlist 新增 1 行。动态计算。
+        第三十七轮（liubo 2026-10-19）：加 HSSCHKY 恒生港股通高股息率指数到 INDEX_WATCHLIST
+        （HK，0 持仓，跟踪 ETF = 513690）→ watchlist 新增 1 行。动态计算。
         """
         from global_allocation.portfolio.cost_basis import COST_BASIS_BY_CODE
         from global_allocation.portfolio.breakdown import SUBCLASS_BY_CODE
@@ -1729,7 +1729,7 @@ class TestPerFundSection:
                 actual_codes.append(code)
         # watchlist rows use etf_index as marker — adjust expected accordingly
         expected_markers_with_index = [
-            f"({code})" if code in {"HSCGSI", "HSIDI", "HSHDYI", ".N225", ".FCHI", "000903"} else code
+            f"({code})" if code in {"HSCGSI", "HSIDI", "HSSCHKY", ".N225", ".FCHI", "000903"} else code
             for code in expected_markers
         ]
         # 简化：只检查排序 key（subclass 顺序），不强求精确代码对齐 watchlist
@@ -1872,13 +1872,14 @@ class TestPerFundSection:
         HSI 已不跟踪（移除），加 HSIDI。
         7 个 CN_EQUITY 指数（A50/A500/中证1000/科创创业50/创业板50/科创50/科创100）已被持仓基金
         覆盖 → dedupe 跳过。
-        第三十七轮（liubo 2026-10-19）：加 HSHDYI 恒生高股息率指数到 watchlist（HK，0 持仓）。
+        第三十七轮（liubo 2026-10-19）：加 HSSCHKY 恒生港股通高股息率指数到 watchlist（HK，0 持仓）。
+        跟踪 ETF = 513690 港股红利 ETF 博时。
         """
         table = self._get_per_fund_table(journal)
         watchlist_names = {
             "恒生消费指数",
             "恒生创新药指数",
-            "恒生高股息率指数",  # 第三十七轮
+            "恒生港股通高股息率指数",  # 第三十七轮（替换了原来的恒生高股息率指数）
             "日经 225",
             "法国 CAC 40",
             "中证 A100",

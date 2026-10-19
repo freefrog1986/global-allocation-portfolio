@@ -406,26 +406,24 @@ INDEX_WATCHLIST: list[tuple[SwensenClass, str, str, ValuationMetric, Decimal, De
         Decimal("2.7825"),    # 理杏仁 2026-10-16
         Decimal("0.6513"),    # 10 年分位 65.13% → 区间内
     ),
-    # ── 港股 恒生高股息率指数（liubo 2026-10-19 拍板：加 HSHDYI 跟踪）──
-    # HSHDYI = Hang Seng High Dividend Yield Index（恒生高股息率指数）。
-    # URL: https://www.lixinger.com/analytics/index/detail/hk/HSHDYI/1067
-    # 50 只高息股，覆盖 HK + H + 紅籌 + 民企，含 HSBC/AIA/HKEX/港铁/中电/煤气/中移动/中海油
-    # 等高股息龙头，是「HK 高股息策略」而非单一行业。
-    # lixinger 不直接给 HSHDYI 历史 PE 分位（frog_20261016.csv 没有），用 legulegu 月度估值：
-    # - PE-TTM 月度统计 9.47（2019-04-30 ~ 2026-09-30 区间）
-    # - 历史分位 89.89%（偏高 >80% → 触发 REDUCE 信号）
-    # PE 分位 89.89% / 89.89% 这对数据 legulegu 同时给出，时点口径一致。
-    # 0 仓位 + 高分位 → REDUCE 信号逻辑上不冲突（仓位=0 走「等便宜」 HOLD，
-    # 实际 build_watchlist_evaluations 用 0 仓 → 50%<89.89% 走 HOLD；详见 _evaluate_signal）。
-    # 但 liubo 拍板要加，作为「HK 高股息组合估值跟踪」参考；将来真要建仓 HSHDYI 仓
-    # （比如 513690 / 恒生高股息 ETF / 港股通 50 等）时分位信号会有用。
+    # ── 港股 恒生港股通高股息率指数（liubo 2026-10-19 拍板：加 HSSCHKY 跟踪）──
+    # HSSCHKY = Hang Seng SCHK High Dividend Yield Index（恒生港股通高股息率指数）。
+    # URL: https://www.lixinger.com/analytics/index/detail/hk/HSSCHKY/2055
+    # 50 只港股通高息股，覆盖 H 股 + A 股互通的中资高息股。
+    # **关键**：跟踪 ETF = 513690 港股红利ETF博时（市面主流 HK 高股息 ETF，liubo 拍板 替换 HSHDYI 的原因）。
+    # HSHDYI 没用：lixinger 页 1067 只样本数，跟踪 ETF 散乱（513060/159010 等小基金，
+    # 没找到「明星产品」），liubo 拍板换 HSSCHKY。
+    # lixinger frog_20261016.csv 没 HSSCHKY，用 legulegu 月度估值（2019-11-30 ~ 2026-08-31，81 个月）：
+    # - PE-TTM 加权值 8.18（2026-10-14）
+    # - 历史分位 PE 9.96 倍 / 区间 3.08~10.17 / 分位 98.77%（近历史最高，>80% REDUCE 区间）
+    # 0 仓位 + 高分位 → 走「等便宜」 HOLD（_evaluate_signal: pos==0 且 pct>=0.50 → HOLD）。
     (
         SwensenClass.HK_EQUITY,
-        "HSHDYI",
-        "恒生高股息率指数",
+        "HSSCHKY",
+        "恒生港股通高股息率指数",
         ValuationMetric.PE_TTM,
-        Decimal("9.47"),      # legulegu 2019-04~2026-09 区间月度数据
-        Decimal("0.8989"),    # 历史分位 89.89%（>80% REDUCE 区间）
+        Decimal("8.18"),      # legulegu 2019-11~2026-08 加权 PE
+        Decimal("0.9877"),    # 历史分位 98.77%（>80% REDUCE 区间）
     ),
 ]
 
@@ -554,7 +552,7 @@ INDEX_DISPLAY_NAME: dict[str, str] = {
     "HSTECH": "恒生科技",   # 第三十六轮（liubo 2026-10-19）补：港股卡 013127 行 etf_index 列之前显示 "—"
     "HSCGSI": "恒生消费指数",  # 第三十六轮（liubo 2026-10-19 拍板）：港股也跟踪；理杏仁代码 HSCGSI
     "HSIDI": "恒生创新药指数",  # 第三十六轮（liubo 2026-10-19 拍板）：港股加跟踪
-    "HSHDYI": "恒生高股息率指数",  # 第三十七轮（liubo 2026-10-19 拍板）：港股加高股息策略跟踪
+    "HSSCHKY": "恒生港股通高股息率指数",  # 第三十七轮（liubo 2026-10-19 拍板，从 HSHDYI 改）：513690 跟踪 ETF
     "GOLD": "黄金",
 }
 
