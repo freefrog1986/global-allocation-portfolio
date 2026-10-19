@@ -1118,7 +1118,7 @@ class TestWeeklyRebalancePlan:
     def test_foreign_dm_indices_appear_in_watchlist(self) -> None:
         """FOREIGN_DM_EQUITY：3 个评估（.N225 watchlist + .GDAXI 来自 000614 fund + .FCHI watchlist）。
 
-        457001 2026-09-22 转 ETF 轮动组合后 FOREIGN_DM_EQUITY 子类 0 只基金。
+        457001 2026-09-22 转左侧布局组合后 FOREIGN_DM_EQUITY 子类 0 只基金。
         liubo 2026-09-29 拍板：跟踪 3 个国外发达指数方便建仓决策。
         第二十四轮（2026-09-29）liubo 加 000614 华安 DAX 联接 A → .GDAXI 从 watchlist 移到 fund map。
         2026-10-17 liubo 反馈"把定投的总成本算上去"——000614 cost 改为累计目标 10000 = 1 仓满仓 → HOLD。

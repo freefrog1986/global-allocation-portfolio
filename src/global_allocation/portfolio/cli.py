@@ -819,7 +819,7 @@ DEFAULT_INDEX_TO_FUND_MAP: dict[str, list[str]] = {
     "NDX":  [
         "018966", "539001", "016452",  # 3 只大类资产 NDX 基金（2026-09-29 liubo 卖出 019524 后剩 3 只大类资产）
         "019172", "019441",            # 第 20/21 轮加的直接 QDII 场外
-        "017730", "016664", "006373",  # 3 只 ETF 轮动组合的全球主题 QDII（实际偏纳指，lixinger fallback 用）
+        "017730", "016664", "006373",  # 3 只左侧布局的全球主题 QDII（实际偏纳指，lixinger fallback 用）
     ],
 }
 
@@ -1733,11 +1733,11 @@ def cmd_reit_fetch() -> None:
     console.print(output)
 
 
-# ─── etf-rotation subcommand (liubo 2026-09-29 拍板：主观轮动 + 严格仓位管理) ───
+# ─── left-layout subcommand (liubo 2026-09-29 拍板，2026-10-19 改名) ───
 
 
-@app.command("etf-rotation")
-def cmd_etf_rotation(
+@app.command("left-layout")
+def cmd_left_layout(
     send: bool = typer.Option(False, "--send", help="发飞书卡片到话题 thread（每周五 cron 用）"),
     dry_run: bool = typer.Option(False, "--dry-run", help="只生成卡片 JSON，不真发"),
     chat: str | None = typer.Option(None, "--chat", help="覆盖默认 chat_id"),
@@ -1745,7 +1745,7 @@ def cmd_etf_rotation(
         None, "--root", help="话题根消息 id（发到话题 thread 而不是父群）"
     ),
 ) -> None:
-    """生成 ETF 轮动组合 周快照（liubo 2026-09-29 拍板）。
+    """生成 左侧布局 周快照（liubo 2026-09-29 拍板，2026-10-19 改名；原 etf-rotation）。
 
     默认打到 stdout（纯文本快照）；--send 通过飞书 OpenAPI 发卡片到话题 thread（每周五 cron 用）。
     --dry-run 只打印卡片 JSON 不真发。
@@ -1759,13 +1759,13 @@ def cmd_etf_rotation(
     """
     from datetime import date as _date
 
-    from global_allocation.portfolio.etf_rotation import format_weekly_snapshot_text
-    from global_allocation.portfolio.publisher import publish_etf_rotation_report
+    from global_allocation.portfolio.left_layout import format_weekly_snapshot_text
+    from global_allocation.portfolio.publisher import publish_left_layout_report
 
     today = _date.today()
 
     if dry_run:
-        result = publish_etf_rotation_report(
+        result = publish_left_layout_report(
             chat_id=chat,
             root_id=root,
             report_date=today,
@@ -1777,7 +1777,7 @@ def cmd_etf_rotation(
 
     if send:
         try:
-            result = publish_etf_rotation_report(
+            result = publish_left_layout_report(
                 chat_id=chat,
                 root_id=root,
                 report_date=today,

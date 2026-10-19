@@ -1,4 +1,4 @@
-"""ETF 轮动策略组合（独立模块，liubo 2026-09-22 建，2026-09-28 扩到 9 只，2026-09-29 减回 8 只）。
+"""左侧布局策略组合（独立模块，liubo 2026-09-22 建「ETF 轮动组合」，2026-10-19 改名「左侧布局」）。
 
 跟 Swensen 大类资产配置 + 红利策略**都不混在一起**，单独一个模块。
 
@@ -35,7 +35,7 @@
 P&L 口径（重要，liubo 2026-09-28 拍板）：
 - **真实 P&L = 当前总资产 - 累计成本**
 - 不要用券商 app「持仓收益」 — app 算的是「组合成立日之后的盈亏」，漏算
-  成立前的累计买入（liubo 在建「ETF 轮动组合」分组前就已经买入了多只）。
+  成立前的累计买入（liubo 在建「左侧布局组合」分组前就已经买入了多只）。
 - 2026-09-30 snapshot（含 010989 新买 5000）：总资产 67,090.41 - 累计成本 71,420 = -4,329.59 CNY (-6.06%)
   - 8 只老基金总资产 = 62,090.41（沿用 09-29 数据，等下一次手动 snapshot 更新）
   - 010989 新买入 5000 CNY（pending confirmation 10-08，按成本计入）
@@ -50,8 +50,8 @@ P&L 口径（重要，liubo 2026-09-28 拍板）：
 - **同基金冷却期**：7 天（同一只基金月度内不要频繁交易）
 - **无止盈止损**：纯主观，无自动规则
 
-注意：模块名虽然叫"ETF 轮动"，但 4 只是 QDII 主动管理基金（亚太 + 全球科技 3 只）；
-"轮动"指按动量/估值信号轮换持有标的；标的本身不限于纯 ETF。
+注意：模块名「左侧布局」是 2026-10-19 改名（原 ETF 轮动组合）；其中 4 只是 QDII 主动管理基金
+（亚太 + 全球科技 3 只）；"布局"指按主观判断 / 估值信号挑标的；标的本身不限于纯 ETF。
 
 后续这块有自己的成本/估值/再平衡规则就加在这里。
 """
@@ -65,7 +65,7 @@ from decimal import Decimal
 # 已知基金 + 策略标签（MVP hardcode；后续可挪到独立数据库）
 # 9 只基金（2026-09-30 liubo 加 010989 新类别「房地产」），按上面 5 类分组。
 # 之前 8 只，2026-09-30 加 1。
-ETF_ROTATION_BY_CODE: dict[str, str] = {
+LEFT_LAYOUT_BY_CODE: dict[str, str] = {
     # ── 港股科技互联网（3）──  2026-09-29 liubo 把 013127 转走
     "006327": "港股科技互联网",   # 易方达中证海外互联网50ETF联接（QDII，海外中概）
     "014673": "港股科技互联网",   # 富国中证港股通互联网ETF联接
@@ -116,7 +116,7 @@ STRATEGY_CATEGORIES: dict[str, list[str]] = {
 }
 
 
-# 合计：71,420 元（9 只 ETF 轮动组合基金；2026-09-28 liubo 全部校准完成 + 2026-09-29 减 013127 -25000 + 2026-09-30 加 010989 +5000）
+# 合计：71,420 元（9 只左侧布局组合基金；2026-09-28 liubo 全部校准完成 + 2026-09-29 减 013127 -25000 + 2026-09-30 加 010989 +5000）
 # - 港股科技互联网 3：53,000（006327=10k + 014673=23k + 016495=20k）
 # - 港股银行 1：1,010
 # - 亚太除日本 1：4,640
@@ -139,13 +139,13 @@ CURRENT_TOTAL_RETURN_PCT: Decimal = CURRENT_TOTAL_PNL_CNY / TOTAL_COST_CNY  # -0
 # 显示名（飞书卡片 / 报告输出用）
 DISPLAY_NAME: dict[str, str] = {
     code: f"{label}（{code}）"
-    for code, label in ETF_ROTATION_BY_CODE.items()
+    for code, label in LEFT_LAYOUT_BY_CODE.items()
 }
 
 
 def get_strategy(fund_code: str) -> str | None:
     """查某只基金的策略标签（4 类之一）。未知返回 None。"""
-    return ETF_ROTATION_BY_CODE.get(fund_code)
+    return LEFT_LAYOUT_BY_CODE.get(fund_code)
 
 
 def get_cost_basis(fund_code: str) -> Decimal | None:
@@ -236,7 +236,7 @@ def check_category_cap_for_buy(
     """
     category = get_strategy(fund_code)
     if category is None:
-        return False, f"未知基金 {fund_code} 不在 ETF 轮动组合"
+        return False, f"未知基金 {fund_code} 不在左侧布局组合"
     status = get_category_cap_status(category)
     new_total = status["current_cny"] + add_cost
     cap_cny = status["cap_cny"]
@@ -298,12 +298,12 @@ def record_trade(fund_code: str, trade_date: date) -> None:
 def format_weekly_snapshot_text(today: date | None = None) -> str:
     """生成每周快照的纯文本格式（用于 dry-run / 日志 / CLI 输出）。
 
-    飞书卡片版见 etf_rotation_card.py。
+    飞书卡片版见 left_layout_card.py。
     """
     if today is None:
         today = date.today()
     lines: list[str] = []
-    lines.append(f"📊 ETF 轮动组合 周快照 ({today.isoformat()})")
+    lines.append(f"📊 左侧布局 周快照 ({today.isoformat()})")
     lines.append("")
     lines.append(f"组合总成本：{float(TOTAL_COST_CNY):,.0f} CNY")
     lines.append(f"当前总资产：{float(CURRENT_TOTAL_ASSETS_CNY):,.2f} CNY")
@@ -359,7 +359,7 @@ def get_total_return_pct() -> Decimal:
 
 
 __all__ = [
-    "ETF_ROTATION_BY_CODE",
+    "LEFT_LAYOUT_BY_CODE",
     "COST_BASIS_BY_CODE",
     "STRATEGY_CATEGORIES",
     "TOTAL_COST_CNY",

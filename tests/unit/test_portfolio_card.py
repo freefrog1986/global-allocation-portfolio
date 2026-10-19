@@ -371,9 +371,9 @@ class TestRebalanceRecordsSection:
     def test_no_cross_portfolio_funds_leaked(
         self, journal: PortfolioJournal,
     ) -> None:
-        """调仓纪录不展示 ETF 轮动 / 红利策略 / 其他组合的基金。
+        """调仓纪录不展示 左侧布局 / 红利策略 / 其他组合的基金。
 
-        liubo 2026-10-17 反馈 — global-allocation / dividend-strategy / etf-rotation
+        liubo 2026-10-17 反馈 — global-allocation / dividend-strategy / left-layout
         三个组合分开管理。已知跨组合基金 code: 010989 / 023917 / 457001 / 025682。
         """
         table = self._get_rebalance_table(journal)
@@ -3950,7 +3950,7 @@ class TestPublisherExports:
             "publish_portfolio_report",
             "publish_portfolio_reports",
             "publish_pe_rebalance_report",
-            "publish_etf_rotation_report",
+            "publish_left_layout_report",
         ):
             assert name in pub.__all__, (
                 f"publisher.__all__ 漏了 {name}（第三十五轮加的 publish_portfolio_reports 必须导出）"
@@ -3960,6 +3960,6 @@ class TestPublisherExports:
             "publish_portfolio_report",
             "publish_portfolio_reports",
             "publish_pe_rebalance_report",
-            "publish_etf_rotation_report",
+            "publish_left_layout_report",
         ):
             assert hasattr(pub, name), f"publisher 模块应有 {name} 函数"

@@ -1,4 +1,4 @@
-"""测试 src/global_allocation/portfolio/etf_rotation.py。
+"""测试 src/global_allocation/portfolio/left_layout.py（liubo 2026-10-19 改名；原 etf_rotation.py）。
 
 liubo 2026-09-28：扩到 9 只基金，全部成本由 liubo 校准完成（91,420 CNY）。
 2026-09-29：liubo 把 013127 汇添富恒生科技 ETF 联接发起式(QDII)A 转到大类资产配置组合 → 8 只（66,420 CNY）。
@@ -22,14 +22,14 @@ from decimal import Decimal
 
 import pytest
 
-from global_allocation.portfolio.etf_rotation import (
+from global_allocation.portfolio.left_layout import (
     COST_BASIS_BY_CODE,
     CURRENT_SNAPSHOT_DATE,
     CURRENT_TOTAL_ASSETS_CNY,
     CURRENT_TOTAL_PNL_CNY,
     CURRENT_TOTAL_RETURN_PCT,
     DISPLAY_NAME,
-    ETF_ROTATION_BY_CODE,
+    LEFT_LAYOUT_BY_CODE,
     STRATEGY_CATEGORIES,
     TOTAL_COST_CNY,
     get_cost_basis,
@@ -50,25 +50,25 @@ EXPECTED_FUNDS = {
 }
 
 
-class TestEtfRotationByCode:
+class TestLeftLayoutByCode:
     def test_has_nine_funds(self) -> None:
         """2026-09-30 加 010989 后 9 只。"""
-        assert len(ETF_ROTATION_BY_CODE) == 9
+        assert len(LEFT_LAYOUT_BY_CODE) == 9
 
     def test_all_expected_funds_present(self) -> None:
-        assert set(ETF_ROTATION_BY_CODE.keys()) == EXPECTED_FUNDS
+        assert set(LEFT_LAYOUT_BY_CODE.keys()) == EXPECTED_FUNDS
 
     def test_457001_mapped(self) -> None:
-        """457001 国富亚洲机会是首批进入 ETF 轮动组合的基金（liubo 2026-09-22）。"""
-        assert ETF_ROTATION_BY_CODE["457001"] == "亚太除日本"
+        """457001 国富亚洲机会是首批进入左侧布局组合的基金（liubo 2026-09-22）。"""
+        assert LEFT_LAYOUT_BY_CODE["457001"] == "亚太除日本"
 
-    def test_013127_no_longer_in_rotation(self) -> None:
-        """013127 2026-09-29 转到大类资产配置组合，不在 ETF 轮动里。"""
-        assert "013127" not in ETF_ROTATION_BY_CODE
+    def test_013127_no_longer_in_layout(self) -> None:
+        """013127 2026-09-29 转到大类资产配置组合，不在左侧布局里。"""
+        assert "013127" not in LEFT_LAYOUT_BY_CODE
 
     def test_010989_mapped_to_real_estate(self) -> None:
         """010989 南方中证房地产 ETF 发起联接 E 在「房地产」类（2026-09-30 加）。"""
-        assert ETF_ROTATION_BY_CODE["010989"] == "房地产"
+        assert LEFT_LAYOUT_BY_CODE["010989"] == "房地产"
 
 
 class TestStrategyCategories:
@@ -102,7 +102,7 @@ class TestStrategyCategories:
         assert STRATEGY_CATEGORIES["房地产"] == ["010989"]
 
     def test_categories_cover_all_funds(self) -> None:
-        """5 类的基金并集 = ETF_ROTATION_BY_CODE 的全部 9 只。"""
+        """5 类的基金并集 = LEFT_LAYOUT_BY_CODE 的全部 9 只。"""
         all_in_categories: set[str] = set()
         for codes in STRATEGY_CATEGORIES.values():
             all_in_categories.update(codes)
@@ -131,12 +131,12 @@ class TestGetStrategy:
     def test_known_funds(self, code: str, expected: str) -> None:
         assert get_strategy(code) == expected
 
-    def test_013127_no_longer_in_rotation(self) -> None:
-        """013127 已转到大类资产配置组合，不在 ETF 轮动策略里。"""
+    def test_013127_no_longer_in_layout(self) -> None:
+        """013127 已转到大类资产配置组合，不在左侧布局策略里。"""
         assert get_strategy("013127") is None
 
     def test_unknown_fund_returns_none(self) -> None:
-        """不在 ETF 轮动清单里的基金返回 None，不抛错。"""
+        """不在左侧布局清单里的基金返回 None，不抛错。"""
         assert get_strategy("999999") is None
         assert get_strategy("") is None
 
@@ -153,7 +153,7 @@ class TestDisplayName:
         assert DISPLAY_NAME[code] == expected
 
     def test_count_matches_mapping(self) -> None:
-        assert set(DISPLAY_NAME.keys()) == set(ETF_ROTATION_BY_CODE.keys())
+        assert set(DISPLAY_NAME.keys()) == set(LEFT_LAYOUT_BY_CODE.keys())
 
     def test_013127_no_longer_in_display_name(self) -> None:
         """013127 已转走，不再在 DISPLAY_NAME。"""
@@ -181,8 +181,8 @@ class TestCostBasis:
         """8 只成本全部 liubo 校准 / 新加。"""
         assert COST_BASIS_BY_CODE[code] == expected_cost
 
-    def test_013127_no_longer_in_rotation(self) -> None:
-        """013127 已转到大类资产配置，不在 ETF 轮动 COST_BASIS_BY_CODE。"""
+    def test_013127_no_longer_in_layout(self) -> None:
+        """013127 已转到大类资产配置，不在左侧布局 COST_BASIS_BY_CODE。"""
         assert "013127" not in COST_BASIS_BY_CODE
 
     def test_total_matches_sum(self) -> None:
@@ -202,7 +202,7 @@ class TestCostBasis:
         assert get_cost_basis("010989") == Decimal("5000")  # 新加
 
     def test_get_cost_basis_013127_returns_none(self) -> None:
-        """013127 不再属于 ETF 轮动组合。"""
+        """013127 不再属于左侧布局组合。"""
         assert get_cost_basis("013127") is None
 
     def test_get_cost_basis_unknown(self) -> None:
@@ -330,13 +330,13 @@ class TestPositionUnit:
     """1 仓 = 5,000 CNY（独立于大类资产配置的 1 万；不混）。"""
 
     def test_position_unit_value(self) -> None:
-        from global_allocation.portfolio.etf_rotation import POSITION_UNIT_CNY
+        from global_allocation.portfolio.left_layout import POSITION_UNIT_CNY
 
         assert POSITION_UNIT_CNY == Decimal("5000")
 
     def test_position_unit_independent_from_global(self) -> None:
         """跟大类资产配置的 1 万不混。"""
-        from global_allocation.portfolio.etf_rotation import POSITION_UNIT_CNY
+        from global_allocation.portfolio.left_layout import POSITION_UNIT_CNY
 
         assert POSITION_UNIT_CNY != Decimal("10000")
 
@@ -346,7 +346,7 @@ class TestGetPosition:
 
     def test_457001_partial_position(self) -> None:
         """457001 成本 4,640 → 0.928 仓。"""
-        from global_allocation.portfolio.etf_rotation import get_position
+        from global_allocation.portfolio.left_layout import get_position
 
         pos = get_position("457001")
         assert pos == Decimal("4640") / Decimal("5000")
@@ -354,28 +354,28 @@ class TestGetPosition:
 
     def test_full_position(self) -> None:
         """006327 成本 10,000 = 2 仓整。"""
-        from global_allocation.portfolio.etf_rotation import get_position
+        from global_allocation.portfolio.left_layout import get_position
 
         pos = get_position("006327")
         assert pos == Decimal("2")
 
     def test_large_position(self) -> None:
         """014673 成本 23,000 → 4.6 仓。"""
-        from global_allocation.portfolio.etf_rotation import get_position
+        from global_allocation.portfolio.left_layout import get_position
 
         pos = get_position("014673")
         assert float(pos) == pytest.approx(4.6, rel=0.01)
 
     def test_010989_one_unit(self) -> None:
         """010989 成本 5,000 = 1 仓整（2026-09-30 加）。"""
-        from global_allocation.portfolio.etf_rotation import get_position
+        from global_allocation.portfolio.left_layout import get_position
 
         pos = get_position("010989")
         assert pos == Decimal("1")
 
     def test_unknown_fund_returns_zero(self) -> None:
         """未知基金 → 0 仓。"""
-        from global_allocation.portfolio.etf_rotation import get_position
+        from global_allocation.portfolio.left_layout import get_position
 
         assert get_position("999999") == Decimal("0")
         assert get_position("") == Decimal("0")
@@ -389,7 +389,7 @@ class TestCategoryCapStatus:
 
     def test_total_cap_is_30pct_of_total(self) -> None:
         """每类上限 = 71,420 × 30% = 21,426 CNY（2026-09-30 加 010989 后）。"""
-        from global_allocation.portfolio.etf_rotation import get_category_cap_status
+        from global_allocation.portfolio.left_layout import get_category_cap_status
 
         status = get_category_cap_status("港股银行")
         assert status["cap_cny"] == TOTAL_COST_CNY * Decimal("0.30")
@@ -397,7 +397,7 @@ class TestCategoryCapStatus:
 
     def test_hk_tech_internet_over_cap(self) -> None:
         """港股科技互联网 3 只累计 53,000 / 21,426 = 247%（超限，老仓位豁免）。"""
-        from global_allocation.portfolio.etf_rotation import get_category_cap_status
+        from global_allocation.portfolio.left_layout import get_category_cap_status
 
         status = get_category_cap_status("港股科技互联网")
         assert status["current_cny"] == Decimal("53000")
@@ -406,7 +406,7 @@ class TestCategoryCapStatus:
 
     def test_hk_bank_under_cap(self) -> None:
         """港股银行 1,010 / 21,426 = 4.71%（远低于上限）。"""
-        from global_allocation.portfolio.etf_rotation import get_category_cap_status
+        from global_allocation.portfolio.left_layout import get_category_cap_status
 
         status = get_category_cap_status("港股银行")
         assert status["current_cny"] == Decimal("1010")
@@ -415,7 +415,7 @@ class TestCategoryCapStatus:
 
     def test_real_estate_under_cap(self) -> None:
         """房地产 1 只 010989 5,000 / 21,426 = 23.3%（远低于上限）。"""
-        from global_allocation.portfolio.etf_rotation import get_category_cap_status
+        from global_allocation.portfolio.left_layout import get_category_cap_status
 
         status = get_category_cap_status("房地产")
         assert status["current_cny"] == Decimal("5000")
@@ -425,21 +425,21 @@ class TestCategoryCapStatus:
 
     def test_remaining_cny_negative_when_over(self) -> None:
         """超限时 remaining_cny 为负（表示已超多少）。"""
-        from global_allocation.portfolio.etf_rotation import get_category_cap_status
+        from global_allocation.portfolio.left_layout import get_category_cap_status
 
         status = get_category_cap_status("港股科技互联网")
         assert status["remaining_cny"] < Decimal("0")
 
     def test_remaining_cny_positive_when_under(self) -> None:
         """未超限时 remaining_cny 为正（还能加仓多少）。"""
-        from global_allocation.portfolio.etf_rotation import get_category_cap_status
+        from global_allocation.portfolio.left_layout import get_category_cap_status
 
         status = get_category_cap_status("港股银行")
         assert status["remaining_cny"] > Decimal("0")
 
     def test_unknown_category_returns_zero(self) -> None:
         """未知类别 → current_cny=0。"""
-        from global_allocation.portfolio.etf_rotation import get_category_cap_status
+        from global_allocation.portfolio.left_layout import get_category_cap_status
 
         status = get_category_cap_status("未知类别")
         assert status["current_cny"] == Decimal("0")
@@ -450,7 +450,7 @@ class TestCheckCategoryCapForBuy:
 
     def test_over_cap_still_allows_buy(self) -> None:
         """港股科技互联网当前 53,000 已超限，新买 5,000 仍允许（豁免）。"""
-        from global_allocation.portfolio.etf_rotation import check_category_cap_for_buy
+        from global_allocation.portfolio.left_layout import check_category_cap_for_buy
 
         ok, reason = check_category_cap_for_buy("006327", Decimal("5000"))
         assert ok is True
@@ -458,7 +458,7 @@ class TestCheckCategoryCapForBuy:
 
     def test_under_cap_allows_normal_buy(self) -> None:
         """港股银行当前 1,010，新买 5,000 后 = 6,010 << 21,426 → 允许。"""
-        from global_allocation.portfolio.etf_rotation import check_category_cap_for_buy
+        from global_allocation.portfolio.left_layout import check_category_cap_for_buy
 
         ok, reason = check_category_cap_for_buy("006809", Decimal("5000"))
         assert ok is True
@@ -466,7 +466,7 @@ class TestCheckCategoryCapForBuy:
 
     def test_real_estate_new_buy(self) -> None:
         """房地产 5,000，新买 5,000 后 = 10,000 < 21,426 → 允许。"""
-        from global_allocation.portfolio.etf_rotation import check_category_cap_for_buy
+        from global_allocation.portfolio.left_layout import check_category_cap_for_buy
 
         ok, reason = check_category_cap_for_buy("010989", Decimal("5000"))
         assert ok is True
@@ -474,7 +474,7 @@ class TestCheckCategoryCapForBuy:
 
     def test_unknown_fund_rejected(self) -> None:
         """未知基金 → 拒绝。"""
-        from global_allocation.portfolio.etf_rotation import check_category_cap_for_buy
+        from global_allocation.portfolio.left_layout import check_category_cap_for_buy
 
         ok, reason = check_category_cap_for_buy("999999", Decimal("5000"))
         assert ok is False
@@ -486,7 +486,7 @@ class TestCooldown:
 
     def test_no_prior_trade_allows(self) -> None:
         """首次交易：无冷却期记录 → 允许。"""
-        from global_allocation.portfolio.etf_rotation import check_cooldown
+        from global_allocation.portfolio.left_layout import check_cooldown
 
         ok, reason = check_cooldown("457001", today=__import__("datetime").date(2026, 9, 29))
         assert ok is True
@@ -495,7 +495,7 @@ class TestCooldown:
     def test_within_cooldown_blocks(self) -> None:
         """5 天前交易过 → 还剩 2 天冷却期。"""
         from datetime import date as _date
-        from global_allocation.portfolio.etf_rotation import (
+        from global_allocation.portfolio.left_layout import (
             LAST_TRADE_BY_FUND,
             check_cooldown,
             record_trade,
@@ -513,7 +513,7 @@ class TestCooldown:
     def test_outside_cooldown_allows(self) -> None:
         """7 天前交易过 → 已过冷却期。"""
         from datetime import date as _date
-        from global_allocation.portfolio.etf_rotation import (
+        from global_allocation.portfolio.left_layout import (
             LAST_TRADE_BY_FUND,
             check_cooldown,
             record_trade,
@@ -530,7 +530,7 @@ class TestCooldown:
     def test_record_trade_updates_dict(self) -> None:
         """record_trade 后 LAST_TRADE_BY_FUND 有记录。"""
         from datetime import date as _date
-        from global_allocation.portfolio.etf_rotation import (
+        from global_allocation.portfolio.left_layout import (
             LAST_TRADE_BY_FUND,
             record_trade,
         )
@@ -547,7 +547,7 @@ class TestFormatWeeklySnapshotText:
     """format_weekly_snapshot_text: 纯文本快照（CLI 默认输出）。"""
 
     def test_contains_total_cost(self) -> None:
-        from global_allocation.portfolio.etf_rotation import format_weekly_snapshot_text
+        from global_allocation.portfolio.left_layout import format_weekly_snapshot_text
 
         text = format_weekly_snapshot_text(today=__import__("datetime").date(2026, 9, 30))
         assert "71,420" in text  # 总成本（2026-09-30 加 010989 后）
@@ -556,7 +556,7 @@ class TestFormatWeeklySnapshotText:
 
     def test_contains_all_five_categories(self) -> None:
         """5 类都有标题。"""
-        from global_allocation.portfolio.etf_rotation import format_weekly_snapshot_text
+        from global_allocation.portfolio.left_layout import format_weekly_snapshot_text
 
         text = format_weekly_snapshot_text(today=__import__("datetime").date(2026, 9, 30))
         assert "港股科技互联网" in text
@@ -567,7 +567,7 @@ class TestFormatWeeklySnapshotText:
 
     def test_over_cap_marked(self) -> None:
         """超限类别有 ⚠️ 标记。"""
-        from global_allocation.portfolio.etf_rotation import format_weekly_snapshot_text
+        from global_allocation.portfolio.left_layout import format_weekly_snapshot_text
 
         text = format_weekly_snapshot_text(today=__import__("datetime").date(2026, 9, 30))
         assert "⚠️超限" in text or "⚠️ 超限" in text
@@ -577,7 +577,7 @@ class TestExports:
     """__all__ 必须包含新加的策略规则函数。"""
 
     def test_position_management_exports(self) -> None:
-        import global_allocation.portfolio.etf_rotation as mod
+        import global_allocation.portfolio.left_layout as mod
 
         assert "POSITION_UNIT_CNY" in mod.__all__
         assert "CATEGORY_CAP_PCT" in mod.__all__

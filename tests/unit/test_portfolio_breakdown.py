@@ -85,7 +85,7 @@ class TestSubclassByCode:
         assert get_subclass("019524") is None
         assert get_subclass("019172") == SwensenClass.US_EQUITY  # 纳100（第二十轮加）
         assert get_subclass("019441") == SwensenClass.US_EQUITY  # 纳100（第二十一轮加）
-        # 港股 1（2026-09-29 第二十三轮：013127 从 ETF 轮动组合转过来）
+        # 港股 1（2026-09-29 第二十三轮：013127 从 左侧布局组合转过来）
         assert get_subclass("013127") == SwensenClass.HK_EQUITY  # 恒生科技（汇添富联接 QDII）
         # 国外发达 1（2026-09-29 第二十四轮：000614 华安 DAX 联接 A 加入大类资产）
         assert get_subclass("000614") == SwensenClass.FOREIGN_DM_EQUITY  # 德国 DAX（华安联接 QDII）
@@ -120,7 +120,7 @@ class TestSubclassByCode:
         """第十八轮砍 11 只非宽基股权：港股 4（+1 转走）+ 美股 3 QDII 主题 + A 股 3 红利低波。
 
         港股原来 5 只砍掉的清单：004098/006809/014673/016495（4 只）。
-        013127 第十八轮被砍 → 第二十二轮（2026-09-29）从 ETF 轮动组合转回大类资产
+        013127 第十八轮被砍 → 第二十二轮（2026-09-29）从 左侧布局组合转回大类资产
         配置 HK_EQUITY 子类，所以现在 013127 在 SUBCLASS_BY_CODE 里。
         """
         # 港股 4 只仍在 SUBSET 字节码外（只有 013127 转回）
@@ -144,7 +144,7 @@ class TestSubclassByCode:
         """第二十二轮（2026-09-29）：013127 汇添富恒生科技 转回大类资产，HK_EQUITY 子类 1 只。
 
         之前第十八轮砍完后 HK_EQUITY 0 只；2026-09-29 liubo 把 013127 从
-        ETF 轮动组合转过来 → HK_EQUITY 现在 1 只。
+        左侧布局组合转过来 → HK_EQUITY 现在 1 只。
         """
         hk_funds = [
             code for code, sub in SUBCLASS_BY_CODE.items()
@@ -182,7 +182,7 @@ class TestComputeBreakdown:
     def test_groups_by_subclass(
         self, tmp_path: Path
     ) -> None:
-        # 第十九轮（liubo 2026-09-22）：457001 移到 ETF 轮动组合，
+        # 第十九轮（liubo 2026-09-22）：457001 移到 左侧布局组合，
         # 国外发达市场股票子类暂时为 0；改用新兴市场 378006 当海外子类代表
         journal = self._make_journal(
             tmp_path,
@@ -205,7 +205,7 @@ class TestComputeBreakdown:
     def test_weight_sums_to_one_when_total_positive(
         self, tmp_path: Path
     ) -> None:
-        # 港股砍了、457001 移到 ETF 轮动组合，改用 378006（新兴市场）当海外代表
+        # 港股砍了、457001 移到 左侧布局组合，改用 378006（新兴市场）当海外代表
         journal = self._make_journal(
             tmp_path,
             [

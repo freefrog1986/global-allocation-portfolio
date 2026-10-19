@@ -36,13 +36,13 @@ from global_allocation.portfolio.breakdown import (
     get_subclass,
 )
 
-# 跨组合白名单：这些基金属于其他组合（ETF 轮动 / 红利策略 / 其他），不在大类资产配置 card 里展示
-# liubo 2026-10-17 反馈 — global-allocation / dividend-strategy / etf-rotation 三个组合分开管理
+# 跨组合白名单：这些基金属于其他组合（左侧布局 / 红利策略 / 其他），不在大类资产配置 card 里展示
+# liubo 2026-10-17 反馈 — global-allocation / dividend-strategy / left-layout 三个组合分开管理
 # 历史基金（019524/020291/160422）虽然不在 COST_BASIS_BY_CODE，仍属于大类资产配置历史持仓 → 保留
 _CROSS_PORTFOLIO_EXCLUDE_CODES: frozenset[str] = frozenset({
-    "010989",   # 南方中证房地产 ETF 联接 E — ETF 轮动组合
+    "010989",   # 南方中证房地产 ETF 联接 E — 左侧布局组合
     "023917",   # 红利策略基金
-    "457001",   # 国富亚洲机会 — ETF 轮动组合
+    "457001",   # 国富亚洲机会 — 左侧布局组合
     "025682",   # 红利策略基金
 })
 
@@ -1360,7 +1360,7 @@ def _collect_rebalance_rows(limit: int = 20) -> list[RebalanceRow]:
         body = commit["body"]
 
         # 每条 `- 0xxxxx ...` 行 → 1 row
-        # 跨组合过滤（按行）：spec 022 card 只展示 global-allocation 调仓；ETF 轮动 /
+        # 跨组合过滤（按行）：spec 022 card 只展示 global-allocation 调仓；左侧布局 /
         # 红利策略 / 其他组合的行跳过（liubo 2026-10-17 反馈 — 三个组合分开管理）
         body_rows: list[RebalanceRow] = []
         for line in body.splitlines():

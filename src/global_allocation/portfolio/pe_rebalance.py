@@ -249,7 +249,7 @@ FUND_INDEX_MAP: dict[str, tuple[SwensenClass, str, str]] = {
     "023414": (SwensenClass.CN_EQUITY, "399673", "工银创业板 50ETF 联接 A"),
     # 港股股票 (1 → HSTECH)
     # 2026-09-29 liubo 把 013127 汇添富恒生科技 ETF 联接发起式(QDII)A
-    # 从 ETF 轮动组合转到大类资产配置（港股子类）
+    # 从左侧布局组合转到大类资产配置（港股子类）
     "013127": (SwensenClass.HK_EQUITY, "HSTECH", "汇添富恒生科技 ETF 联接发起式"),
     # 美股股票 (7 只 → 4 个 ETF)
     # 2026-09-29 liubo 卖出 019524（华泰柏瑞纳 100 联接），8 → 7
@@ -283,7 +283,7 @@ FUND_INDEX_MAP: dict[str, tuple[SwensenClass, str, str]] = {
 }
 
 # Watchlist：没持仓但想跟踪的指数（liubo 2026-09-24 加 HSI 恒生指数；
-# 2026-09-29 加国外发达市场 2 个指数 N225/FCHI — 457001 已转 ETF 轮动组合，
+# 2026-09-29 加国外发达市场 2 个指数 N225/FCHI — 457001 已转左侧布局组合，
 # .GDAXI 在 2026-09-29 第二十四轮加 000614 华安 DAX 联接 A 后从 watchlist 移到 FUND_INDEX_MAP）。
 # 列表项：(subclass, index_code, display_name, metric, value, percentile)
 # 0 仓位也会触发 BUILD（提醒建仓）或 HOLD（等便宜）/ REDUCE（不建仓）。

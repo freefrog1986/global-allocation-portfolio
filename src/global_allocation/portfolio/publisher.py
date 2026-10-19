@@ -15,8 +15,8 @@ from global_allocation.portfolio.card import (
     build_portfolio_cards,
     card_to_json,
 )
-from global_allocation.portfolio.etf_rotation_card import (
-    build_etf_rotation_card,
+from global_allocation.portfolio.left_layout_card import (
+    build_left_layout_card,
 )
 from global_allocation.portfolio.journal import PortfolioJournal
 from global_allocation.portfolio.pe_rebalance import RebalanceAction, weekly_rebalance_plan
@@ -155,7 +155,7 @@ __all__ = [
     "publish_portfolio_report",
     "publish_portfolio_reports",
     "publish_pe_rebalance_report",
-    "publish_etf_rotation_report",
+    "publish_left_layout_report",
 ]
 
 
@@ -267,17 +267,17 @@ def publish_pe_rebalance_report(
     raise RuntimeError(f"PE 周报飞书发送失败（重试 3 次）：{last_error}")
 
 
-# ─── ETF 轮动组合 周快照 飞书发送（liubo 2026-09-29 拍板）───
+# ─── 左侧布局 周快照 飞书发送（liubo 2026-09-29 拍板；2026-10-19 改名）───
 
 
-def publish_etf_rotation_report(
+def publish_left_layout_report(
     credentials: FeishuCredentials | None = None,
     chat_id: str | None = None,
     root_id: str | None = None,
     report_date: date | None = None,
     dry_run: bool = False,
 ) -> str:
-    """发送 ETF 轮动组合 周快照卡片到飞书。
+    """发送左侧布局 周快照卡片到飞书。
 
     Args:
         credentials: 凭证（默认从 env/文件读）。
@@ -295,7 +295,7 @@ def publish_etf_rotation_report(
 
     actual_chat_id = chat_id or credentials.chat_id
 
-    card = build_etf_rotation_card(report_date=report_date)
+    card = build_left_layout_card(report_date=report_date)
     card_json = card_to_json(card)
 
     if dry_run:
@@ -314,8 +314,8 @@ def publish_etf_rotation_report(
             )
         except Exception as e:
             last_error = e
-            logger.warning("ETF 轮动周报发送失败（第 %d 次）：%s", attempt + 1, e)
+            logger.warning("左侧布局周报发送失败（第 %d 次）：%s", attempt + 1, e)
             if attempt < 2:
                 import time
                 time.sleep(2**attempt)  # 1s, 2s
-    raise RuntimeError(f"ETF 轮动周报飞书发送失败（重试 3 次）：{last_error}")
+    raise RuntimeError(f"左侧布局周报飞书发送失败（重试 3 次）：{last_error}")

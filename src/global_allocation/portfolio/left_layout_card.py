@@ -1,4 +1,4 @@
-"""ETF 轮动组合 周快照的飞书 Interactive Card 构建（liubo 2026-09-29 拍板）。
+"""左侧布局 周快照的飞书 Interactive Card 构建（liubo 2026-09-29 拍板，2026-10-19 改名）。
 
 策略规则（liubo 2026-09-29）：
 - **标的（完全主观）**：liubo 看哪只顺眼买哪只，觉得不好就卖；不**用算法信号
@@ -10,7 +10,7 @@
 - **无止盈止损**：纯主观，无自动规则
 
 卡片结构（3 段）：
-- header.title: "ETF 轮动组合 周快照 (YYYY-MM-DD)"
+- header.title: "左侧布局 周快照 (YYYY-MM-DD)"
 - Section 1（组合总览）：
   - note header "组合总览"
   - div: 总成本 / 总资产 / 总盈亏 / 总收益率
@@ -32,7 +32,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from global_allocation.portfolio.etf_rotation import (
+from global_allocation.portfolio.left_layout import (
     COST_BASIS_BY_CODE,
     DISPLAY_NAME,
     POSITION_UNIT_CNY,
@@ -218,10 +218,10 @@ def _build_fund_section(today: date) -> list[dict[str, Any]]:
 # ─── 整卡构建 ─────────────────────────────
 
 
-def build_etf_rotation_card(
+def build_left_layout_card(
     report_date: date | None = None,
 ) -> dict[str, Any]:
-    """构造 ETF 轮动组合 周快照飞书 Interactive Card JSON。
+    """构造 左侧布局 周快照飞书 Interactive Card JSON。
 
     Args:
         report_date: 报告日期（标题用）；None = 今天。
@@ -233,7 +233,7 @@ def build_etf_rotation_card(
         from datetime import date as _date
         report_date = _date.today()
 
-    title = f"ETF 轮动组合 周快照 ({report_date.isoformat()})"
+    title = f"左侧布局 周快照 ({report_date.isoformat()})"
 
     elements: list[dict[str, Any]] = []
     elements.extend(_build_overview_section(report_date))
@@ -256,7 +256,7 @@ def build_etf_rotation_card(
             "tag": "note",
             "elements": [
                 {"tag": "plain_text", "content": (
-                    f"ETF 轮动组合 — 主观选标的 + 严格仓位管理 "
+                    f"左侧布局 — 主观选标的 + 严格仓位管理 "
                     f"({n_funds} 只基金 · 1 仓 = {float(POSITION_UNIT_CNY):,.0f} CNY)"
                 )}
             ],
@@ -275,6 +275,6 @@ def card_to_json(card: dict[str, Any]) -> str:
 
 
 __all__ = [
-    "build_etf_rotation_card",
+    "build_left_layout_card",
     "card_to_json",
 ]
