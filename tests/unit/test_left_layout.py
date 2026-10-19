@@ -382,46 +382,51 @@ class TestGetPosition:
 
 
 class TestCategoryCapStatus:
-    """get_category_cap_status: cap = 总成本 × 30%，使用率 = current / cap。
+    """get_category_cap_status: cap = 总成本 × 15%，占比 = current / total_cost。
 
-    2026-09-30 加 010989 5000 → 总成本 71,420；cap = 21,426。
+    liubo 2026-10-19 拍板：cap 从 30% 降到 15%；占比口径从「使用率 = current / cap」
+    改成「实际占比 = current / 总成本」（更直观，74.2% 而不是 247%）。
+
+    2026-09-30 加 010989 5000 → 总成本 71,420；cap = 10,713。
     """
 
-    def test_total_cap_is_30pct_of_total(self) -> None:
-        """每类上限 = 71,420 × 30% = 21,426 CNY（2026-09-30 加 010989 后）。"""
+    def test_total_cap_is_15pct_of_total(self) -> None:
+        """每类上限 = 71,420 × 15% = 10,713 CNY（2026-10-19 拍板 30% → 15%）。"""
         from global_allocation.portfolio.left_layout import get_category_cap_status
 
         status = get_category_cap_status("港股银行")
-        assert status["cap_cny"] == TOTAL_COST_CNY * Decimal("0.30")
-        assert status["cap_cny"] == Decimal("71420") * Decimal("0.30")
+        assert status["cap_cny"] == TOTAL_COST_CNY * Decimal("0.15")
+        assert status["cap_cny"] == Decimal("71420") * Decimal("0.15")
 
     def test_hk_tech_internet_over_cap(self) -> None:
-        """港股科技互联网 3 只累计 53,000 / 21,426 = 247%（超限，老仓位豁免）。"""
+        """港股科技互联网 3 只累计 53,000 → 占总成本 74.2%（超 15% 上限，老仓位豁免）。"""
         from global_allocation.portfolio.left_layout import get_category_cap_status
 
         status = get_category_cap_status("港股科技互联网")
         assert status["current_cny"] == Decimal("53000")
         assert status["is_over"] is True
-        assert float(status["pct_used"]) > Decimal("2")  # 200% 以上
+        # 实际占比 53,000 / 71,420 = 74.2%（不是使用率 247%）
+        assert float(status["pct_of_total"]) > Decimal("0.7")  # 70% 以上
+        assert float(status["pct_of_total"]) < Decimal("0.8")  # 80% 以下
 
     def test_hk_bank_under_cap(self) -> None:
-        """港股银行 1,010 / 21,426 = 4.71%（远低于上限）。"""
+        """港股银行 1,010 → 占总成本 1.4%（远低于 15% 上限）。"""
         from global_allocation.portfolio.left_layout import get_category_cap_status
 
         status = get_category_cap_status("港股银行")
         assert status["current_cny"] == Decimal("1010")
         assert status["is_over"] is False
-        assert float(status["pct_used"]) < Decimal("0.1")  # 10% 以下
+        assert float(status["pct_of_total"]) < Decimal("0.05")  # 5% 以下
 
     def test_real_estate_under_cap(self) -> None:
-        """房地产 1 只 010989 5,000 / 21,426 = 23.3%（远低于上限）。"""
+        """房地产 1 只 010989 5,000 → 占总成本 7.0%（低于 15% 上限）。"""
         from global_allocation.portfolio.left_layout import get_category_cap_status
 
         status = get_category_cap_status("房地产")
         assert status["current_cny"] == Decimal("5000")
         assert status["is_over"] is False
-        # 使用率大约 23%
-        assert Decimal("0.2") < status["pct_used"] < Decimal("0.25")
+        # 实际占比 5,000 / 71,420 = 7.0%
+        assert Decimal("0.05") < status["pct_of_total"] < Decimal("0.10")
 
     def test_remaining_cny_negative_when_over(self) -> None:
         """超限时 remaining_cny 为负（表示已超多少）。"""
@@ -457,7 +462,7 @@ class TestCheckCategoryCapForBuy:
         assert "豁免" in reason or "老仓位" in reason
 
     def test_under_cap_allows_normal_buy(self) -> None:
-        """港股银行当前 1,010，新买 5,000 后 = 6,010 << 21,426 → 允许。"""
+        """港股银行当前 1,010，新买 5,000 后 = 6,010 << 10,713 → 允许。"""
         from global_allocation.portfolio.left_layout import check_category_cap_for_buy
 
         ok, reason = check_category_cap_for_buy("006809", Decimal("5000"))
@@ -465,7 +470,7 @@ class TestCheckCategoryCapForBuy:
         assert "未超" in reason or "上限" in reason
 
     def test_real_estate_new_buy(self) -> None:
-        """房地产 5,000，新买 5,000 后 = 10,000 < 21,426 → 允许。"""
+        """房地产 5,000，新买 5,000 后 = 10,000 < 10,713 → 允许（占总成本 14%，<15%）。"""
         from global_allocation.portfolio.left_layout import check_category_cap_for_buy
 
         ok, reason = check_category_cap_for_buy("010989", Decimal("5000"))
@@ -482,7 +487,7 @@ class TestCheckCategoryCapForBuy:
 
 
 class TestCooldown:
-    """check_cooldown: 同基金冷却期 7 天。"""
+    """check_cooldown: 同基金冷却期 30 天（liubo 2026-10-19 拍板从 7 天延长）。"""
 
     def test_no_prior_trade_allows(self) -> None:
         """首次交易：无冷却期记录 → 允许。"""
@@ -493,7 +498,7 @@ class TestCooldown:
         assert "首次" in reason or "冷却" in reason
 
     def test_within_cooldown_blocks(self) -> None:
-        """5 天前交易过 → 还剩 2 天冷却期。"""
+        """5 天前交易过 → 还剩 25 天冷却期（30 - 5）。"""
         from datetime import date as _date
         from global_allocation.portfolio.left_layout import (
             LAST_TRADE_BY_FUND,
@@ -505,13 +510,13 @@ class TestCooldown:
         try:
             ok, reason = check_cooldown("457001", today=_date(2026, 9, 29))
             assert ok is False
-            assert "剩 2 天" in reason
+            assert "剩 25 天" in reason
         finally:
             # 清理测试副作用（避免污染其他测试）
             LAST_TRADE_BY_FUND.pop("457001", None)
 
     def test_outside_cooldown_allows(self) -> None:
-        """7 天前交易过 → 已过冷却期。"""
+        """30 天前交易过 → 已过冷却期（COOLDOWN_DAYS=30）。"""
         from datetime import date as _date
         from global_allocation.portfolio.left_layout import (
             LAST_TRADE_BY_FUND,
@@ -519,7 +524,7 @@ class TestCooldown:
             record_trade,
         )
 
-        record_trade("457001", _date(2026, 9, 22))  # 7 天前
+        record_trade("457001", _date(2026, 8, 30))  # 30 天前
         try:
             ok, reason = check_cooldown("457001", today=_date(2026, 9, 29))
             assert ok is True
@@ -590,3 +595,118 @@ class TestExports:
         assert "record_trade" in mod.__all__
         assert "format_weekly_snapshot_text" in mod.__all__
         assert "get_category_total_cost" in mod.__all__
+
+    def test_valuation_exports(self) -> None:
+        """Section 3 用的估值/动作相关导出（liubo 2026-10-19 拍板 R9 加）。"""
+        import global_allocation.portfolio.left_layout as mod
+
+        # Constants
+        assert "INDEX_BY_CATEGORY" in mod.__all__
+        assert "INDEX_DISPLAY_NAME_BY_CODE" in mod.__all__
+        assert "INDEX_VALUATION_BY_CODE" in mod.__all__
+
+        # Functions
+        assert "get_category_index" in mod.__all__
+        assert "get_category_index_name" in mod.__all__
+        assert "get_index_name" in mod.__all__
+        assert "get_index_valuation" in mod.__all__
+        assert "get_index_valuation_summary" in mod.__all__
+        assert "decide_category_action" in mod.__all__
+
+
+class TestIndexMapping:
+    """Section 3 用的指数映射（liubo 2026-10-19 拍板 R9，每类别 → 1 个指数）。"""
+
+    def test_hk_tech_internet_maps_to_987008(self) -> None:
+        """港股科技互联网 → 港股通科技 (987008.sz)。"""
+        from global_allocation.portfolio.left_layout import (
+            INDEX_BY_CATEGORY, get_category_index_name,
+        )
+        assert INDEX_BY_CATEGORY["港股科技互联网"] == "987008.sz"
+        assert get_category_index_name("港股科技互联网") == "港股通科技"
+
+    def test_global_tech_active_has_no_index(self) -> None:
+        """全球科技主动 → 无统一基准（QDII 主动主题）。"""
+        from global_allocation.portfolio.left_layout import (
+            INDEX_BY_CATEGORY, get_category_index_name,
+        )
+        assert INDEX_BY_CATEGORY["全球科技主动"] == ""
+        assert get_category_index_name("全球科技主动") == "无统一基准"
+
+    def test_unknown_category_returns_empty(self) -> None:
+        from global_allocation.portfolio.left_layout import get_category_index
+        assert get_category_index("不存在") == ""
+
+
+class TestIndexValuationSummary:
+    """理杏仁 schema 完整一行估值摘要（liubo 2026-10-19 拍板）。"""
+
+    def test_港股通科技_full_summary(self) -> None:
+        """987008.sz 全部 5 项指标 + 各自 @分位。"""
+        from global_allocation.portfolio.left_layout import get_index_valuation_summary
+        s = get_index_valuation_summary("987008.sz")
+        # 5 指标全部 @分位
+        assert "PE-TTM 23.10@13.14%" in s
+        assert "PB 2.495@2.17%" in s
+        assert "PS-TTM 1.89@0.14%" in s
+        assert "股息率 0.88%@99.28%" in s
+        assert "ROE 4.83%" in s  # ROE 没有 pct 字段
+
+    def test_未填_占位符(self) -> None:
+        """未填指数 → 全部 — 占位。"""
+        from global_allocation.portfolio.left_layout import get_index_valuation_summary
+        s = get_index_valuation_summary("HSSI.HK")
+        assert "PE-TTM —" in s
+        assert "PB —" in s
+
+    def test_无指数返回无统一基准(self) -> None:
+        from global_allocation.portfolio.left_layout import get_index_valuation_summary
+        assert "无统一基准" in get_index_valuation_summary("")
+
+
+class TestDecideCategoryAction:
+    """调仓动作 4 选 1（liubo 2026-10-19 拍板 R9）。"""
+
+    def test_港股超限_减仓(self) -> None:
+        """74.2% > 15% 上限 → 减仓。"""
+        from global_allocation.portfolio.left_layout import decide_category_action
+        r = decide_category_action("港股科技互联网")
+        assert r["action"] == "减仓"
+        assert r["emoji"] == "⚠️"
+        assert "74.2%" in r["reason"]
+
+    def test_正常类_加仓(self) -> None:
+        """非超限 + 远低于上限 → 加仓。"""
+        from global_allocation.portfolio.left_layout import decide_category_action
+        for cat in ("港股银行", "亚太除日本", "全球科技主动", "房地产"):
+            r = decide_category_action(cat)
+            assert r["action"] == "加仓", f"{cat} 应为加仓，实际 {r['action']}"
+            assert r["emoji"] == "➕"
+
+    def test_空类别_建仓(self) -> None:
+        """未知类别 → 建仓（liubo 4 种动作之一）。"""
+        from global_allocation.portfolio.left_layout import decide_category_action
+        r = decide_category_action("全新的类别")
+        assert r["action"] == "建仓"
+        assert r["emoji"] == "🆕"
+
+
+class TestIndexValuationFieldLookup:
+    """单字段查估值（liubo 2026-10-19 拍板：所有 field 缺数据 → "—"，永不抛错）。"""
+
+    def test_known_field(self) -> None:
+        from global_allocation.portfolio.left_layout import get_index_valuation
+        assert get_index_valuation("987008.sz", "ytd_pct") == "-23.03%"
+        assert get_index_valuation("987008.sz", "publish_date") == "2021-03-08"
+
+    def test_unknown_code_returns_dash(self) -> None:
+        from global_allocation.portfolio.left_layout import get_index_valuation
+        assert get_index_valuation("HSSI.HK", "ytd_pct") == "—"
+
+    def test_unknown_field_returns_dash(self) -> None:
+        from global_allocation.portfolio.left_layout import get_index_valuation
+        assert get_index_valuation("987008.sz", "不存在的字段") == "—"
+
+    def test_empty_code_returns_dash(self) -> None:
+        from global_allocation.portfolio.left_layout import get_index_valuation
+        assert get_index_valuation("", "ytd_pct") == "—"

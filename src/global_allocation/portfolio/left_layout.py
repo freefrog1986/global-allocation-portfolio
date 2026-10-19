@@ -41,13 +41,13 @@ P&L 口径（重要，liubo 2026-09-28 拍板）：
   - 010989 新买入 5000 CNY（pending confirmation 10-08，按成本计入）
 - 见 memory/project_brokerage_pnl.md
 
-策略规则（liubo 2026-09-29 拍板 — 主观轮动 + 严格仓位管理）：
+策略规则（liubo 2026-09-29 拍板 — 主观轮动 + 严格仓位管理；2026-10-19 拍板 cap 从 30% 降到 15%）：
 - **标的（完全主观）**：liubo 看哪只顺眼买哪只，觉得不好就卖；**不**用算法信号
 - **单笔规模**：每次买/卖 = 1 仓（不超买不超卖）
 - **1 仓 = 5,000 CNY**（独立于大类资产配置的 1 万）
-- **类别上限**：单类累计成本 ≤ 总成本 × 30%（CAP=30%）
+- **类别上限**：单类累计成本 ≤ 总成本 × 15%（CAP=15%；liubo 2026-10-19 拍板从 30% 降到 15%）
 - **老仓位豁免**：当前已超限的类别，新买仍允许（不阻拦），只卡新买时的额外加仓
-- **同基金冷却期**：7 天（同一只基金月度内不要频繁交易）
+- **同基金冷却期**：30 天（liubo 2026-10-19 拍板：从 7 天延长到 30 天，避免月度内频繁交易同一只基金）
 - **无止盈止损**：纯主观，无自动规则
 
 注意：模块名「左侧布局」是 2026-10-19 改名（原 ETF 轮动组合）；其中 4 只是 QDII 主动管理基金
@@ -116,6 +116,85 @@ STRATEGY_CATEGORIES: dict[str, list[str]] = {
 }
 
 
+# 各类别用的估值指数（liubo 2026-10-19 拍板 Section 3 加「估值」字段用）。
+# 格式：{类别名: 指数代码}，跟理杏仁对得上；空字符串 = 无统一基准。
+# liubo 选指数时只挑**一个权威指数**作为该类别估值参照；
+# QDII 主动主题类别没有共同跟踪指数 → 标 "" 不估值。
+INDEX_BY_CATEGORY: dict[str, str] = {
+    # 港股科技互联网 3 只：006327 / 014673 / 016495
+    # 006327 跟踪中证海外互联网 50，014673 跟踪中证港股通互联网，016495 跟踪中证港股通科技
+    # 3 只主题近似但跟踪指数不同；先选 016495 的港股通科技（liubo 2026-10-19 拍板理杏仁示例）
+    "港股科技互联网": "987008.sz",  # 港股通科技指数（016495 跟踪）
+    "港股银行": "HSSI.HK",           # 港股银行指数（HSSI / HK Bank Index）
+    "亚太除日本": "MSCI_AC_AXJ",     # MSCI AC Asia ex Japan
+    "全球科技主动": "",               # QDII 主动主题，无统一基准
+    "房地产": "932006.CSI",          # 中证全指房地产（008613/010989 跟踪的中证房地产指数近似 932006）
+}
+
+
+# 指数代码 → 显示名称（liubo 2026-10-19 拍板 Section 3 「估值」首字段）。
+INDEX_DISPLAY_NAME_BY_CODE: dict[str, str] = {
+    "987008.sz": "港股通科技",
+    "HSSI.HK": "港股银行指数 (HSSI)",
+    "MSCI_AC_AXJ": "MSCI AC Asia ex Japan",
+    "932006.CSI": "中证全指房地产 (932006)",
+}
+
+
+# 指数代码 → 完整估值 dict（liubo 手动维护，飞书卡片「估值」字段用）。
+# 字段集（参照理杏仁指数详情页 liubo 2026-10-19 给的 schema）：
+#   publish_date: 发布时间
+#   ytd_pct: 今年以来涨跌幅（如 "-23.03%"）
+#   fund_count: 跟踪基金数（如 "30"）
+#   pe_ttm: PE-TTM 当前值
+#   pe_pct: PE-TTM 当前值分位点%
+#   pb: PB 当前值
+#   pb_pct: PB 分位点%
+#   ps_ttm: PS-TTM 当前值
+#   ps_pct: PS-TTM 分位点%
+#   div_yield: 股息率
+#   div_pct: 股息率 分位点%
+#   roe: ROE %
+#   roe_history: 近 3 季度 ROE（"11.00% / 6.44% / 4.83%"）
+#   followers: 关注数
+# 空 dict = 估值字段全 "—"，等 liubo 后填（liubo 2026-10-19 拍板加完整 schema）。
+INDEX_VALUATION_BY_CODE: dict[str, dict[str, str]] = {
+    # 港股通科技 (987008.sz) — liubo 2026-10-19 拍板给的值（理杏仁指数详情页截图）
+    "987008.sz": {
+        "publish_date": "2021-03-08",
+        "ytd_pct": "-23.03%",
+        "fund_count": "30 (6 场内 + 14 场外)",
+        "pe_ttm": "23.10",
+        "pe_pct": "13.14%",
+        "pb": "2.495",
+        "pb_pct": "2.17%",
+        "ps_ttm": "1.89",
+        "ps_pct": "0.14%",
+        "div_yield": "0.88%",
+        "div_pct": "99.28%",
+        "roe": "4.83%",
+        "roe_history": "11.00% / 6.44% / 4.83%（2025Q2 → 2026Q2）",
+        "followers": "99",
+    },
+    # 其余 4 个指数暂未填，liubo 后续补
+}
+
+
+def get_index_name(index_code: str) -> str:
+    """查指数显示名（liubo 2026-10-19 拍板 Section 3 用）。未知 → 原 code。"""
+    return INDEX_DISPLAY_NAME_BY_CODE.get(index_code, index_code or "无统一基准")
+
+
+def get_index_valuation(index_code: str, field: str) -> str:
+    """查指数某字段估值（liubo 2026-10-19 拍板 Section 3 用）。
+    未知 code / 未知 field → "—"（永不抛错）。
+    """
+    if not index_code:
+        return "—"
+    data = INDEX_VALUATION_BY_CODE.get(index_code, {})
+    return data.get(field, "—")
+
+
 # 合计：71,420 元（9 只左侧布局组合基金；2026-09-28 liubo 全部校准完成 + 2026-09-29 减 013127 -25000 + 2026-09-30 加 010989 +5000）
 # - 港股科技互联网 3：53,000（006327=10k + 014673=23k + 016495=20k）
 # - 港股银行 1：1,010
@@ -143,6 +222,22 @@ DISPLAY_NAME: dict[str, str] = {
 }
 
 
+# 基金中文全名（飞书卡片 Section 3 第一列用，liubo 2026-10-19 拍板从
+# 「类别（code）」拆出 → 基金全名 + 类别各一列）
+# 来源：天天基金 / 各家基金公司官网，2026-09-28 liubo 校准。
+FUND_FULL_NAME_BY_CODE: dict[str, str] = {
+    "006327": "易方达中证海外互联网50ETF联接(QDII)A",
+    "014673": "富国中证港股通互联网ETF发起式联接A",
+    "016495": "景顺长城中证港股通科技ETF发起联接A",
+    "006809": "泰康香港银行指数A",
+    "457001": "国富亚洲机会股票(QDII)A",
+    "016664": "天弘全球高端制造混合(QDII)A",
+    "006373": "国富全球科技互联混合(QDII)人民币A",
+    "017730": "嘉实全球产业升级股票发起式(QDII)A",
+    "010989": "南方中证房地产ETF发起联接E",
+}
+
+
 def get_strategy(fund_code: str) -> str | None:
     """查某只基金的策略标签（4 类之一）。未知返回 None。"""
     return LEFT_LAYOUT_BY_CODE.get(fund_code)
@@ -153,20 +248,166 @@ def get_cost_basis(fund_code: str) -> Decimal | None:
     return COST_BASIS_BY_CODE.get(fund_code)
 
 
+# 各基金估值（liubo 手动维护，飞书卡片 Section 3 「估值」列用）。
+# 左侧布局是「主观选标的」，不接算法信号；估值是 liubo 每周看 PE-TTM / PB
+# 分位后自己填的，给参考。空 key → 卡片显示「—」。
+# 格式自由：PE-TTM 分位 65% / PB 0.85 / 等等，看 liubo 怎么填方便。
+VALUATION_BY_CODE: dict[str, str] = {
+    # "006327": "海外互联网 PE-TTM 分位 28%",
+    # "010989": "中证房地产 PB 分位 12%",
+    # 其余 7 只待 liubo 填
+}
+
+
+def get_valuation(fund_code: str) -> str:
+    """查某只基金的估值字符串。未知/未填 → "—"。"""
+    return VALUATION_BY_CODE.get(fund_code, "—")
+
+
+def get_category_index(category: str) -> str:
+    """查某类别用的估值指数代码（liubo 2026-10-19 拍板 Section 3 用）。未知 → ""。"""
+    return INDEX_BY_CATEGORY.get(category, "")
+
+
+def get_category_index_name(category: str) -> str:
+    """查某类别用的估值指数显示名（liubo 2026-10-19 拍板 Section 3 用）。"""
+    code = get_category_index(category)
+    if not code:
+        return "无统一基准"
+    return INDEX_DISPLAY_NAME_BY_CODE.get(code, code)
+
+
+def get_index_valuation_summary(index_code: str) -> str:
+    """一行格式摘要（liubo 2026-10-19 拍板 Section 3 用）。
+
+    字段 = 「PE-TTM val@pct% · PB val@pct% · PS-TTM val@pct% · 股息率 val@pct% · ROE val%」
+    缺数据 → "—"，无指数 → "无统一基准"
+    """
+    if not index_code:
+        return "无统一基准（QDII 主动主题）"
+    fields = (
+        ("pe_ttm", "pe_pct", "PE-TTM"),
+        ("pb", "pb_pct", "PB"),
+        ("ps_ttm", "ps_pct", "PS-TTM"),
+        ("div_yield", "div_pct", "股息率"),
+        ("roe", None, "ROE"),
+    )
+    parts: list[str] = []
+    for val_field, pct_field, label in fields:
+        v = get_index_valuation(index_code, val_field)
+        p = get_index_valuation(index_code, pct_field) if pct_field else ""
+        if v == "—":
+            parts.append(f"{label} —")
+        elif p and p != "—":
+            parts.append(f"{label} {v}@{p}")
+        else:
+            parts.append(f"{label} {v}")
+    return " · ".join(parts)
+
+
+def decide_category_action(category: str) -> dict[str, str]:
+    """给某类别决定调仓动作（liubo 2026-10-19 拍板 Section 3 4 选 1）。
+
+    4 种动作：
+    - **减仓** — 类别累计 > 15% 上限（老仓位豁免，但动作还是减仓以提示集中度风险）
+    - **持有** — 接近上限（>80% × 15% = 12% 占比）→ 不加不减
+    - **加仓** — 距离上限有空间 → 还有加仓余地
+    - **建仓** — 该类别还没有任何子基金 → 主观选标的
+
+    Args:
+        category: 类别名。
+
+    Returns:
+        dict 含:
+          - action: 4 选 1（"减仓" / "持有" / "加仓" / "建仓"）
+          - reason: 人类可读的具体原因（含具体数字）
+          - emoji: 在卡片里用的 emoji 前缀
+    """
+    codes = STRATEGY_CATEGORIES.get(category, [])
+    if not codes:
+        # 该类别下还没有任何子基金 → 建仓
+        return {
+            "action": "建仓",
+            "reason": f"{category} 暂无持仓",
+            "emoji": "🆕",
+        }
+
+    status = get_category_cap_status(category)
+    pct = float(status["pct_of_total"]) * 100
+    cap_pct = float(CATEGORY_CAP_PCT) * 100  # 15%
+    near_threshold = cap_pct * 0.8  # 接近上限 = 12%
+
+    if status["is_over"]:
+        return {
+            "action": "减仓",
+            "reason": f"占 {pct:.1f}%，超 15% 上限（老仓位豁免）",
+            "emoji": "⚠️",
+        }
+    if pct >= near_threshold:
+        return {
+            "action": "持有",
+            "reason": f"占 {pct:.1f}%，接近 12% 阈值（≤ 15% 上限），不加不减",
+            "emoji": "✋",
+        }
+    return {
+        "action": "加仓",
+        "reason": (
+            f"占 {pct:.1f}%，离 15% 上限还有 {cap_pct - pct:.1f}% 余地（剩 "
+            f"{float(status['remaining_cny']):,.0f} CNY）"
+        ),
+        "emoji": "➕",
+    }
+
+
+def get_rebalance_suggestion(fund_code: str, today: date | None = None) -> str:
+    """某只基金的调仓建议（自动派生，飞书卡片 Section 3 「调仓建议」列用）。
+
+    优先级（从高到低）：
+    1. 同基金冷却中 → 「冷却中，剩 X 天」
+    2. 类别超限 → 「⚠️ 类别超限，减仓」
+    3. 否则 → 「主观持有」（liubo 自己决定）
+
+    左侧布局不接算法信号（liubo 2026-09-29 拍板）；只能给「类别集中度风险」这个
+    系统性提醒，其他按主观。
+    """
+    if today is None:
+        today = date.today()
+
+    cooldown_ok, cooldown_reason = check_cooldown(fund_code, today)
+    if not cooldown_ok:
+        # cooldown_reason 类似 "上次交易 2026-09-19（5 天前），冷却期还剩 25 天"
+        # 提取「剩 X 天」
+        if "，" in cooldown_reason:
+            tail = cooldown_reason.split("，")[-1]
+            return f"⏸ 冷却中（{tail}）"
+        return "⏸ 冷却中"
+
+    category = LEFT_LAYOUT_BY_CODE.get(fund_code)
+    if category is None:
+        return "—"  # 未知基金
+    cap_status = get_category_cap_status(category)
+    if cap_status["is_over"]:
+        pct = float(cap_status["pct_of_total"]) * 100
+        return f"⚠️ 类别超限 {pct:.1f}%，主观决定"
+
+    return "主观持有"
+
+
 # ── 仓位管理（liubo 2026-09-29 拍板）─────────────────────────────────
 
 # 1 仓 = 5,000 CNY（独立于大类资产配置的 1 万；不混）
 POSITION_UNIT_CNY: Decimal = Decimal("5000")
 
-# 类别上限：单类累计成本 ≤ 总成本 × 30%（老仓位豁免，只卡新买）
-CATEGORY_CAP_PCT: Decimal = Decimal("0.30")
+# 类别上限：单类累计成本 ≤ 总成本 × 15%（老仓位豁免，只卡新买）
+# liubo 2026-10-19 拍板从 30% 降到 15%（更严格，单类集中度风险低）
+CATEGORY_CAP_PCT: Decimal = Decimal("0.15")
 
-# 同基金冷却期：7 天（月度内不要频繁交易同一只）
-COOLDOWN_DAYS: int = 7
+# 同基金冷却期：30 天（liubo 2026-10-19 拍板从 7 天延长到 30 天）
+COOLDOWN_DAYS: int = 30
 
 # 同基金最后交易日（liubo 手动维护；初始为空 dict，每次 record_trade 后更新）
 # 格式：{fund_code: date}
-# liubo 2026-09-29 拍板：同基金冷却 7 天；启用前需要先填入基线日期
+# liubo 2026-09-29 拍板：同基金冷却；2026-10-19 拍板 7 天 → 30 天
 LAST_TRADE_BY_FUND: dict[str, date] = {}
 
 
@@ -199,21 +440,23 @@ def get_category_cap_status(category: str) -> dict[str, Decimal | bool]:
 
     Returns:
         dict 含:
-          - cap_cny: 上限 CNY（= 当前总成本 × 30%）
+          - cap_cny: 上限 CNY（= 当前总成本 × 15%）
           - current_cny: 当前类别累计成本
           - remaining_cny: 还能加仓多少 CNY（负数表示已超限）
-          - pct_used: 当前占上限比例（current / cap；可能 > 1）
+          - pct_of_total: 当前类别占组合总成本的比例（current / total_cost；liubo 2026-10-19 拍板用实际占比，不用「使用率」）
           - is_over: 是否已超限（老仓位豁免不影响这个字段，只是提醒）
     """
     cap_cny = TOTAL_COST_CNY * CATEGORY_CAP_PCT
     current_cny = get_category_total_cost(category)
     remaining_cny = cap_cny - current_cny
-    pct_used = (current_cny / cap_cny) if cap_cny > 0 else Decimal("0")
+    pct_of_total = (
+        (current_cny / TOTAL_COST_CNY) if TOTAL_COST_CNY > 0 else Decimal("0")
+    )
     return {
         "cap_cny": cap_cny,
         "current_cny": current_cny,
         "remaining_cny": remaining_cny,
-        "pct_used": pct_used,
+        "pct_of_total": pct_of_total,
         "is_over": current_cny > cap_cny,
     }
 
@@ -221,7 +464,7 @@ def get_category_cap_status(category: str) -> dict[str, Decimal | bool]:
 def check_category_cap_for_buy(
     fund_code: str, add_cost: Decimal
 ) -> tuple[bool, str]:
-    """检查新买入是否会让该基金所在类别超过 30% 上限。
+    """检查新买入是否会让该基金所在类别超过 15% 上限。
 
     老仓位豁免：当前已超限时，仍然允许新买（不阻拦），但 reason 里有"已达上限，新买仍允许"提示。
 
@@ -240,27 +483,29 @@ def check_category_cap_for_buy(
     status = get_category_cap_status(category)
     new_total = status["current_cny"] + add_cost
     cap_cny = status["cap_cny"]
-    new_pct = (new_total / cap_cny) if cap_cny > 0 else Decimal("0")
+    new_pct_of_total = (
+        (new_total / TOTAL_COST_CNY) if TOTAL_COST_CNY > 0 else Decimal("0")
+    )
 
     if status["is_over"]:
         # 老仓位超限 — 豁免；提示但不阻拦
         return True, (
-            f"⚠️ {category} 已超 30% 上限（当前 {float(status['pct_used']) * 100:.1f}%，"
-            f"新买后会变 {float(new_pct) * 100:.1f}%），老仓位豁免，仍允许"
+            f"⚠️ {category} 已超 15% 上限（当前 {float(status['pct_of_total']) * 100:.1f}%，"
+            f"新买后会变 {float(new_pct_of_total) * 100:.1f}%），老仓位豁免，仍允许"
         )
     if new_total > cap_cny:
         return False, (
-            f"✗ {category} 类别上限 30% ({float(cap_cny):.0f} CNY)，"
-            f"新买后累计 {float(new_total):.0f} CNY = {float(new_pct) * 100:.1f}%，超限"
+            f"✗ {category} 类别上限 15% ({float(cap_cny):.0f} CNY)，"
+            f"新买后累计 {float(new_total):.0f} CNY = {float(new_pct_of_total) * 100:.1f}%，超限"
         )
     return True, (
         f"✓ {category} 累计 {float(new_total):.0f} / {float(cap_cny):.0f} CNY "
-        f"({float(new_pct) * 100:.1f}%)，未超 30% 上限"
+        f"({float(new_pct_of_total) * 100:.1f}%)，未超 15% 上限"
     )
 
 
 def check_cooldown(fund_code: str, today: date | None = None) -> tuple[bool, str]:
-    """检查同基金冷却期（liubo 2026-09-29 拍板：7 天）。
+    """检查同基金冷却期（liubo 2026-09-29 拍板：7 天；2026-10-19 拍板：30 天）。
 
     Args:
         fund_code: 基金代码。
@@ -314,12 +559,12 @@ def format_weekly_snapshot_text(today: date | None = None) -> str:
     # 按类别分组
     for category in STRATEGY_CATEGORIES:
         status = get_category_cap_status(category)
-        cap_pct = float(status["pct_used"]) * 100
+        cap_pct = float(status["pct_of_total"]) * 100
         over_mark = " ⚠️超限（老仓位豁免）" if status["is_over"] else ""
         lines.append(
             f"**{category}**  类别累计 {float(status['current_cny']):,.0f} / "
             f"上限 {float(status['cap_cny']):,.0f} CNY "
-            f"({cap_pct:.1f}%){over_mark}"
+            f"(占总成本 {cap_pct:.1f}%){over_mark}"
         )
         for code in STRATEGY_CATEGORIES[category]:
             cost = COST_BASIS_BY_CODE.get(code, Decimal("0"))
@@ -368,13 +613,27 @@ __all__ = [
     "CURRENT_TOTAL_PNL_CNY",
     "CURRENT_TOTAL_RETURN_PCT",
     "DISPLAY_NAME",
+    "FUND_FULL_NAME_BY_CODE",
     "POSITION_UNIT_CNY",
     "CATEGORY_CAP_PCT",
     "COOLDOWN_DAYS",
     "LAST_TRADE_BY_FUND",
+    "VALUATION_BY_CODE",
+    "INDEX_BY_CATEGORY",
+    "INDEX_DISPLAY_NAME_BY_CODE",
+    "INDEX_VALUATION_BY_CODE",
+    "CATEGORY_VALUATION_BY_CATEGORY",
     "get_strategy",
     "get_cost_basis",
     "get_position",
+    "get_valuation",
+    "get_category_index",
+    "get_category_index_name",
+    "get_index_name",
+    "get_index_valuation",
+    "get_index_valuation_summary",
+    "decide_category_action",
+    "get_rebalance_suggestion",
     "get_category_total_cost",
     "get_category_cap_status",
     "check_category_cap_for_buy",

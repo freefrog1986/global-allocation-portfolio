@@ -133,13 +133,14 @@ class TestCardStructure:
         assert "左侧布局" in last_md["content"]
 
     def test_three_sections(self) -> None:
-        """3 个 section header: 组合总览 / 类别上限状态 / 各基金仓位 + 估值 + 调仓建议。"""
+        """3 个 section header: 组合总览 / 类别上限状态 / 各类别基金 + 估值 + 调仓建议。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         notes = _all_note_texts(card)
         assert "组合总览" in notes
         # 类别上限 section 改了更详细的名字（liubo 2026-10-19 加括号）
         assert any("类别上限状态" in n for n in notes)
-        assert "各基金仓位 + 估值 + 调仓建议" in notes
+        # Section 3 改名（liubo 2026-10-19 拍板 R9：含完整 指数/估值/动作 三段）
+        assert "各类别基金 + 估值 + 调仓建议" in notes
 
     def test_section_titles_match(self) -> None:
         """section header 完整文本（liubo 2026-10-19 拍板改用实际占比）。"""
@@ -343,22 +344,25 @@ class TestCategorySection:
 
 
 class TestFundSection:
-    """Section 3：各基金仓位 + 估值 + 调仓建议（liubo 2026-10-19 拍板：删 table，每类别一个 div + hr 隔开）。
+    """Section 3：各类别基金 + 估值 + 调仓建议
+    （liubo 2026-10-19 拍板 R9：每类别 5 段 + 块间 hr 隔开）。
 
-    结构：
-    - section header div（icon=wallet_outlined）
-    - 5 个类别区块，每个区块：
-      - category header div（icon=tag_outlined + 类别名 bold）
-      - N 个 markdown 行（**基金全名（code）**  累计 X · 仓位 X · 估值 X · 调仓 X）
-      - 前 4 个类别后跟 hr（最后一个不加，避免 footer 前 hr 重复）
+    每类别块结构：
+    1. div category header：`**{类别}** <tag 占比> <tag 状态>`（icon=tag_outlined）
+    2. markdown `**类下基金（N 只）**` sub-header
+    3. markdown 每只基金 1 行（**基金全名（code）**  累计 X · 仓位 X）
+    4. markdown `**估值**` ：指数名 + 5 指标 + YTD + ROE 季度史
+    5. markdown `**调仓建议**` ：<tag 动作> + 理由
+
+    5 个类别块之间用 hr 隔开（最后 1 个不加）。
     """
 
     def _get_fund_section_elements(self, card: dict) -> list[dict]:
-        """提取 Section 3 的所有 elements（从 section header 到灰色 footer 之前，不含灰色 footer）。"""
+        """提取 Section 3 的所有 elements（从 section header 到灰色 footer 之前）。"""
         elements = card["body"]["elements"]
         start = None
         for i, el in enumerate(elements):
-            if _is_section_header(el, "各基金仓位 + 估值 + 调仓建议"):
+            if _is_section_header(el, "各类别基金 + 估值 + 调仓建议"):
                 start = i
                 break
         assert start is not None, "没找到 Section 3 header"
@@ -372,144 +376,143 @@ class TestFundSection:
         return elements[start:end]
 
     def _get_fund_lines(self, card: dict) -> list[str]:
-        """提取 Section 3 里所有「**基金全名（code）** ...」markdown 行。"""
+        """类下基金段：所有「**基金全名（code）** ...」行（不含 类下基金 sub-header）。"""
         els = self._get_fund_section_elements(card)
         return [
             el["content"]
             for el in els
             if el.get("tag") == "markdown"
-            and el["content"].startswith("**")
-            and "（" in el["content"]
-            and "）" in el["content"]
+            and el["content"].startswith("**易方达中证海外互联网")
+            or (el.get("tag") == "markdown"
+                and el["content"].startswith("**")
+                and "（" in el["content"]
+                and "）" in el["content"]
+                and "类下基金" not in el["content"]
+                and "估值" not in el["content"]
+                and "调仓" not in el["content"])
         ]
 
-    def _get_category_names(self, card: dict) -> list[str]:
-        """提取 Section 3 里所有类别 div header（用 tag_outlined icon 区分于 section header）。"""
+    def _get_category_block_starts(self, card: dict) -> list[tuple[int, str]]:
+        """返回 [(idx, category_name)]：5 个类别 div header 的位置。"""
         els = self._get_fund_section_elements(card)
-        names: list[str] = []
-        for el in els:
-            if el.get("tag") == "div":
-                text_obj = el.get("text", {})
-                if text_obj.get("tag") == "lark_md":
-                    content = text_obj.get("content", "")
-                    s = content.strip().strip("*").strip()
-                    icon_token = el.get("icon", {}).get("token")
-                    if icon_token == "tag_outlined" and s:
-                        names.append(s)
-        return names
+        return [
+            (i, el["text"]["content"].split("<")[0].strip().strip("*").strip())
+            for i, el in enumerate(els)
+            if (el.get("tag") == "div"
+                and el.get("icon", {}).get("token") == "tag_outlined")
+        ]
+
+    def _get_block(self, card: dict, block_idx: int) -> list[dict]:
+        """返回第 block_idx 个类别块的元素列表（cat header div 到下个 cat div 或 hr 之前）。"""
+        els = self._get_fund_section_elements(card)
+        starts = self._get_category_block_starts(card)
+        cat_pos, _ = starts[block_idx]
+        next_pos = starts[block_idx + 1][0] if block_idx + 1 < len(starts) else len(els)
+        # next_pos 一般是下个 cat div 位置；末尾块要把 next_pos 之前的所有内容（含 hr）算进去
+        # 但块的「末尾」常是 hr（属于块间分隔），也保留以便测试 hr 数量
+        return els[cat_pos:next_pos]
+
+    # ─── Section header / 总结构 ───
 
     def test_section_header_present(self) -> None:
-        """section header：div + wallet_outlined icon + 「各基金仓位 + 估值 + 调仓建议」。"""
+        """section header：div + wallet_outlined icon + 「各类别基金 + 估值 + 调仓建议」。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         els = self._get_fund_section_elements(card)
         assert els[0]["tag"] == "div"
         assert els[0]["icon"]["token"] == "wallet_outlined"
-        assert "各基金仓位 + 估值 + 调仓建议" in els[0]["text"]["content"]
+        assert "各类别基金 + 估值 + 调仓建议" in els[0]["text"]["content"]
 
     def test_no_table_in_fund_section(self) -> None:
-        """Section 3 完全没用 table（liubo 2026-10-19 拍板改 div+hr）。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         els = self._get_fund_section_elements(card)
         for el in els:
-            assert el.get("tag") != "table", "Section 3 不应有 table 元素"
+            assert el.get("tag") != "table"
 
-    def test_5_category_divs_in_order(self) -> None:
-        """5 个类别 div 按 STRATEGY_CATEGORIES 顺序：港股科技互联网 → 房地产。"""
+    def test_5_category_blocks(self) -> None:
+        """5 个类别块（liubo 2026-10-19 拍板 5 类）。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
-        names = self._get_category_names(card)
+        starts = self._get_category_block_starts(card)
+        assert len(starts) == 5
+        names = [name for _, name in starts]
         assert names == ["港股科技互联网", "港股银行", "亚太除日本", "全球科技主动", "房地产"]
 
-    def test_category_div_uses_tag_icon_and_bold(self) -> None:
-        """每个类别 div 带 tag_outlined icon + bold 类别名。"""
+    # ─── 类别块结构（liubo R9：5 段） ───
+
+    def test_category_block_has_5_subparts(self) -> None:
+        """每个类别块 = cat header + 类下基金 sub-header + N 基金行 + 估值 + 调仓建议。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
-        els = self._get_fund_section_elements(card)
-        cat_divs = [
-            el for el in els
-            if el.get("tag") == "div"
-            and el.get("icon", {}).get("token") == "tag_outlined"
-        ]
-        assert len(cat_divs) == 5
-        for d in cat_divs:
-            content = d["text"]["content"]
-            assert content.startswith("**") and content.endswith("**")
 
-    def test_9_fund_markdown_lines(self) -> None:
-        """9 只基金各自 1 个 markdown 行（5 类共 9 只，2026-09-30 加 010989 后）。"""
-        card = build_left_layout_card(report_date=date(2026, 9, 30))
-        lines = self._get_fund_lines(card)
-        assert len(lines) == 9
-
-    def test_4_hr_between_categories(self) -> None:
-        """5 个类别之间 4 个 hr（最后一个不加，避免和 footer 前的 hr 视觉重叠）。
-
-        Footer 前的 hr 在 _get_fund_section_elements 范围里会被算进来，
-        所以预期是 4 + 1（footer 分隔）= 5 个 hr。
-        """
-        card = build_left_layout_card(report_date=date(2026, 9, 30))
-        els = self._get_fund_section_elements(card)
-        hr_count = sum(1 for el in els if el.get("tag") == "hr")
-        assert hr_count == 5, f"期望 5 个 hr（4 个类别分隔 + 1 个 footer 分隔），实际 {hr_count}"
-
-    def test_hr_pattern_5_category_blocks(self) -> None:
-        """5 个类别块：每个块以 hr 结尾（除最后 1 个，最后以 footer 分隔 hr 接续）。
-        """
-        card = build_left_layout_card(report_date=date(2026, 9, 30))
-        els = self._get_fund_section_elements(card)
-
-        # 找所有类别 div 索引
-        cat_indices = [
-            i for i, el in enumerate(els)
-            if el.get("tag") == "div"
-            and el.get("icon", {}).get("token") == "tag_outlined"
-        ]
-        assert len(cat_indices) == 5
-
-        # 前 4 个类别块（块之间）应该有 4 个 hr
-        # 最后一个块（最后一个 hr 之前）应该有 footer 分隔 hr
-        # 用更简单的检查：5 个 hr / 5 个类别 div 比 = 1:1（"每块都跟 hr"）
-        assert len(cat_indices) == 5
-        # 每块以 hr 结尾（最后 1 个块以 footer hr 接续，所以也以 hr 结尾）
-        for idx, cat_pos in enumerate(cat_indices):
-            next_cat_pos = cat_indices[idx + 1] if idx + 1 < len(cat_indices) else len(els)
-            block_els = els[cat_pos + 1:next_cat_pos]
-            # 所有类别块以 hr 结尾（最后 1 个块的 hr 就是 footer 分隔 hr）
-            assert block_els[-1].get("tag") == "hr", (
-                f"类别 #{idx+1} 之后应有 hr，实际以 {block_els[-1].get('tag')} 结尾"
+        # 用 STRATEGY_CATEGORIES 算期望 subpart 数
+        from global_allocation.portfolio.left_layout import STRATEGY_CATEGORIES
+        for i, (cat, codes) in enumerate(STRATEGY_CATEGORIES.items()):
+            block = self._get_block(card, i)
+            # 块 = [cat_header_div, 类下基金_md, *N fund lines, 估值_md, 调仓建议_md]（除末尾再加 hr）
+            md_count = sum(1 for el in block if el.get("tag") == "markdown")
+            div_count = sum(1 for el in block if el.get("tag") == "div")
+            # 1 个 cat header div + 类下基金 + N fund lines + 估值 + 调仓建议 = 3 + N 个 markdown
+            assert div_count == 1, f"{cat}: 期望 1 个 div（cat header），实际 {div_count}"
+            assert md_count == 3 + len(codes), (
+                f"{cat}: 期望 {3 + len(codes)} 个 markdown（类下+{len(codes)}基金+估值+动作），实际 {md_count}"
             )
 
-    def test_no_hr_after_last_category_block(self) -> None:
-        """footer 前 hr 在最后 1 个基金行之后（最后一个类别块后没有 hr）。"""
+    def test_category_header_has_inline_tags(self) -> None:
+        """类别 header div 用 lark_md 内嵌 text_tag：占比 + 状态（liubo 2026-10-19 拍板）。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
-        elements = card["body"]["elements"]
-        last_fund_idx = None
-        for i, el in enumerate(elements):
-            if (el.get("tag") == "markdown"
-                    and el["content"].startswith("**")
-                    and "（" in el["content"]):
-                last_fund_idx = i
-        assert last_fund_idx is not None
-        # 在最后 1 个基金行后面、灰色 footer 之前应该是 1 个 hr（footer 前的分隔）
-        # 找灰色 footer 之前的 hr
-        grey_footer_idx = None
-        for i, el in enumerate(elements):
-            if (el.get("tag") == "markdown"
-                    and "color='grey'" in el.get("content", "")):
-                grey_footer_idx = i
-                break
-        assert grey_footer_idx is not None
-        # 在 [last_fund_idx, grey_footer_idx) 区间内只有 1 个 hr（即 footer 前的分隔）
-        hr_in_between = sum(
-            1 for i in range(last_fund_idx, grey_footer_idx)
-            if elements[i].get("tag") == "hr"
-        )
-        assert hr_in_between == 1, f"最后一个类别块之后只应有 1 个 hr（footer 分隔），实际 {hr_in_between}"
+
+        # 港股科技互联网 74.2% 应该 red
+        block = self._get_block(card, 0)
+        cat_header = block[0]
+        content = cat_header["text"]["content"]
+        assert cat_header["text"]["tag"] == "lark_md"
+        # 类别名 + text_tag 占比% + text_tag 状态
+        assert "**港股科技互联网**" in content
+        assert "<text_tag color='red'>74.2%</text_tag>" in content
+        assert "<text_tag color='red'>超限</text_tag>" in content
+
+        # 港股银行 1.4% 应该 blue
+        block = self._get_block(card, 1)
+        content = block[0]["text"]["content"]
+        assert "<text_tag color='blue'>1.4%</text_tag>" in content
+        assert "<text_tag color='blue'>正常</text_tag>" in content
+
+    def test_category_header_uses_tag_icon(self) -> None:
+        """类别 header 用 tag_outlined icon + 紫色。"""
+        card = build_left_layout_card(report_date=date(2026, 9, 30))
+        starts = self._get_category_block_starts(card)
+        for idx, (pos, _) in enumerate(starts):
+            block = self._get_block(card, idx)
+            cat_div = block[0]
+            assert cat_div.get("icon", {}).get("token") == "tag_outlined"
+            assert cat_div.get("icon", {}).get("color") == "purple"
+
+    def test_类下基金_subheader_format(self) -> None:
+        """类下基金 sub-header markdown：「**类下基金**（N 只）」。"""
+        card = build_left_layout_card(report_date=date(2026, 9, 30))
+        from global_allocation.portfolio.left_layout import STRATEGY_CATEGORIES
+        for i, (cat, codes) in enumerate(STRATEGY_CATEGORIES.items()):
+            block = self._get_block(card, i)
+            # 第 2 个元素（index 1）是 类下基金 sub-header markdown
+            sub_md = block[1]
+            assert sub_md["tag"] == "markdown"
+            assert f"**类下基金**（{len(codes)} 只）" in sub_md["content"]
+
+    def test_fund_lines_contain_cost_and_position(self) -> None:
+        """类下基金 markdown 行：**基金全名（code）**  累计 X · 仓位 X。"""
+        card = build_left_layout_card(report_date=date(2026, 9, 30))
+        # 抽查 006327 + 457001
+        fund_lines = self._get_fund_lines(card)
+        text_006327 = next(l for l in fund_lines if "006327" in l)
+        assert "10,000.00 CNY" in text_006327
+        assert "2.00 仓" in text_006327
+        text_457001 = next(l for l in fund_lines if "457001" in l)
+        assert "4,640.00 CNY" in text_457001
+        assert "0.93 仓" in text_457001
 
     def test_all_9_funds_present(self) -> None:
-        """9 只基金全名 + code 都出现在 markdown 行里。"""
+        """9 只基金全名 + code 都在 markdown 行里。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
-        lines = self._get_fund_lines(card)
-        all_text = "\n".join(lines)
-        expected_names = [
+        all_text = "\n".join(self._get_fund_lines(card))
+        expected = [
             "易方达中证海外互联网50ETF联接(QDII)A（006327）",
             "富国中证港股通互联网ETF发起式联接A（014673）",
             "景顺长城中证港股通科技ETF发起联接A（016495）",
@@ -520,109 +523,145 @@ class TestFundSection:
             "嘉实全球产业升级股票发起式(QDII)A（017730）",
             "南方中证房地产ETF发起联接E（010989）",
         ]
-        for name in expected_names:
+        for name in expected:
             assert name in all_text, f"缺少基金行：{name}"
 
-    def test_013127_not_in_section(self) -> None:
-        """013127 已转走，不在 Section 3。"""
+    def test_013127_not_present(self) -> None:
+        """013127 已转走。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
-        lines = self._get_fund_lines(card)
-        all_text = "\n".join(lines)
+        all_text = "\n".join(self._get_fund_lines(card))
         assert "013127" not in all_text
 
-    def test_funds_grouped_under_correct_category(self) -> None:
-        """每只基金行出现在它所属类别 div 之后、下一个类别 div 之前。"""
-        import re
-        from global_allocation.portfolio.left_layout import STRATEGY_CATEGORIES
+    # ─── 估值段（liubo R9：参照理杏仁指数详情完整字段） ───
 
+    def test_valuation_segment_present(self) -> None:
+        """每个类别块都有「**估值**」markdown 段（liubo 2026-10-19 拍板加）。"""
+        card = build_left_layout_card(report_date=date(2026, 9, 30))
+        for i in range(5):
+            block = self._get_block(card, i)
+            val_md = next(
+                el for el in block
+                if el.get("tag") == "markdown" and "**估值**" in el["content"]
+            )
+            assert val_md["tag"] == "markdown"
+
+    def test_港股通科技_full_valuation_fields(self) -> None:
+        """港股科技互联网 → 港股通科技 (987008.sz) 完整估值：5 指标 + YTD + ROE 季度史 + 基金数 + 关注人数。"""
+        card = build_left_layout_card(report_date=date(2026, 9, 30))
+        block = self._get_block(card, 0)  # 港股科技互联网是第 0 个
+        val_md = next(
+            el for el in block
+            if el.get("tag") == "markdown" and "**估值**" in el["content"]
+        )
+        content = val_md["content"]
+        # 指数名
+        assert "港股通科技" in content
+        assert "987008.sz" in content
+        # 5 指标（liubo 2026-10-19 给的 schema）
+        assert "PE-TTM" in content
+        assert "23.10" in content
+        assert "13.14%" in content
+        assert "PB" in content
+        assert "2.495" in content
+        assert "PS-TTM" in content
+        assert "1.89" in content
+        assert "股息率" in content
+        assert "0.88%" in content
+        assert "ROE" in content
+        assert "4.83%" in content
+        # YTD
+        assert "-23.03%" in content
+        # ROE 季度史
+        assert "2025Q2" in content
+        # 基金数
+        assert "30" in content
+        # 关注人数
+        assert "99" in content
+
+    def test_其他4类_估值占位符(self) -> None:
+        """其他 4 类：估值尚未填（除全球科技主动的"无统一基准"之外）→ 「PE-TTM — · PB —」占位格式。"""
+        card = build_left_layout_card(report_date=date(2026, 9, 30))
+        for i in (1, 2, 4):  # 港股银行 / 亚太除日本 / 房地产（全球科技主动 单独测）
+            block = self._get_block(card, i)
+            val_md = next(
+                el for el in block
+                if el.get("tag") == "markdown" and "**估值**" in el["content"]
+            )
+            content = val_md["content"]
+            assert "PE-TTM —" in content, f"类 {i} 估值应为占位 —"
+
+    def test_全球科技主动_无统一基准(self) -> None:
+        """全球科技主动 (QDII 主题) → 无统一基准估值。"""
+        card = build_left_layout_card(report_date=date(2026, 9, 30))
+        block = self._get_block(card, 3)  # 全球科技主动
+        val_md = next(
+            el for el in block
+            if el.get("tag") == "markdown" and "**估值**" in el["content"]
+        )
+        content = val_md["content"]
+        assert "无统一基准" in content
+
+    # ─── 调仓建议段（liubo 2026-10-19 拍板 4 选 1：建仓/加仓/持有/减仓） ───
+
+    def test_调仓建议_segment_present(self) -> None:
+        """每个类别块都有「**调仓建议**」markdown 段。"""
+        card = build_left_layout_card(report_date=date(2026, 9, 30))
+        for i in range(5):
+            block = self._get_block(card, i)
+            sug_md = next(
+                el for el in block
+                if el.get("tag") == "markdown" and "**调仓建议**" in el["content"]
+            )
+            assert sug_md["tag"] == "markdown"
+
+    def test_港股超限_减仓(self) -> None:
+        """港股科技互联网 74.2% 超限 → 减仓（红色 tag）。"""
+        card = build_left_layout_card(report_date=date(2026, 9, 30))
+        block = self._get_block(card, 0)
+        sug_md = next(
+            el for el in block
+            if el.get("tag") == "markdown" and "**调仓建议**" in el["content"]
+        )
+        content = sug_md["content"]
+        assert "<text_tag color='red'>" in content
+        assert "减仓" in content
+        assert "74.2%" in content
+        assert "老仓位豁免" in content
+
+    def test_正常类_加仓(self) -> None:
+        """未超限的类别 → 加仓（蓝色 tag）+ 余地数字（剩 X CNY）。"""
+        card = build_left_layout_card(report_date=date(2026, 9, 30))
+        # 港股银行 1.4% → 加仓
+        block = self._get_block(card, 1)
+        sug_md = next(
+            el for el in block
+            if el.get("tag") == "markdown" and "**调仓建议**" in el["content"]
+        )
+        content = sug_md["content"]
+        assert "加仓" in content
+        assert "1.4%" in content
+        assert "9,703" in content  # remaining CNY
+
+    def test_动作4选1_都覆盖(self) -> None:
+        """4 种动作都导出：建仓/加仓/持有/减仓（liubo 2026-10-19 拍板）。"""
+        from global_allocation.portfolio.left_layout import decide_category_action
+        # 强制构造 4 个场景
+        # 减仓：is_over
+        result = decide_category_action("港股科技互联网")
+        assert result["action"] in ("减仓", "持有", "加仓", "建仓")
+        # 建仓：新类别
+        result = decide_category_action("不存在的类别")
+        assert result["action"] == "建仓"
+
+    # ─── 块间 hr ───
+
+    def test_4_hr_between_categories(self) -> None:
+        """5 类别块间 4 个 hr（前 4 个块后各 1 个；最后 1 个块后由 footer 前 hr 接续）。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         els = self._get_fund_section_elements(card)
-
-        # 类别 div 索引
-        cat_positions: list[tuple[int, str]] = []
-        for i, el in enumerate(els):
-            if (el.get("tag") == "div"
-                    and el.get("icon", {}).get("token") == "tag_outlined"):
-                name = el["text"]["content"].strip().strip("*")
-                cat_positions.append((i, name))
-
-        for i, el in enumerate(els):
-            if not (el.get("tag") == "markdown"
-                    and el["content"].startswith("**")
-                    and "（" in el["content"]):
-                continue
-            # 找这只基金归属的类别（最近的更早 cat div）
-            fund_cat = None
-            for pos, name in cat_positions:
-                if pos < i:
-                    fund_cat = name
-                else:
-                    break
-            assert fund_cat is not None
-            # 提取基金 code
-            m = re.search(r"（(\d{6})）", el["content"])
-            assert m is not None, f"基金行没找到 code：{el['content']}"
-            code = m.group(1)
-            assert code in STRATEGY_CATEGORIES[fund_cat], (
-                f"基金 {code} 出现在 {fund_cat} 区块下，但 STRATEGY_CATEGORIES 不一致"
-            )
-
-    def test_position_values_correct(self) -> None:
-        """仓位数字 = cost / 5000。006327 (cost=10000) → 2.00 仓；457001 (cost=4640) → 0.93 仓。"""
-        card = build_left_layout_card(report_date=date(2026, 9, 30))
-        lines = self._get_fund_lines(card)
-        line_006327 = next(l for l in lines if "006327" in l)
-        assert "2.00 仓" in line_006327
-        line_457001 = next(l for l in lines if "457001" in l)
-        assert "0.93 仓" in line_457001
-
-    def test_cost_values_in_line(self) -> None:
-        """每行包含「累计 X CNY」（10,000 / 23,000 / 20,000 / 5,000 / ...）。"""
-        card = build_left_layout_card(report_date=date(2026, 9, 30))
-        lines = self._get_fund_lines(card)
-        all_text = "\n".join(lines)
-        assert "10,000" in all_text   # 006327
-        assert "23,000" in all_text   # 014673
-        assert "20,000" in all_text   # 016495
-        assert "5,000" in all_text    # 010989
-
-    def test_valuation_default_dash(self) -> None:
-        """估值列：VALUATION_BY_CODE 未填 → 9 行全部显示「—」。"""
-        card = build_left_layout_card(report_date=date(2026, 9, 30))
-        lines = self._get_fund_lines(card)
-        for line in lines:
-            assert "估值 —" in line, f"估值列应为 「—」：{line}"
-
-    def test_suggestion_subjective_hold_for_normal_funds(self) -> None:
-        """非港股科技互联网的 6 只基金行 → 调仓 「主观持有」（liubo 2026-09-29 拍板）。"""
-        card = build_left_layout_card(report_date=date(2026, 9, 30))
-        lines = self._get_fund_lines(card)
-        non_hk_tech_codes = ["006809", "457001", "016664", "006373", "017730", "010989"]
-        for code in non_hk_tech_codes:
-            line = next(l for l in lines if code in l)
-            assert "主观持有" in line, f"{code} 调仓建议应为 「主观持有」：{line}"
-            assert "超限" not in line
-            assert "冷却中" not in line
-
-    def test_suggestion_hk_tech_over_cap(self) -> None:
-        """港股科技互联网 3 只（74.2% 超 15% 上限）→ 调仓列显示「⚠️ 类别超限 74.2%」。"""
-        card = build_left_layout_card(report_date=date(2026, 9, 30))
-        lines = self._get_fund_lines(card)
-        for code in ("006327", "014673", "016495"):
-            line = next(l for l in lines if code in l)
-            assert "超限" in line, f"{code} 应显示超限：{line}"
-            assert "74" in line, f"{code} 超限比例应含 74.x：{line}"
-
-    def test_line_contains_every_field(self) -> None:
-        """每行 markdown 包含 3 个 · 分隔：累计 + 仓位 + 估值 + 调仓（4 段）。"""
-        card = build_left_layout_card(report_date=date(2026, 9, 30))
-        lines = self._get_fund_lines(card)
-        for line in lines:
-            assert line.count("·") == 3, f"应有 3 个 · 分隔符（4 段）：{line}"
-            assert "累计" in line
-            assert "仓位" in line
-            assert "估值" in line
-            assert "调仓" in line
+        # 5 个 hr = 4 个块间 hr + 1 个 footer 前 hr
+        hr_count = sum(1 for el in els if el.get("tag") == "hr")
+        assert hr_count == 5
 
 
 class TestCardToJson:

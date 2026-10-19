@@ -43,8 +43,14 @@ from global_allocation.portfolio.left_layout import (
     CURRENT_SNAPSHOT_DATE,
     CATEGORY_CAP_PCT,
     COOLDOWN_DAYS,
-    check_cooldown,
+    INDEX_BY_CATEGORY,
+    decide_category_action,
     get_category_cap_status,
+    get_category_index,
+    get_category_index_name,
+    get_index_name,
+    get_index_valuation,
+    get_index_valuation_summary,
     get_position,
     get_rebalance_suggestion,
     get_strategy,
@@ -200,58 +206,142 @@ def _build_category_section(today: date) -> list[dict[str, Any]]:
 # ─── Section 3: 各基金详情 ─────────────────────────────
 
 
-def _format_fund_line(code: str, today: date) -> str:
-    """生成单只基金的展示行（飞书表 Section 3 用，liubo 2026-10-19 拍板 div+hr 布局）。
+def _format_fund_line(code: str) -> str:
+    """生成单只基金的展示行（飞书卡片 Section 3 类别块里「类下基金」段用）。
 
-    格式：**基金全名（code）**  累计 X CNY · 仓位 X.XX · 估值 — · 调仓 XXX
+    格式：**基金全名（code）**  累计 X CNY · 仓位 X.XX
+    （估值/调仓已上移到类别级，避免重复）
     """
     cost = COST_BASIS_BY_CODE.get(code, Decimal("0"))
     pos = get_position(code)
     fund_name = f"{FUND_FULL_NAME_BY_CODE.get(code, DISPLAY_NAME.get(code, code))}（{code}）"
-    val = get_valuation(code)
-    sug = get_rebalance_suggestion(code, today)
     return (
         f"**{fund_name}**  "
         f"累计 {_fmt_money(cost)} CNY · "
-        f"仓位 {_fmt_position(pos)} · "
-        f"估值 {val} · "
-        f"调仓 {sug}"
+        f"仓位 {_fmt_position(pos)}"
     )
 
 
+def _category_status_color(pct_of_total: float, is_over: bool) -> str:
+    """类别占比 tag 颜色（飞书 card 2.0 markdown text_tag）。
+
+    liubo 2026-10-19 拍板三档：
+    - is_over 或 ≥80%×cap（12%） → red（突出）
+    - ≥5%                          → orange
+    - <5%                          → blue（默认）
+    """
+    if is_over or pct_of_total >= 12:
+        return "red"
+    if pct_of_total >= 5:
+        return "orange"
+    return "blue"
+
+
+def _build_category_block(category: str, today: date) -> list[dict[str, Any]]:
+    """单个类别的完整块（liubo 2026-10-19 拍板 R9：5 段）。
+
+    5 段：
+    1. 类别 header div：bold 类别名 + 2 个 inline tag（占比% + 状态）
+    2. 「类下基金」 sub-header markdown + 每只基金 markdown
+    3. 「估值」 markdown：指数名称 + 5 项指标 + YTD + ROE 季度史
+    4. 「调仓建议」 markdown：4 选 1 + 理由
+    """
+    status = get_category_cap_status(category)
+    pct = float(status["pct_of_total"]) * 100
+    is_over = status["is_over"]
+    status_text = "超限" if is_over else "正常"
+    status_color = _category_status_color(pct, is_over)
+
+    # 1. 类别 header（div + icon）：bold 类别名 + 2 个 inline tag
+    header_content = (
+        f"**{category}** "
+        f"<text_tag color='{status_color}'>{pct:.1f}%</text_tag> "
+        f"<text_tag color='{status_color}'>{status_text}</text_tag>"
+    )
+    block: list[dict[str, Any]] = [{
+        "tag": "div",
+        "text": {"tag": "lark_md", "content": header_content},
+        "icon": {"tag": "standard_icon", "token": "tag_outlined", "color": "purple"},
+    }]
+
+    # 2. 类下基金：sub-header + 每只基金 markdown
+    codes = STRATEGY_CATEGORIES[category]
+    block.append({
+        "tag": "markdown",
+        "content": f"**类下基金**（{len(codes)} 只）",
+    })
+    for code in codes:
+        block.append({
+            "tag": "markdown",
+            "content": _format_fund_line(code),
+        })
+
+    # 3. 估值：指数名 + 5 指标 + YTD + ROE 季度史
+    idx_code = get_category_index(category)
+    idx_name = get_index_name(idx_code) if idx_code else "无统一基准"
+    val_summary = get_index_valuation_summary(idx_code)
+    ytd = get_index_valuation(idx_code, "ytd_pct")
+    roe_history = get_index_valuation(idx_code, "roe_history")
+    fund_count = get_index_valuation(idx_code, "fund_count")
+    followers = get_index_valuation(idx_code, "followers")
+
+    val_lines = [
+        f"**估值**  _{idx_name}" + (f"（{idx_code}）" if idx_code else "") + "_",
+        f"  {val_summary}",
+    ]
+    if ytd != "—":
+        val_lines.append(f"  今年 YTD：{ytd}")
+    if roe_history != "—":
+        val_lines.append(f"  ROE 季度史：{roe_history}")
+    if fund_count != "—":
+        val_lines.append(f"  跟踪基金：{fund_count}")
+    if followers != "—":
+        val_lines.append(f"  关注人数：{followers}")
+
+    block.append({
+        "tag": "markdown",
+        "content": "\n".join(val_lines),
+    })
+
+    # 4. 调仓建议（4 选 1）
+    action = decide_category_action(category)
+    action_color_map = {
+        "减仓": "red",
+        "持有": "orange",
+        "加仓": "blue",
+        "建仓": "green",
+    }
+    action_color = action_color_map.get(action["action"], "blue")
+    block.append({
+        "tag": "markdown",
+        "content": (
+            f"**调仓建议**  "
+            f"<text_tag color='{action_color}'>"
+            f"{action['emoji']} {action['action']}"
+            f"</text_tag>  "
+            f"{action['reason']}"
+        ),
+    })
+
+    return block
+
+
 def _build_fund_section(today: date) -> list[dict[str, Any]]:
-    """Section 3：每类别一个 div + hr 隔开（liubo 2026-10-19 拍板，删 table）。
+    """Section 3：每类别一块（liubo 2026-10-19 拍板 R9）。
 
     结构：
-    - div header「各基金仓位 + 估值 + 调仓建议」
-    - 每个类别：
-      - div header（带 icon + 类别名）
-      - 每只基金：1 个 markdown 行（**基金全名（code）**  累计 X · 仓位 X · 估值 X · 调仓 X）
-      - hr（最后一个不加）
+    - section header div「各类别基金 + 估值 + 调仓建议」
+    - 5 个类别块（每个块 4-5 段 + 之间用 hr 隔开）
     """
-    elements: list[dict[str, Any]] = [
-        {
-            "tag": "div",
-            "text": {"tag": "lark_md", "content": "**各基金仓位 + 估值 + 调仓建议**"},
-            "icon": {"tag": "standard_icon", "token": "wallet_outlined", "color": "purple"},
-        },
-    ]
+    elements: list[dict[str, Any]] = [{
+        "tag": "div",
+        "text": {"tag": "lark_md", "content": "**各类别基金 + 估值 + 调仓建议**"},
+        "icon": {"tag": "standard_icon", "token": "wallet_outlined", "color": "purple"},
+    }]
 
     categories = list(STRATEGY_CATEGORIES.keys())
     for i, category in enumerate(categories):
-        # 类别 header（div + icon）
-        elements.append({
-            "tag": "div",
-            "text": {"tag": "lark_md", "content": f"**{category}**"},
-            "icon": {"tag": "standard_icon", "token": "tag_outlined", "color": "purple"},
-        })
-        # 该类别下每只基金 1 个 markdown 行
-        for code in STRATEGY_CATEGORIES[category]:
-            elements.append({
-                "tag": "markdown",
-                "content": _format_fund_line(code, today),
-            })
-        # hr 隔开类别（最后一个不加）
+        elements.extend(_build_category_block(category, today))
         if i < len(categories) - 1:
             elements.append({"tag": "hr"})
 
