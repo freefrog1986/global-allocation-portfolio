@@ -524,17 +524,22 @@ class TestFundSection:
             assert f"**类下基金**（{len(codes)} 只）" in sub_md["content"]
 
     def test_fund_lines_use_number_tag(self) -> None:
-        """基金行含 `<number_tag background_color='grey' font_color='white'>X.XX</number_tag>`
-        （liubo 2026-10-19 R10：仓位用 number_tag 显示）。"""
+        """基金行含 `<number_tag value='X.XX' color='grey' />`
+        （liubo 2026-10-19 R10：仓位用 number_tag 显示）。
+
+        Feishu number_tag 必须是 self-closing + `value` 属性：
+        实测 `<number_tag color='grey'>2.00</number_tag>` 触发 ErrCode 11311，
+        只有 `<number_tag value='2.00' color='grey' />` OK。
+        """
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         fund_lines = self._get_fund_lines(card)
         # 006327 成本 10,000 → 2.00 仓
         text_006327 = next(l for l in fund_lines if "006327" in l)
-        assert "<number_tag background_color='grey' font_color='white'>2.00</number_tag>" in text_006327
+        assert "<number_tag value='2.00' color='grey' />" in text_006327
         assert "10,000.00 CNY" in text_006327
         # 457001 成本 4,640 → 0.93 仓
         text_457001 = next(l for l in fund_lines if "457001" in l)
-        assert "<number_tag background_color='grey' font_color='white'>0.93</number_tag>" in text_457001
+        assert "<number_tag value='0.93' color='grey' />" in text_457001
         assert "4,640.00 CNY" in text_457001
         # R10 不再写「仓」字（仓数已在 number_tag 里）
         assert "仓" not in text_006327

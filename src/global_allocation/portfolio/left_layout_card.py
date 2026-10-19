@@ -198,17 +198,24 @@ def _build_category_section(today: date) -> list[dict[str, Any]]:
 def _format_fund_line(code: str) -> str:
     """生成单只基金的展示行（liubo 2026-10-19 拍板 R10：number_tag）。
 
-    格式：`<number_tag background_color='grey' font_color='white'>X.XX</number_tag> **基金全名（code）**  累计 X CNY`
+    格式：`<number_tag value='X.XX' color='grey' /> **基金全名（code）**  累计 X CNY`
 
     number_tag 直观显示仓位（仓数），bold 基金全名便于扫读，累计成本紧跟其后。
-    不再在末尾追加「X.XX 仓」文字 — 仓数已经在 number_tag 里。
+
+    Feishu number_tag 必须是**自闭合**形式 `<number_tag value='X' color='Y' />`，
+    不能用 `<number_tag color='Y'>X</number_tag>` 的非自闭合写法（ErrCode 11311）。
+    实测 4 种写法中只有 self-closing + `value` 属性 OK：
+    1. `<number_tag color='grey'>2.00</number_tag>` → FAIL
+    2. `<number_tag value='2.00' color='grey' />` → OK
+    3. `<number_tag>2.00</number_tag>` → FAIL
+    4. `<number_tag value='2.00' />` → OK
     """
     cost = COST_BASIS_BY_CODE.get(code, Decimal("0"))
     pos = get_position(code)
     pos_str = f"{float(pos):.2f}"
     fund_name = f"{FUND_FULL_NAME_BY_CODE.get(code, DISPLAY_NAME.get(code, code))}（{code}）"
     return (
-        f"<number_tag background_color='grey' font_color='white'>{pos_str}</number_tag> "
+        f"<number_tag value='{pos_str}' color='grey' /> "
         f"**{fund_name}**  "
         f"累计 {_fmt_money(cost)} CNY"
     )
