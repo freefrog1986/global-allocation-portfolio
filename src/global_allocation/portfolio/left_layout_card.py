@@ -196,26 +196,22 @@ def _build_category_section(today: date) -> list[dict[str, Any]]:
 
 
 def _format_fund_line(code: str) -> str:
-    """生成单只基金的展示行（liubo 2026-10-19 拍板 R10：number_tag）。
+    """生成单只基金的展示行（liubo 2026-10-19 拍板 R10/R11：text_tag 显示仓位）。
 
-    格式：`<number_tag value='X.XX' color='grey' /> **基金全名（code）**  累计 X CNY`
+    格式：`<text_tag color='grey'>X.XX 仓</text_tag> **基金全名（code）**  累计 X CNY`
 
-    number_tag 直观显示仓位（仓数），bold 基金全名便于扫读，累计成本紧跟其后。
+    R11 修订：R10 用 `<number_tag value='X.XX' color='grey' />` 是 OK 的（API 200），
+    但 liubo 飞书客户端 renderer 不识别 number_tag，把源码字面量当文本显示出来。
+    退回 R10 之前的方案：用 text_tag 包「X.XX 仓」整个串，text_tag 在 R9 验证能渲染。
 
-    Feishu number_tag 必须是**自闭合**形式 `<number_tag value='X' color='Y' />`，
-    不能用 `<number_tag color='Y'>X</number_tag>` 的非自闭合写法（ErrCode 11311）。
-    实测 4 种写法中只有 self-closing + `value` 属性 OK：
-    1. `<number_tag color='grey'>2.00</number_tag>` → FAIL
-    2. `<number_tag value='2.00' color='grey' />` → OK
-    3. `<number_tag>2.00</number_tag>` → FAIL
-    4. `<number_tag value='2.00' />` → OK
+    text_tag 视觉：灰底白字圆角 tag，bold 基金全名便于扫读，累计成本紧跟其后。
     """
     cost = COST_BASIS_BY_CODE.get(code, Decimal("0"))
     pos = get_position(code)
     pos_str = f"{float(pos):.2f}"
     fund_name = f"{FUND_FULL_NAME_BY_CODE.get(code, DISPLAY_NAME.get(code, code))}（{code}）"
     return (
-        f"<number_tag value='{pos_str}' color='grey' /> "
+        f"<text_tag color='grey'>{pos_str} 仓</text_tag> "
         f"**{fund_name}**  "
         f"累计 {_fmt_money(cost)} CNY"
     )
@@ -236,13 +232,50 @@ def _category_status_color(pct_of_total: float, is_over: bool) -> str:
     return "blue"
 
 
+def _parse_primary_pct(primary_value: str) -> float | None:
+    """从主指标 value 解析「当前值分位点%」。
+
+    liubo 2026-10-19 R11 反馈：要在估值后给「低估 / 中性 / 高估」判断。
+
+    格式："{value}@{pct}%"，如 "23.10@13.14%" → pct = 13.14。
+    无 @分位（liubo 暂未填）→ 返回 None（卡片显示「—」）。
+    """
+    if "@" not in primary_value:
+        return None
+    pct_str = primary_value.split("@")[-1].rstrip("%").strip()
+    try:
+        return float(pct_str)
+    except ValueError:
+        return None
+
+
+def _valuation_status(pct: float | None) -> tuple[str, str]:
+    """估值状态（liubo 2026-10-19 拍板：<20% 低估 / 20-80% 中性 / >80% 高估）。
+
+    Returns:
+        (status_text, color) 元组：
+        - ("低估", "green")  — 分位 < 20%（估值便宜，可以加仓）
+        - ("中性", "blue")   — 20-80%（正常）
+        - ("高估", "red")    — > 80%（估值贵，建议减仓或观望）
+        - ("—", "grey")      — 无分位数据（liubo 暂未填）
+    """
+    if pct is None:
+        return ("—", "grey")
+    if pct < 20:
+        return ("低估", "green")
+    if pct > 80:
+        return ("高估", "red")
+    return ("中性", "blue")
+
+
 def _build_valuation_fields(idx_code: str) -> list[dict[str, Any]]:
-    """估值段 fields（liubo 2026-10-19 拍板 R10：2 列 label-value）。
+    """估值段 fields（liubo 2026-10-19 拍板 R11：3 列 label-value）。
 
     第一个 field = 参考指数（飞书卡片「参考指数：{name}（{code}）」）
     第二个 field = 主指标（如 PE-TTM：23.10@13.14%；房地产用 PB：0.760@13.27%）
+    第三个 field = 估值状态 text_tag（liubo R11 加：低估/中性/高估）
 
-    2 列 is_short=true 横向并排（参考指数 | 主指标）。
+    3 列 is_short=true：第 1+2 横排，第 3 换到下一行（飞书 div.fields 一行 2 个）。
 
     无 idx_code → 返回空 list（由调用方处理「无统一基准」展示）。
     """
@@ -250,11 +283,15 @@ def _build_valuation_fields(idx_code: str) -> list[dict[str, Any]]:
         return []
     idx_name = get_index_name(idx_code)
     primary_label, primary_value = get_index_primary_metric(idx_code)
+    pct = _parse_primary_pct(primary_value)
+    status_text, status_color = _valuation_status(pct)
     return [
         {"is_short": True, "text": {"tag": "lark_md",
                                     "content": f"**参考指数：** {idx_name}（{idx_code}）"}},
         {"is_short": True, "text": {"tag": "lark_md",
                                     "content": f"**{primary_label}：** {primary_value}"}},
+        {"is_short": True, "text": {"tag": "lark_md",
+                                    "content": f"**估值：** <text_tag color='{status_color}'>{status_text}</text_tag>"}},
     ]
 
 
@@ -302,13 +339,12 @@ def _build_category_block(category: str, today: date) -> list[dict[str, Any]]:
             "content": _format_fund_line(code),
         })
 
-    # 3. 估值：sub-header + div.fields 多列
+    # 3. 估值：section header + div.fields 多列（liubo 2026-10-19 R11：删掉 idx_name 重复，div.fields 第一列已显示）
     idx_code = get_category_index(category)
     if idx_code:
-        idx_name = get_index_name(idx_code)
         block.append({
             "tag": "markdown",
-            "content": f"**估值**  _{idx_name}（{idx_code}）_",
+            "content": "**估值**",
         })
         fields = _build_valuation_fields(idx_code)
         block.append({"tag": "div", "fields": fields})

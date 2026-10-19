@@ -633,8 +633,8 @@ class TestHoldingPeriodConstraint:
         )
         from datetime import date as _date
 
-        # 中证 A500 合并 3 只：022434 7 天 / 022424 7 天 / 022448 7 天
-        # 022434 持有 30 天（解锁），022448 才持有 3 天（冻结）
+        # 中证 A500 合并 3 只：022434 30+ 天 / 022424 30+ 天 / 022448 13 天
+        # 022434 持有 43 天（解锁），022448 才持有 13 天（仍被 30 天冷却期卡住）
         PURCHASE_DATES_BY_CODE["022434"] = _date(2026, 9, 1)
         PURCHASE_DATES_BY_CODE["022424"] = _date(2026, 9, 1)
         PURCHASE_DATES_BY_CODE["022448"] = _date(2026, 10, 1)  # 13 天前
@@ -665,13 +665,16 @@ class TestHoldingPeriodConstraint:
                 current_position=Decimal("2.65"),
             )
 
-            # 022448 持有 13 天，阈值 7 天 → 通过
-            # 实际上都通过，所有子基金都满足
+            # 022448 持有 13 天，阈值 30 天 → 被 HOLD（未到解锁期）
+            # 实际上所有子基金都被 HOLD（022434/022424 也仅 43 天前买入，需要同日再次检验）
+            # 改：让 022434/022424 都设为 50 天前 → 过冷却期
+            PURCHASE_DATES_BY_CODE["022434"] = _date(2026, 8, 25)  # 50 天前 → 过冷却
+            PURCHASE_DATES_BY_CODE["022424"] = _date(2026, 8, 25)  # 50 天前 → 过冷却
             passed = _check_holding_period(action, today=_date(2026, 10, 14))
             assert passed.signal == PESignal.REDUCE
 
             # 现在让 022448 不满足：改为 3 天前
-            PURCHASE_DATES_BY_CODE["022448"] = _date(2026, 10, 11)  # 3 天前 < 7 天
+            PURCHASE_DATES_BY_CODE["022448"] = _date(2026, 10, 11)  # 3 天前 < 30 天
             held = _check_holding_period(action, today=_date(2026, 10, 14))
             assert held.signal == PESignal.HOLD
             assert "022448" in held.reason

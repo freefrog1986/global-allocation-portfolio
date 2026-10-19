@@ -345,14 +345,14 @@ class TestCategorySection:
 
 class TestFundSection:
     """Section 3：各类别基金 + 估值 + 调仓建议
-    （liubo 2026-10-19 拍板 R10：number_tag + div.fields 多列 + 简化动作）。
+    （liubo 2026-10-19 拍板 R11：text_tag 仓位 + 估值高低状态 + 删 idx_name 重复）。
 
-    每类别块结构（liubo 2026-10-19 R10）：
+    每类别块结构（liubo 2026-10-19 R11）：
     1. div category header：`**{类别}** <tag 占比> <tag 状态>`（icon=tag_outlined）
     2. markdown `**类下基金（N 只）**` sub-header
-    3. markdown 每只基金 1 行（`<number_tag>X.XX</number_tag> **基金全名（code）**  累计 X CNY`）
-    4. markdown `**估值** _{idx_name}（{idx_code}）_` sub-header
-    5. div · fields 2 列（参考指数 + 主指标）
+    3. markdown 每只基金 1 行（`<text_tag>X.XX 仓</text_tag> **基金全名（code）**  累计 X CNY`）
+    4. markdown `**估值**` sub-header（liubo R11：删掉 idx_name，div.fields 第一列已显示）
+    5. div · fields 3 列（参考指数 + 主指标 + 估值状态）
     6. markdown `**调仓建议**`：emoji + action_with_unit + 简化理由
 
     5 个类别块之间用 hr 隔开（最后 1 个不加）。
@@ -381,8 +381,11 @@ class TestFundSection:
         return elements[start:end]
 
     def _get_fund_lines(self, card: dict) -> list[str]:
-        """类下基金段：所有「<number_tag>...</number_tag> **基金全名（code）** ...」行
-        （不含 类下基金 sub-header / 估值 sub-header / 调仓建议）。"""
+        """类下基金段：所有「<text_tag>X.XX 仓</text_tag> **基金全名（code）** ...」行
+        （不含 类下基金 sub-header / 估值 sub-header / 调仓建议）。
+
+        历史：R10 用 `<number_tag` 标识基金行；R11 改 text_tag 后更新过滤条件。
+        """
         els = self._get_fund_section_elements(card)
         lines: list[str] = []
         for el in els:
@@ -396,8 +399,8 @@ class TestFundSection:
                 continue
             if "调仓" in content:
                 continue
-            # 基金行特征：含 number_tag + bold + 全名（code）
-            if "<number_tag" in content and "（" in content and "）" in content:
+            # 基金行特征：含 text_tag（仓位）+ bold + 全名（code）
+            if "<text_tag" in content and "（" in content and "）" in content:
                 lines.append(content)
         return lines
 
@@ -445,16 +448,16 @@ class TestFundSection:
         names = [name for _, name in starts]
         assert names == ["港股科技互联网", "港股银行", "亚太除日本", "全球科技主动", "房地产"]
 
-    # ─── 类别块结构（liubo R10：1 div cat header + 3+N md + 1 div.fields 估值） ───
+    # ─── 类别块结构（liubo R11：1 div cat header + 3+N md + 1 div.fields 估值） ───
 
     def test_category_block_structure(self) -> None:
-        """每个类别块结构（liubo 2026-10-19 R10）：
+        """每个类别块结构（liubo 2026-10-19 R11）：
 
         - 1 div（cat header）
         - 1 md（类下基金 sub-header）
-        - N md（基金行，含 number_tag）
-        - 1 md（估值 sub-header）
-        - 1 div.fields（参考指数 + 主指标；idx_code truthy 时存在）
+        - N md（基金行，含 text_tag）
+        - 1 md（估值 sub-header，R11 简化只留 "**估值**"）
+        - 1 div.fields（参考指数 + 主指标 + 估值状态；3 列）
         - 1 md（调仓建议）
 
         → 2 div + (3 + N) md
@@ -523,27 +526,27 @@ class TestFundSection:
             assert sub_md["tag"] == "markdown"
             assert f"**类下基金**（{len(codes)} 只）" in sub_md["content"]
 
-    def test_fund_lines_use_number_tag(self) -> None:
-        """基金行含 `<number_tag value='X.XX' color='grey' />`
-        （liubo 2026-10-19 R10：仓位用 number_tag 显示）。
+    def test_fund_lines_use_text_tag(self) -> None:
+        """基金行含 `<text_tag color='grey'>X.XX 仓</text_tag>`
+        （liubo 2026-10-19 R11：number_tag 在 liubo 客户端显示字面量，
+        改用 text_tag 渲染「X.XX 仓」）。
 
-        Feishu number_tag 必须是 self-closing + `value` 属性：
-        实测 `<number_tag color='grey'>2.00</number_tag>` 触发 ErrCode 11311，
-        只有 `<number_tag value='2.00' color='grey' />` OK。
+        历史：R10 试过 `<number_tag value='X.XX' color='grey' />` 自闭合语法，
+        Feishu API 通过但 liubo 客户端 renderer 不识别，文本中字面量泄漏。
         """
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         fund_lines = self._get_fund_lines(card)
         # 006327 成本 10,000 → 2.00 仓
         text_006327 = next(l for l in fund_lines if "006327" in l)
-        assert "<number_tag value='2.00' color='grey' />" in text_006327
+        assert "<text_tag color='grey'>2.00 仓</text_tag>" in text_006327
         assert "10,000.00 CNY" in text_006327
         # 457001 成本 4,640 → 0.93 仓
         text_457001 = next(l for l in fund_lines if "457001" in l)
-        assert "<number_tag value='0.93' color='grey' />" in text_457001
+        assert "<text_tag color='grey'>0.93 仓</text_tag>" in text_457001
         assert "4,640.00 CNY" in text_457001
-        # R10 不再写「仓」字（仓数已在 number_tag 里）
-        assert "仓" not in text_006327
-        assert "仓" not in text_457001
+        # 不再含 number_tag（已切到 text_tag）
+        assert "<number_tag" not in text_006327
+        assert "<number_tag" not in text_457001
 
     def test_all_9_funds_present(self) -> None:
         """9 只基金全名 + code 都在 markdown 行里。"""
@@ -569,10 +572,14 @@ class TestFundSection:
         all_text = "\n".join(self._get_fund_lines(card))
         assert "013127" not in all_text
 
-    # ─── 估值段：div.fields 多列（liubo 2026-10-19 R10：1 个主指标） ───
+    # ─── 估值段：div.fields 多列（liubo 2026-10-19 R11：3 列 + 估值状态） ───
 
     def test_valuation_subheader_format(self) -> None:
-        """估值 sub-header markdown：「**估值** _{name}（{code}）_」（liubo R10 简化）。"""
+        """估值 sub-header markdown：liubo R11 简化只留 "**估值**"。
+
+        原 R10 写的是「**估值** _{name}（{code}）_」，但 div.fields 第一列就含
+        「**参考指数：**{name}（{code}）」，重复。R11 删除 idx_name 部分。
+        """
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         for i in range(5):
             block = self._get_block(card, i)
@@ -580,19 +587,13 @@ class TestFundSection:
                 el for el in block
                 if el.get("tag") == "markdown" and el["content"].startswith("**估值**")
             )
-            # 简化后只显示 idx_name（idx_code），不再附加 5 指标
-            assert "_" in val_md["content"]
-            assert "PE-TTM" not in val_md["content"]
-            assert "PB" not in val_md["content"]
-            assert "PS-TTM" not in val_md["content"]
-            assert "股息率" not in val_md["content"]
-            assert "ROE" not in val_md["content"]
-            assert "YTD" not in val_md["content"]
-            assert "基金数" not in val_md["content"]
-            assert "关注人数" not in val_md["content"]
+            # R11 简化：只显示 "**估值**"（不再含 idx_name 和下划线）
+            assert val_md["content"] == "**估值**", (
+                f"类 {i} 估值 sub-header 期望 '**估值**'，实际 {val_md['content']!r}"
+            )
 
-    def test_valuation_div_fields_has_2_columns(self) -> None:
-        """估值 div.fields 含 2 列 is_short=true（参考指数 + 主指标）。"""
+    def test_valuation_div_fields_has_3_columns(self) -> None:
+        """估值 div.fields 含 3 列 is_short=true（参考指数 + 主指标 + 估值状态）。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         for i in range(5):
             block = self._get_block(card, i)
@@ -601,17 +602,19 @@ class TestFundSection:
                 if el.get("tag") == "div" and "fields" in el
             )
             fields = fields_div["fields"]
-            assert len(fields) == 2, f"类 {i} 估值 fields 期望 2 列，实际 {len(fields)}"
-            # 2 列 is_short=true → 横向并排
+            assert len(fields) == 3, f"类 {i} 估值 fields 期望 3 列，实际 {len(fields)}"
+            # 3 列 is_short=true → 横向并排
             assert all(f["is_short"] is True for f in fields)
             # 全部 lark_md（加粗/颜色才渲染）
             assert all(f["text"]["tag"] == "lark_md" for f in fields)
-            # 第 1 列 = 参考指数，第 2 列 = 主指标
+            # 第 1 列 = 参考指数，第 2 列 = 主指标，第 3 列 = 估值状态
             assert "参考指数" in fields[0]["text"]["content"]
             assert fields[1]["text"]["content"].startswith("**")  # PE-TTM 或 PB
+            assert "估值" in fields[2]["text"]["content"]
+            assert "<text_tag" in fields[2]["text"]["content"]
 
     def test_港股通科技_valuation(self) -> None:
-        """港股科技互联网 → 港股通科技 (987008.sz) PE-TTM 23.10@13.14%。"""
+        """港股科技互联网 → 港股通科技 (987008.sz) PE-TTM 23.10@13.14% → 低估。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         block = self._get_block(card, 0)
         fields_div = next(
@@ -625,9 +628,11 @@ class TestFundSection:
         assert "PE-TTM" in fields[1]["text"]["content"]
         assert "23.10" in fields[1]["text"]["content"]
         assert "13.14%" in fields[1]["text"]["content"]
+        # 估值状态：13.14% < 20% → 低估（green）
+        assert "<text_tag color='green'>低估</text_tag>" in fields[2]["text"]["content"]
 
     def test_港股银行_valuation(self) -> None:
-        """港股银行 → HK 银行 (930792.csi) PE-TTM 7.32@90.71%（liubo 2026-10-19 给数据）。"""
+        """港股银行 → HK 银行 (930792.csi) PE-TTM 7.32@90.71% → 高估（liubo 2026-10-19 给数据）。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         block = self._get_block(card, 1)
         fields_div = next(
@@ -640,9 +645,11 @@ class TestFundSection:
         assert "PE-TTM" in fields[1]["text"]["content"]
         assert "7.32" in fields[1]["text"]["content"]
         assert "90.71%" in fields[1]["text"]["content"]
+        # 估值状态：90.71% > 80% → 高估（red）
+        assert "<text_tag color='red'>高估</text_tag>" in fields[2]["text"]["content"]
 
     def test_房地产_valuation_uses_PB(self) -> None:
-        """房地产 → 931775.csi PB 0.760@13.27%（主指标是 PB 不是 PE-TTM；liubo 2026-10-19 给数据）。"""
+        """房地产 → 931775.csi PB 0.760@13.27% → 低估（主指标是 PB 不是 PE-TTM；liubo 2026-10-19 给数据）。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         block = self._get_block(card, 4)  # 房地产是第 5 个
         fields_div = next(
@@ -657,11 +664,14 @@ class TestFundSection:
         assert "0.760" in fields[1]["text"]["content"]
         assert "13.27%" in fields[1]["text"]["content"]
         assert "PE-TTM" not in fields[1]["text"]["content"]
+        # 估值状态：13.27% < 20% → 低估（green）
+        assert "<text_tag color='green'>低估</text_tag>" in fields[2]["text"]["content"]
 
     def test_全球科技主动_NDX_PB(self) -> None:
-        """全球科技主动 → 纳斯达克100 (.NDX) PB 9.08（liubo 2026-10-19 给数据）。
+        """全球科技主动 → 纳斯达克100 (.NDX) PB 9.08 → 状态「—」（liubo 2026-10-19 给数据）。
 
-        行业习惯用 PB 看科技股估值；纳斯达克 100 PB 9.08（高估，分位暂未填）。
+        行业习惯用 PB 看科技股估值；纳斯达克 100 PB 9.08，分位暂未填，
+        所以估值状态显示「—」灰色。
         """
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         block = self._get_block(card, 3)
@@ -676,6 +686,8 @@ class TestFundSection:
         assert "PB" in fields[1]["text"]["content"]
         assert "9.08" in fields[1]["text"]["content"]
         assert "PE-TTM" not in fields[1]["text"]["content"]
+        # 估值状态：无分位数据 → 显示「—」灰色
+        assert "<text_tag color='grey'>—</text_tag>" in fields[2]["text"]["content"]
 
     # ─── 调仓建议段（liubo 2026-10-19 R10：action_with_unit + 简化理由） ───
 
