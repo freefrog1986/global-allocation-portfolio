@@ -1037,7 +1037,8 @@ class TestWeeklyRebalancePlan:
         - 加 1 个 HK_EQUITY 恒生消费指数（HSCGSI）到 INDEX_WATCHLIST
           → 新增 1 个 watchlist action（HSCGSI，PE 13.5728 / 分位 0.73% → BUILD 深价值）
         - 加 1 个 HK_EQUITY 恒生创新药指数（HSIDI）到 INDEX_WATCHLIST
-          → 新增 1 个 watchlist action（HSIDI，PE 32.0545 / 分位 9.23% → BUILD 深价值）
+          → 新增 1 个 watchlist action（HSIDI，PS 2.7825 / 分位 65.13% → HOLD 区间内）
+        - 2026-10-19 拍板：HSIDI 用 PS-TTM（创新药 PE 失真，跟 A 股科创板一致）
         - 移除 HSI 恒生指数（liubo 不跟踪了）→ 减少 1 个 watchlist action
         net: 21 - 1 + 1 = 21 不变。
         """
@@ -1195,8 +1196,10 @@ class TestWeeklyRebalancePlan:
     def test_hsidi_appears_with_real_pe(self) -> None:
         """HSIDI 恒生创新药指数 watchlist 出现在 plan 里。
 
-        liubo 2026-10-19 提供 lixinger 2026-10-16 CSV：
-        PE-TTM = 32.0545 / 分位 9.23% < 20% → 深价值 → BUILD +1。
+        liubo 2026-10-19 提供 lixinger 2026-10-16 CSV。
+        liubo 2026-10-19 拍板：创新药改 PS-TTM（创新药公司大量亏损或微利，PE-TTM 失真；
+        跟 A 股科创板同口径）。
+        PS-TTM = 2.7825 / 分位 65.13% → 区间内（20-80%）→ HOLD（不是 BUILD）。
         """
         actions = weekly_rebalance_plan()
         hsidi_actions = [a for a in actions if a.etf_index_code == "HSIDI"]
@@ -1204,11 +1207,11 @@ class TestWeeklyRebalancePlan:
         hsidi = hsidi_actions[0]
         assert hsidi.subclass == SwensenClass.HK_EQUITY
         assert hsidi.current_position == Decimal("0")
-        assert hsidi.metric == ValuationMetric.PE_TTM
-        # 分位 9.23% < 20% → 深价值 → BUILD
-        assert hsidi.signal == PESignal.BUILD
-        assert hsidi.metric_percentile == Decimal("0.0923")
-        assert hsidi.metric_value == Decimal("32.0545")
+        assert hsidi.metric == ValuationMetric.PS_TTM
+        # 分位 65.13% 在 50-80% 区间 → HOLD
+        assert hsidi.signal == PESignal.HOLD
+        assert hsidi.metric_percentile == Decimal("0.6513")
+        assert hsidi.metric_value == Decimal("2.7825")
 
     def test_hstech_appears_with_013127(self) -> None:
         """HSTECH 恒生科技：2026-09-29 liubo 把 013127 转到大类资产。

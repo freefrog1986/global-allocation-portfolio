@@ -395,14 +395,16 @@ INDEX_WATCHLIST: list[tuple[SwensenClass, str, str, ValuationMetric, Decimal, De
     # HSIDI = Hang Seng Innovative Drug Index。
     # URL: https://www.lixinger.com/analytics/index/detail/hk/HSIDI/2198
     # 数据源：data/lixinger/frog_20261016.csv（liubo 2026-10-19 提供）。
-    # 分位 9.23% < 20% → 深价值，建仓窗口。
+    # 估值指标：PS-TTM（liubo 2026-10-19 拍板 — 创新药公司大量亏损或微利，PE-TTM 失真；
+    # 跟 A 股科创 50/100/创业板 50/科创创业 50 同口径，参考 pe_rebalance.py:84-85 注释）。
+    # PS-TTM 2.7825 / 分位 65.13% → 区间内不动。
     (
         SwensenClass.HK_EQUITY,
         "HSIDI",
         "恒生创新药指数",
-        ValuationMetric.PE_TTM,
-        Decimal("32.0545"),   # 理杏仁 2026-10-16
-        Decimal("0.0923"),    # 10 年分位 9.23% < 20% → 深价值
+        ValuationMetric.PS_TTM,
+        Decimal("2.7825"),    # 理杏仁 2026-10-16
+        Decimal("0.6513"),    # 10 年分位 65.13% → 区间内
     ),
 ]
 
