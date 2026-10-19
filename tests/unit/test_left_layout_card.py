@@ -658,8 +658,11 @@ class TestFundSection:
         assert "13.27%" in fields[1]["text"]["content"]
         assert "PE-TTM" not in fields[1]["text"]["content"]
 
-    def test_全球科技主动_NDX_placeholder(self) -> None:
-        """全球科技主动 → 纳斯达克100 (.NDX)；数据未填 → PE-TTM — 占位。"""
+    def test_全球科技主动_NDX_PB(self) -> None:
+        """全球科技主动 → 纳斯达克100 (.NDX) PB 9.08（liubo 2026-10-19 给数据）。
+
+        行业习惯用 PB 看科技股估值；纳斯达克 100 PB 9.08（高估，分位暂未填）。
+        """
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         block = self._get_block(card, 3)
         fields_div = next(
@@ -669,9 +672,10 @@ class TestFundSection:
         fields = fields_div["fields"]
         assert "纳斯达克100" in fields[0]["text"]["content"]
         assert ".NDX" in fields[0]["text"]["content"]
-        # 数据未填 → 「PE-TTM —」占位
-        assert "—" in fields[1]["text"]["content"]
-        assert "PE-TTM" in fields[1]["text"]["content"]
+        # PB 主指标（不是 PE-TTM）
+        assert "PB" in fields[1]["text"]["content"]
+        assert "9.08" in fields[1]["text"]["content"]
+        assert "PE-TTM" not in fields[1]["text"]["content"]
 
     # ─── 调仓建议段（liubo 2026-10-19 R10：action_with_unit + 简化理由） ───
 

@@ -165,7 +165,12 @@ INDEX_VALUATION_BY_CODE: dict[str, dict[str, str]] = {
         "primary_label": "PB",
         "primary_value": "0.760@13.27%",
     },
-    # 纳斯达克100 (.NDX) — 数据未填（liubo 后续补）
+    # 纳斯达克100 (.NDX) — PB 9.08（liubo 2026-10-19 给；行业习惯 PB 而非 PE-TTM）
+    # 注意：分位点 liubo 暂未给 → value 只填数字不带 @分位
+    ".NDX": {
+        "primary_label": "PB",
+        "primary_value": "9.08",
+    },
     # 亚太除日本 (MSCI_AC_AXJ) — 数据未填
 }
 

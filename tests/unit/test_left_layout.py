@@ -682,6 +682,11 @@ class TestIndexPrimaryMetric:
         from global_allocation.portfolio.left_layout import get_index_primary_metric
         assert get_index_primary_metric("MSCI_AC_AXJ") == ("PE-TTM", "—")
 
+    def test_NDX_full_metric(self) -> None:
+        """纳斯达克100 → PB 9.08（liubo 2026-10-19 给数据；分位暂未填）。"""
+        from global_allocation.portfolio.left_layout import get_index_primary_metric
+        assert get_index_primary_metric(".NDX") == ("PB", "9.08")
+
     def test_empty_code_returns_dash(self) -> None:
         """空 code → ("", "—") 用于「无统一基准」分支。"""
         from global_allocation.portfolio.left_layout import get_index_primary_metric
