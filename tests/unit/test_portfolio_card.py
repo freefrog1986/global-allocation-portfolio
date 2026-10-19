@@ -1866,12 +1866,12 @@ class TestPerFundSection:
     def test_index_watchlist_shows_with_zero_cost(self, journal: PortfolioJournal) -> None:
         """第三十三轮（liubo 2026-10-18）：INDEX_WATCHLIST 里的指数也列出，持仓 0。
 
-        第三十六轮（liubo 2026-10-19）：HSI/.N225/.FCHI + A100 (中证 A100) 共 4 个 watchlist。
+        第三十六轮（liubo 2026-10-19）：HSI/HSCG + .N225/.FCHI + A100 (中证 A100) 共 5 个 watchlist。
         7 个 CN_EQUITY 指数（A50/A500/中证1000/科创创业50/创业板50/科创50/科创100）已被持仓基金
         覆盖 → dedupe 跳过。
         """
         table = self._get_per_fund_table(journal)
-        watchlist_names = {"恒生指数", "日经 225", "法国 CAC 40", "中证 A100"}
+        watchlist_names = {"恒生指数", "恒生消费指数", "日经 225", "法国 CAC 40", "中证 A100"}
         seen: set[str] = set()
         for r in table["rows"]:
             if "（无持仓）" in r["fund"]:
@@ -1884,7 +1884,7 @@ class TestPerFundSection:
                 )
                 seen.add(r["etf_index"])
         assert seen == watchlist_names, (
-            f"watchlist 4 个指数都应出现，实际：{seen}"
+            f"watchlist 5 个指数都应出现，实际：{seen}"
         )
 
 

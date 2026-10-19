@@ -1016,14 +1016,17 @@ class TestWeeklyRebalancePlan:
     def test_returns_one_action_per_etf_group(self) -> None:
         """每周调仓计划: 1 个 action per ETF group（同 ETF 合并 + watchlist）。
 
-        第三十六轮（liubo 2026-10-19）：加 8 个 CN_EQUITY ETF 指数到 INDEX_WATCHLIST（A50/A100/
-        A500/中证1000/科创创业50/创业板50/科创50/科创100），但 7 个被持仓基金覆盖（dedupe）
-        → 实际新增 1 个 watchlist action（A100 / 000903，PE 89.13% → REDUCE 区间）。
-        总 actions: 19 + 1 = 20。
+        第三十六轮（liubo 2026-10-19）：
+        - 加 8 个 CN_EQUITY ETF 指数到 INDEX_WATCHLIST（A50/A100/A500/中证1000/科创创业50/
+          创业板50/科创50/科创100），但 7 个被持仓基金覆盖（dedupe）
+          → 实际新增 1 个 watchlist action（A100 / 000903，PE 89.13% → REDUCE 区间）
+        - 加 1 个 HK_EQUITY 恒生消费指数（HSCG）到 INDEX_WATCHLIST
+          → 新增 1 个 watchlist action（HSCG，PE 0/0 占位 → HOLD）
+        总 actions: 20 + 1 = 21。
         """
         actions = weekly_rebalance_plan()
         # 持仓基金合并后（不变）：
-        #   CN_EQUITY 9 只 (7 ETF) → 7   (3 A500 + 6 其他)
+        #   CN_EQUITY 9 只 (7 ETF) → 7
         #   HK_EQUITY 1 只 (HSTECH) → 1
         #   US_EQUITY 7 只 (3 ETF) → 3
         #   FOREIGN_DM_EQUITY 1 只 (.GDAXI via 000614) → 1
@@ -1031,14 +1034,13 @@ class TestWeeklyRebalancePlan:
         #   CN_REIT 1 → 1
         #   US_REIT 1 → 1
         #   COMMODITY 1 → 1
-        # watchlist (11 = 3 旧 + 8 新 A 股):
-        #   HSI 1 + 国外发达 2 (.N225/.FCHI) + A 股 8
-        #   = 11 (per INDEX_WATCHLIST)
-        #   但 7 A 股 INDEX_WATCHLIST 已被持仓覆盖 → build_watchlist_evaluations 不产生 action
-        #   (build_watchlist_evaluations 是全量；weekly_rebalance_plan 走 dedupe)
-        #   → 实际 watchlist action: HSI 1 + .N225 1 + .FCHI 1 + A100 1 = 4
-        # 合计: 7 + 1 + 3 + 1 + 1 + 1 + 1 + 1 + 4 = 20
-        assert len(actions) == 20
+        # watchlist (12 = 3 旧 + 8 新 A 股 + 1 新 HSCG):
+        #   HSI 1 + HSCG 1 + 国外发达 2 (.N225/.FCHI) + A 股 8
+        #   = 12 (per INDEX_WATCHLIST)
+        #   但 7 A 股 INDEX_WATCHLIST 已被持仓覆盖 → 不产生 action
+        #   → 实际 watchlist action: HSI 1 + HSCG 1 + .N225 1 + .FCHI 1 + A100 1 = 5
+        # 合计: 7 + 1 + 3 + 1 + 1 + 1 + 1 + 1 + 5 = 21
+        assert len(actions) == 21
 
     def test_foreign_dm_indices_appear_in_watchlist(self) -> None:
         """FOREIGN_DM_EQUITY：3 个评估（.N225 watchlist + .GDAXI 来自 000614 fund + .FCHI watchlist）。

@@ -383,6 +383,18 @@ INDEX_WATCHLIST: list[tuple[SwensenClass, str, str, ValuationMetric, Decimal, De
         Decimal("5.7253"),
         Decimal("0.3645"),
     ),
+    # ── 港股 恒生消费指数（liubo 2026-10-19 拍板：港股也要跟踪）──
+    # HSCG = Hang Seng Consumer Goods Index / 恒生消费指数（理杏仁代码）。
+    # PE / 分位数据 liubo 待补；先用 0 占位让 watchlist 行能渲染（显示 "PE-TTM 0.00 / 分位 0.00%"）。
+    # liubo 给数据后直接改这两个 Decimal 即可。
+    (
+        SwensenClass.HK_EQUITY,
+        "HSCG",
+        "恒生消费指数",
+        ValuationMetric.PE_TTM,
+        Decimal("0"),  # TODO liubo 2026-10-19：恒生消费指数 PE-TTM 待补
+        Decimal("0"),  # TODO liubo 2026-10-19：10 年分位待补
+    ),
 ]
 
 # 月度冷却期（liubo 2026-09-25 拍板）：同 ETF 调仓间隔 ≥ COOLDOWN_DAYS 天。
@@ -509,6 +521,7 @@ INDEX_DISPLAY_NAME: dict[str, str] = {
     "932006": "中证 REITs",
     "HSI": "恒生指数",
     "HSTECH": "恒生科技",   # 第三十六轮（liubo 2026-10-19）补：港股卡 013127 行 etf_index 列之前显示 "—"
+    "HSCG": "恒生消费指数",  # 第三十六轮（liubo 2026-10-19 拍板）：港股也跟踪
     "GOLD": "黄金",
 }
 
