@@ -288,14 +288,10 @@ FUND_INDEX_MAP: dict[str, tuple[SwensenClass, str, str]] = {
 # 列表项：(subclass, index_code, display_name, metric, value, percentile)
 # 0 仓位也会触发 BUILD（提醒建仓）或 HOLD（等便宜）/ REDUCE（不建仓）。
 INDEX_WATCHLIST: list[tuple[SwensenClass, str, str, ValuationMetric, Decimal, Decimal]] = [
-    (
-        SwensenClass.HK_EQUITY,
-        "HSI",
-        "恒生指数",
-        ValuationMetric.PE_TTM,
-        Decimal("10.6327"),  # 理杏仁 2026-10-16（55.24% > 50% → HOLD 等便宜）
-        Decimal("0.5524"),
-    ),
+    # 第三十六轮（liubo 2026-10-19 拍板）：HSI 恒生指数 去掉，不跟踪了。
+    # 之前 HSI 在这：
+    #   (SwensenClass.HK_EQUITY, "HSI", "恒生指数", ValuationMetric.PE_TTM, Decimal("10.6327"), Decimal("0.5524")),
+    # 港股剩下 3 个：HSCG（消费）/ HSIDI（创新药）/ HSTECH（科技；持仓 013127）
     # ── 国外发达市场（liubo 2026-09-29 加；457001 转走 0 持仓，跟踪 PE 等建仓时机；
     #    数据源 guchacha.com 2026-09-22。
     #    .GDAXI 在 2026-09-29 加 000614 后从 watchlist 移除（fund 替代 watchlist））──
@@ -393,6 +389,18 @@ INDEX_WATCHLIST: list[tuple[SwensenClass, str, str, ValuationMetric, Decimal, De
         "恒生消费指数",
         ValuationMetric.PE_TTM,
         Decimal("0"),  # TODO liubo 2026-10-19：恒生消费指数 PE-TTM 待补
+        Decimal("0"),  # TODO liubo 2026-10-19：10 年分位待补
+    ),
+    # ── 港股 恒生创新药指数（liubo 2026-10-19 拍板：港股加跟踪）──
+    # HSIDI = Hang Seng Innovative Drug Index / 恒生创新药指数。
+    # URL: https://www.lixinger.com/analytics/index/detail/hk/HSIDI/2198
+    # PE / 分位数据 liubo 待补；先用 0 占位。
+    (
+        SwensenClass.HK_EQUITY,
+        "HSIDI",
+        "恒生创新药指数",
+        ValuationMetric.PE_TTM,
+        Decimal("0"),  # TODO liubo 2026-10-19：恒生创新药指数 PE-TTM 待补
         Decimal("0"),  # TODO liubo 2026-10-19：10 年分位待补
     ),
 ]
@@ -519,9 +527,9 @@ INDEX_DISPLAY_NAME: dict[str, str] = {
     ".MSCI_EM": "MSCI 新兴市场",
     ".MSCI_US_REIT": "MSCI US REIT",
     "932006": "中证 REITs",
-    "HSI": "恒生指数",
     "HSTECH": "恒生科技",   # 第三十六轮（liubo 2026-10-19）补：港股卡 013127 行 etf_index 列之前显示 "—"
     "HSCG": "恒生消费指数",  # 第三十六轮（liubo 2026-10-19 拍板）：港股也跟踪
+    "HSIDI": "恒生创新药指数",  # 第三十六轮（liubo 2026-10-19 拍板）：港股加跟踪
     "GOLD": "黄金",
 }
 
