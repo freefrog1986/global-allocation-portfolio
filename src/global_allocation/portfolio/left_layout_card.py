@@ -268,46 +268,69 @@ def _valuation_status(pct: float | None) -> tuple[str, str]:
     return ("中性", "blue")
 
 
-def _build_valuation_fields(idx_code: str) -> list[dict[str, Any]]:
-    """估值段 fields（liubo 2026-10-19 拍板 R11：3 列 label-value）。
+def _build_category_fields(idx_code: str, action: dict[str, str]) -> list[dict[str, Any]]:
+    """类别块底部 div.fields（liubo 2026-10-19 拍板 R12：4 列合并）。
 
-    第一个 field = 参考指数（飞书卡片「参考指数：{name}（{code}）」）
-    第二个 field = 主指标（如 PE-TTM：23.10@13.14%；房地产用 PB：0.760@13.27%）
-    第三个 field = 估值状态 text_tag（liubo R11 加：低估/中性/高估）
+    4 列 is_short=true（横向并排 2×2）：
+    1. 参考指数：name（code）或「—」（无统一基准）
+    2. 主指标：PE-TTM/PB 等 value@pct% 或「—」
+    3. 估值：<text_tag 低估/中性/高估/—>（按主指标分位判断）
+    4. 调仓建议：<text_tag emoji+动作>  reason
 
-    3 列 is_short=true：第 1+2 横排，第 3 换到下一行（飞书 div.fields 一行 2 个）。
-
-    无 idx_code → 返回空 list（由调用方处理「无统一基准」展示）。
+    合并 R11 的「估值 div.fields（3 列）+ 调仓建议 md（1 段）」到 1 个 div.fields，
+    删掉两个 sub-md 小标题（类下基金 / 估值），更紧凑。
     """
-    if not idx_code:
-        return []
-    idx_name = get_index_name(idx_code)
-    primary_label, primary_value = get_index_primary_metric(idx_code)
-    pct = _parse_primary_pct(primary_value)
-    status_text, status_color = _valuation_status(pct)
+    # 列 1-3：估值数据
+    if idx_code:
+        idx_name = get_index_name(idx_code)
+        primary_label, primary_value = get_index_primary_metric(idx_code)
+        pct = _parse_primary_pct(primary_value)
+        status_text, status_color = _valuation_status(pct)
+        col1 = f"**参考指数：** {idx_name}（{idx_code}）"
+        col2 = f"**{primary_label}：** {primary_value}"
+        col3 = f"**估值：** <text_tag color='{status_color}'>{status_text}</text_tag>"
+    else:
+        # 无统一基准（QDII 主动主题）
+        col1 = "**参考指数：** _无统一基准_"
+        col2 = "**主指标：** —"
+        col3 = "**估值：** <text_tag color='grey'>—</text_tag>"
+
+    # 列 4：调仓建议（合并自 R11 的调仓建议 md）
+    action_color_map = {
+        "减仓": "red",
+        "持有": "orange",
+        "加仓": "blue",
+        "建仓": "green",
+    }
+    action_color = action_color_map.get(action["action"], "blue")
+    col4 = (
+        f"**调仓建议：** "
+        f"<text_tag color='{action_color}'>"
+        f"{action['emoji']} {action['action_with_unit']}"
+        f"</text_tag>  "
+        f"{action['reason']}"
+    )
+
     return [
-        {"is_short": True, "text": {"tag": "lark_md",
-                                    "content": f"**参考指数：** {idx_name}（{idx_code}）"}},
-        {"is_short": True, "text": {"tag": "lark_md",
-                                    "content": f"**{primary_label}：** {primary_value}"}},
-        {"is_short": True, "text": {"tag": "lark_md",
-                                    "content": f"**估值：** <text_tag color='{status_color}'>{status_text}</text_tag>"}},
+        {"is_short": True, "text": {"tag": "lark_md", "content": col1}},
+        {"is_short": True, "text": {"tag": "lark_md", "content": col2}},
+        {"is_short": True, "text": {"tag": "lark_md", "content": col3}},
+        {"is_short": True, "text": {"tag": "lark_md", "content": col4}},
     ]
 
 
 def _build_category_block(category: str, today: date) -> list[dict[str, Any]]:
-    """单个类别的完整块（liubo 2026-10-19 拍板 R10：5 段）。
+    """单个类别的完整块（liubo 2026-10-19 拍板 R12：3 段）。
 
-    5 段：
+    3 段：
     1. 类别 header div：bold 类别名 + 2 个 inline text_tag（占比% + 状态）
-    2. 「类下基金」 sub-md + 每只基金 md（含 number_tag）
-    3. 「估值」 sub-md + div.fields 多列（参考指数 + 1 个主指标）
-    4. 「调仓建议」 md：emoji + action_with_unit + 简化理由
+    2. N 个基金 markdown（直接列基金行，删 R11 的「类下基金」sub-md）
+    3. div.fields 4 列合并：参考指数 / 主指标 / 估值 / 调仓建议
+       （合并 R11 的「估值 sub-md + 估值 div.fields 3 列 + 调仓建议 md」三段）
 
-    R10 简化（liubo 2026-10-19 拍板）：
-    - 类下基金行加 number_tag，删「仓位 X.XX 仓」文字（仓数已显示在 tag 里）
-    - 估值段从 R9 的「5 指标 + YTD + ROE 季度史」巨长 markdown → div.fields 2 列
-    - 调仓建议去掉「占 X%，超 15% 上限（老仓位豁免）」冗余前缀 → 「仓位超 15% 上限」
+    R12 简化（liubo 2026-10-19 拍板）：
+    - 删 2 个 sub-md 小标题（类下基金 / 估值），让 4 个 label-value 紧凑挤进 1 个 div.fields
+    - 估值 + 调仓建议合并到 1 个 div.fields（不再单独占段）
     """
     status = get_category_cap_status(category)
     pct = float(status["pct_of_total"]) * 100
@@ -327,53 +350,19 @@ def _build_category_block(category: str, today: date) -> list[dict[str, Any]]:
         "icon": {"tag": "standard_icon", "token": "tag_outlined", "color": "purple"},
     }]
 
-    # 2. 类下基金：sub-header + 每只基金 markdown（number_tag + bold name + cost）
+    # 2. 类下基金 markdown（无 sub-md，liubo 2026-10-19 R12 拍板删除）
     codes = STRATEGY_CATEGORIES[category]
-    block.append({
-        "tag": "markdown",
-        "content": f"**类下基金**（{len(codes)} 只）",
-    })
     for code in codes:
         block.append({
             "tag": "markdown",
             "content": _format_fund_line(code),
         })
 
-    # 3. 估值：section header + div.fields 多列（liubo 2026-10-19 R11：删掉 idx_name 重复，div.fields 第一列已显示）
+    # 3. 合并的 div.fields 4 列：参考指数 / 主指标 / 估值 / 调仓建议
     idx_code = get_category_index(category)
-    if idx_code:
-        block.append({
-            "tag": "markdown",
-            "content": "**估值**",
-        })
-        fields = _build_valuation_fields(idx_code)
-        block.append({"tag": "div", "fields": fields})
-    else:
-        # 无统一基准（QDII 主动主题） — 仅保留向后兼容
-        block.append({
-            "tag": "markdown",
-            "content": "**估值**  _无统一基准_",
-        })
-
-    # 4. 调仓建议（liubo 2026-10-19 拍板 R10：简化版）
     action = decide_category_action(category)
-    action_color_map = {
-        "减仓": "red",
-        "持有": "orange",
-        "加仓": "blue",
-        "建仓": "green",
-    }
-    action_color = action_color_map.get(action["action"], "blue")
-    block.append({
-        "tag": "markdown",
-        "content": (
-            f"**调仓建议**  "
-            f"<text_tag color='{action_color}'>"
-            f"{action['emoji']} {action['action_with_unit']}"
-            f"</text_tag>  "
-            f"{action['reason']}"
-        ),
-    })
+    fields = _build_category_fields(idx_code, action)
+    block.append({"tag": "div", "fields": fields})
 
     return block
 

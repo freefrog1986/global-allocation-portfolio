@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 from datetime import date
 
+import pytest
+
 from global_allocation.portfolio.left_layout_card import (
     build_left_layout_card,
     card_to_json,
@@ -345,15 +347,16 @@ class TestCategorySection:
 
 class TestFundSection:
     """Section 3：各类别基金 + 估值 + 调仓建议
-    （liubo 2026-10-19 拍板 R11：text_tag 仓位 + 估值高低状态 + 删 idx_name 重复）。
+    （liubo 2026-10-19 拍板 R12：删 2 个 sub-md + 估值/调仓建议合并到 1 个 div.fields）。
 
-    每类别块结构（liubo 2026-10-19 R11）：
+    每类别块结构（liubo 2026-10-19 R12）：
     1. div category header：`**{类别}** <tag 占比> <tag 状态>`（icon=tag_outlined）
-    2. markdown `**类下基金（N 只）**` sub-header
-    3. markdown 每只基金 1 行（`<text_tag>X.XX 仓</text_tag> **基金全名（code）**  累计 X CNY`）
-    4. markdown `**估值**` sub-header（liubo R11：删掉 idx_name，div.fields 第一列已显示）
-    5. div · fields 3 列（参考指数 + 主指标 + 估值状态）
-    6. markdown `**调仓建议**`：emoji + action_with_unit + 简化理由
+    2. N 个 markdown 基金行（无 sub-md，直接列）
+       `<text_tag>X.XX 仓</text_tag> **基金全名（code）**  累计 X CNY`
+    3. div · fields 4 列合并：
+       - 参考指数 / 主指标 / 估值状态 / 调仓建议
+
+    R12 改动：删 R11 的「类下基金」和「估值」sub-md；估值 + 调仓建议合并到 1 个 div.fields。
 
     5 个类别块之间用 hr 隔开（最后 1 个不加）。
     """
@@ -448,19 +451,16 @@ class TestFundSection:
         names = [name for _, name in starts]
         assert names == ["港股科技互联网", "港股银行", "亚太除日本", "全球科技主动", "房地产"]
 
-    # ─── 类别块结构（liubo R11：1 div cat header + 3+N md + 1 div.fields 估值） ───
+    # ─── 类别块结构（liubo R12：1 div cat header + N md + 1 div.fields 4 列） ───
 
     def test_category_block_structure(self) -> None:
-        """每个类别块结构（liubo 2026-10-19 R11）：
+        """每个类别块结构（liubo 2026-10-19 R12）：
 
         - 1 div（cat header）
-        - 1 md（类下基金 sub-header）
-        - N md（基金行，含 text_tag）
-        - 1 md（估值 sub-header，R11 简化只留 "**估值**"）
-        - 1 div.fields（参考指数 + 主指标 + 估值状态；3 列）
-        - 1 md（调仓建议）
+        - N md（基金行，含 text_tag；无 sub-md）
+        - 1 div.fields（4 列：参考指数 / 主指标 / 估值 / 调仓建议）
 
-        → 2 div + (3 + N) md
+        → 2 div + N md
         """
         card = build_left_layout_card(report_date=date(2026, 9, 30))
 
@@ -473,16 +473,16 @@ class TestFundSection:
                 1 for el in block
                 if el.get("tag") == "div" and "fields" in el
             )
-            # 1 cat header div + 1 valuation fields div = 2 div total
+            # 1 cat header div + 1 div.fields = 2 div total
             assert div_count == 2, (
-                f"{cat}: 期望 2 个 div（cat header + valuation fields），实际 {div_count}"
+                f"{cat}: 期望 2 个 div（cat header + category fields），实际 {div_count}"
             )
             assert fields_divs == 1, (
-                f"{cat}: 期望 1 个 div.fields（估值段），实际 {fields_divs}"
+                f"{cat}: 期望 1 个 div.fields（合并估值 + 调仓建议），实际 {fields_divs}"
             )
-            # 1 类下基金 sub-md + N fund md + 1 估值 sub-md + 1 调仓建议 md = 3 + N
-            assert md_count == 3 + len(codes), (
-                f"{cat}: 期望 {3 + len(codes)} 个 md，实际 {md_count}"
+            # R12 删 2 个 sub-md：只剩 N fund md
+            assert md_count == len(codes), (
+                f"{cat}: 期望 {len(codes)} 个 md（基金行），实际 {md_count}"
             )
 
     def test_category_header_has_inline_tags(self) -> None:
@@ -515,16 +515,24 @@ class TestFundSection:
             assert cat_div.get("icon", {}).get("token") == "tag_outlined"
             assert cat_div.get("icon", {}).get("color") == "purple"
 
-    def test_类下基金_subheader_format(self) -> None:
-        """类下基金 sub-header markdown：「**类下基金**（N 只）」。"""
+    def test_no_类下基金_subheader(self) -> None:
+        """liubo R12 拍板：删除「类下基金」sub-md，基金行直接列。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         from global_allocation.portfolio.left_layout import STRATEGY_CATEGORIES
         for i, (cat, codes) in enumerate(STRATEGY_CATEGORIES.items()):
             block = self._get_block(card, i)
-            # 第 2 个元素（index 1）是 类下基金 sub-header markdown
-            sub_md = block[1]
-            assert sub_md["tag"] == "markdown"
-            assert f"**类下基金**（{len(codes)} 只）" in sub_md["content"]
+            # 不应该有「类下基金」sub-md
+            for el in block:
+                if el.get("tag") == "markdown" and "**类下基金**" in el.get("content", ""):
+                    pytest.fail(f"{cat}: 不应有「类下基金」sub-md，发现 {el['content']!r}")
+            # 但应至少有 N 行基金 markdown
+            fund_md_count = sum(
+                1 for el in block
+                if el.get("tag") == "markdown" and "<text_tag" in el.get("content", "")
+            )
+            assert fund_md_count == len(codes), (
+                f"{cat}: 期望 {len(codes)} 行基金，实际 {fund_md_count}"
+            )
 
     def test_fund_lines_use_text_tag(self) -> None:
         """基金行含 `<text_tag color='grey'>X.XX 仓</text_tag>`
@@ -572,28 +580,20 @@ class TestFundSection:
         all_text = "\n".join(self._get_fund_lines(card))
         assert "013127" not in all_text
 
-    # ─── 估值段：div.fields 多列（liubo 2026-10-19 R11：3 列 + 估值状态） ───
+    # ─── 估值段：div.fields 多列（liubo 2026-10-19 R12：4 列合并估值 + 调仓建议） ───
 
-    def test_valuation_subheader_format(self) -> None:
-        """估值 sub-header markdown：liubo R11 简化只留 "**估值**"。
-
-        原 R10 写的是「**估值** _{name}（{code}）_」，但 div.fields 第一列就含
-        「**参考指数：**{name}（{code}）」，重复。R11 删除 idx_name 部分。
-        """
+    def test_no_valuation_subheader(self) -> None:
+        """liubo R12 拍板：删除「估值」sub-md，估值信息全在 div.fields 里。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         for i in range(5):
             block = self._get_block(card, i)
-            val_md = next(
-                el for el in block
-                if el.get("tag") == "markdown" and el["content"].startswith("**估值**")
-            )
-            # R11 简化：只显示 "**估值**"（不再含 idx_name 和下划线）
-            assert val_md["content"] == "**估值**", (
-                f"类 {i} 估值 sub-header 期望 '**估值**'，实际 {val_md['content']!r}"
-            )
+            # 不应该有「**估值**」sub-md
+            for el in block:
+                if el.get("tag") == "markdown" and "**估值**" in el.get("content", ""):
+                    pytest.fail(f"类 {i}: 不应有「估值」sub-md，发现 {el['content']!r}")
 
-    def test_valuation_div_fields_has_3_columns(self) -> None:
-        """估值 div.fields 含 3 列 is_short=true（参考指数 + 主指标 + 估值状态）。"""
+    def test_category_div_fields_has_4_columns(self) -> None:
+        """类别 div.fields 含 4 列 is_short=true（参考指数 / 主指标 / 估值 / 调仓建议）。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         for i in range(5):
             block = self._get_block(card, i)
@@ -602,16 +602,18 @@ class TestFundSection:
                 if el.get("tag") == "div" and "fields" in el
             )
             fields = fields_div["fields"]
-            assert len(fields) == 3, f"类 {i} 估值 fields 期望 3 列，实际 {len(fields)}"
-            # 3 列 is_short=true → 横向并排
+            assert len(fields) == 4, f"类 {i} 字段期望 4 列，实际 {len(fields)}"
+            # 4 列 is_short=true → 横向并排 2×2
             assert all(f["is_short"] is True for f in fields)
             # 全部 lark_md（加粗/颜色才渲染）
             assert all(f["text"]["tag"] == "lark_md" for f in fields)
-            # 第 1 列 = 参考指数，第 2 列 = 主指标，第 3 列 = 估值状态
+            # 列 1 = 参考指数，列 2 = 主指标，列 3 = 估值，列 4 = 调仓建议
             assert "参考指数" in fields[0]["text"]["content"]
-            assert fields[1]["text"]["content"].startswith("**")  # PE-TTM 或 PB
+            assert "**" in fields[1]["text"]["content"]  # PE-TTM / PB / —
             assert "估值" in fields[2]["text"]["content"]
             assert "<text_tag" in fields[2]["text"]["content"]
+            assert "调仓建议" in fields[3]["text"]["content"]
+            assert "<text_tag" in fields[3]["text"]["content"]
 
     def test_港股通科技_valuation(self) -> None:
         """港股科技互联网 → 港股通科技 (987008.sz) PE-TTM 23.10@13.14% → 低估。"""
@@ -689,28 +691,38 @@ class TestFundSection:
         # 估值状态：无分位数据 → 显示「—」灰色
         assert "<text_tag color='grey'>—</text_tag>" in fields[2]["text"]["content"]
 
-    # ─── 调仓建议段（liubo 2026-10-19 R10：action_with_unit + 简化理由） ───
+    # ─── 调仓建议段（liubo 2026-10-19 R12：在 div.fields 第 4 列） ───
 
-    def test_调仓建议_segment_present(self) -> None:
-        """每个类别块都有「**调仓建议**」markdown 段。"""
+    def test_调仓建议_in_field4(self) -> None:
+        """调仓建议在 div.fields 第 4 列（liubo R12 拍板合并到 fields 里）。
+
+        R11 还是独立 markdown；R12 删掉该 md，合并到 div.fields 最后一列。
+        """
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         for i in range(5):
             block = self._get_block(card, i)
-            sug_md = next(
+            # 不应有独立「**调仓建议**」md
+            for el in block:
+                if el.get("tag") == "markdown" and "**调仓建议**" in el.get("content", ""):
+                    pytest.fail(f"类 {i}: R12 调仓建议应在 div.fields，不应独立 md")
+            # 但 div.fields 第 4 列应有
+            fields_div = next(
                 el for el in block
-                if el.get("tag") == "markdown" and "**调仓建议**" in el["content"]
+                if el.get("tag") == "div" and "fields" in el
             )
-            assert sug_md["tag"] == "markdown"
+            field4 = fields_div["fields"][3]
+            assert "**调仓建议：**" in field4["text"]["content"]
+            assert "<text_tag" in field4["text"]["content"]
 
     def test_港股超限_减仓(self) -> None:
-        """港股科技互联网 74.2% 超限 → ⚠️ 减 1 仓  仓位超 15% 上限（liubo R10 简化）。"""
+        """港股科技互联网 74.2% 超限 → ⚠️ 减 1 仓  仓位超 15% 上限（liubo R12 在 field4）。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         block = self._get_block(card, 0)
-        sug_md = next(
+        fields_div = next(
             el for el in block
-            if el.get("tag") == "markdown" and "**调仓建议**" in el["content"]
+            if el.get("tag") == "div" and "fields" in el
         )
-        content = sug_md["content"]
+        content = fields_div["fields"][3]["text"]["content"]
         assert "<text_tag color='red'>" in content
         assert "⚠️" in content
         # R10：action_with_unit = "减 1 仓"（带空格）；不用 "减仓"
@@ -725,11 +737,11 @@ class TestFundSection:
         """未超限的类别 → ➕ 加 1 仓（蓝色 tag）+ 简化理由「仓位 X%，离 15% 上限还有 Y CNY」。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         block = self._get_block(card, 1)  # 港股银行
-        sug_md = next(
+        fields_div = next(
             el for el in block
-            if el.get("tag") == "markdown" and "**调仓建议**" in el["content"]
+            if el.get("tag") == "div" and "fields" in el
         )
-        content = sug_md["content"]
+        content = fields_div["fields"][3]["text"]["content"]
         # R10：tag 内容是 emoji + action_with_unit（「加 1 仓」），不是「加仓」
         assert "加 1 仓" in content
         assert "➕" in content
