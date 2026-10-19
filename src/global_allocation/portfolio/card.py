@@ -484,6 +484,8 @@ ETF_DISPLAY_ORDER: dict[str, int] = {
     "HSCGSI": 11,  # 恒生消费指数 — 行业（理杏仁代码 HSCGSI）
     "HSIDI": 12,   # 恒生创新药指数 — 行业
     "HSTECH": 13,  # 恒生科技 — 行业（持仓 013127）
+    # 港股 4 个 ETF 指数（第三十七轮 liubo 2026-10-19 加 HSHDYI 恒生高股息率指数）
+    "HSHDYI": 14, # 恒生高股息率指数 — 因子策略（跨行业高息股组合）
 }
 
 

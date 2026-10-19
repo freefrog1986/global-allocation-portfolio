@@ -937,21 +937,25 @@ class TestBuildEvaluations:
 
 
 class TestWatchlistEvaluations:
-    """INDEX_WATCHLIST 评估（恒生消费 HSCG / 恒生创新药 HSIDI / 日经 225 / 法国 CAC 40 / A100）。"""
+    """INDEX_WATCHLIST 评估（恒生消费 HSCGSI / 恒生创新药 HSIDI / 恒生高股息率 HSHDYI /
+    日经 225 / 法国 CAC 40 / A100 + 7 个 A 股 ETF）。"""
 
     def test_hsi_not_in_watchlist(self) -> None:
         """HSI 恒生指数不在 INDEX_WATCHLIST 里（liubo 2026-10-19 不再追踪）。"""
         index_codes = [w[1] for w in INDEX_WATCHLIST]
         assert "HSI" not in index_codes
 
-    def test_hscg_hsidi_in_watchlist(self) -> None:
-        """港股 3 个 ETF 指数都在 INDEX_WATCHLIST（HSCGSI + HSIDI + HSTECH via 013127）。
+    def test_hscg_hsidi_hshdyi_in_watchlist(self) -> None:
+        """港股 3 个 watchlist ETF 指数都在 INDEX_WATCHLIST（HSCGSI + HSIDI + HSHDYI）。
 
-        liubo 2026-10-19 拍板：HSCG 理杏仁代码 = HSCGSI（不是 HSCG），不要混淆。
+        liubo 2026-10-19 拍板：
+        - HSCG 理杏仁代码 = HSCGSI（不是 HSCG），不要混淆
+        - 港股加 HSHDYI 恒生高股息率指数（高股息策略跨行业 50 只）
         """
         index_codes = [w[1] for w in INDEX_WATCHLIST]
         assert "HSCGSI" in index_codes  # 恒生消费指数（理杏仁代码）
         assert "HSIDI" in index_codes  # 恒生创新药指数
+        assert "HSHDYI" in index_codes  # 恒生高股息率指数（2026-10-19 加）
         assert "HSCG" not in index_codes  # 不是 HSCG！
 
     def test_build_watchlist_returns_one_per_entry(self) -> None:
@@ -1052,13 +1056,13 @@ class TestWeeklyRebalancePlan:
         #   CN_REIT 1 → 1
         #   US_REIT 1 → 1
         #   COMMODITY 1 → 1
-        # watchlist (12 = 2 旧 + 8 新 A 股 + 2 新 HSCGSI/HSIDI):
-        #   HSCGSI 1 + HSIDI 1 + 国外发达 2 (.N225/.FCHI) + A 股 8
-        #   = 12 (per INDEX_WATCHLIST，HSI 已去掉)
+        # watchlist (13 = 2 旧 + 8 新 A 股 + 3 新 HK: HSCGSI / HSIDI / HSHDYI):
+        #   HSCGSI 1 + HSIDI 1 + HSHDYI 1 + 国外发达 2 (.N225/.FCHI) + A 股 8
+        #   = 13 (per INDEX_WATCHLIST，HSI 已去掉)
         #   但 7 A 股 INDEX_WATCHLIST 已被持仓覆盖 → 不产生 action
-        #   → 实际 watchlist action: HSCGSI 1 + HSIDI 1 + .N225 1 + .FCHI 1 + A100 1 = 5
-        # 合计: 7 + 1 + 3 + 1 + 1 + 1 + 1 + 1 + 5 = 21
-        assert len(actions) == 21
+        #   → 实际 watchlist action: HSCGSI 1 + HSIDI 1 + HSHDYI 1 + .N225 1 + .FCHI 1 + A100 1 = 6
+        # 合计: 7 + 1 + 3 + 1 + 1 + 1 + 1 + 1 + 6 = 22
+        assert len(actions) == 22
 
     def test_foreign_dm_indices_appear_in_watchlist(self) -> None:
         """FOREIGN_DM_EQUITY：3 个评估（.N225 watchlist + .GDAXI 来自 000614 fund + .FCHI watchlist）。
@@ -1212,6 +1216,31 @@ class TestWeeklyRebalancePlan:
         assert hsidi.signal == PESignal.HOLD
         assert hsidi.metric_percentile == Decimal("0.6513")
         assert hsidi.metric_value == Decimal("2.7825")
+
+    def test_hshdyi_appears_with_real_pe(self) -> None:
+        """HSHDYI 恒生高股息率指数 watchlist 出现在 plan 里。
+
+        liubo 2026-10-19 拍板：加 HSHDYI 跟踪 HK 高股息策略（跨行业 50 只，含 HSBC/AIA/HKEX/港铁/中电
+        等高股息龙头）。
+
+        lixinger 不直接给 HSHDYI PE 分位（frog_20261016.csv 没有）。用 legulegu 月度估值：
+        PE-TTM = 9.47 / 历史分位 89.89%（2019-04~2026-09 区间，>80% 算 REDUCE 区间）。
+
+        注意：HSHDYI 0 仓位 + 分位 89.89% >= 50% → 走 HOLD（等便宜），不是 REDUCE。
+        REDUCE 只对仓位 >0 触发；持仓为空时高分位是「别追」信号。
+        """
+        actions = weekly_rebalance_plan()
+        hshdyi_actions = [a for a in actions if a.etf_index_code == "HSHDYI"]
+        assert len(hshdyi_actions) == 1
+        hshdyi = hshdyi_actions[0]
+        assert hshdyi.subclass == SwensenClass.HK_EQUITY
+        assert hshdyi.current_position == Decimal("0")
+        assert hshdyi.metric == ValuationMetric.PE_TTM
+        # 仓位 = 0 + 分位 89.89% >= 50% → HOLD（不是 REDUCE — REDUCE 只对仓位 >0 触发）
+        assert hshdyi.signal == PESignal.HOLD
+        assert hshdyi.metric_percentile == Decimal("0.8989")
+        assert hshdyi.metric_value == Decimal("9.47")
+        assert hshdyi.fund_code == "(HSHDYI)"  # watchlist 标记
 
     def test_hstech_appears_with_013127(self) -> None:
         """HSTECH 恒生科技：2026-09-29 liubo 把 013127 转到大类资产。
