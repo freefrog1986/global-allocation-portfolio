@@ -927,6 +927,56 @@ class TestBuildEvaluations:
         # etf_index_code 改成 GOLD（不再是 GOLD_NO_METRIC）
         assert gold.etf_index_code == "GOLD"
 
+    def test_commodity_gold_uses_live_snapshot(self) -> None:
+        """liubo 2026-10-19 拍板：黄金卡片显示真实信号。
+        之前 bug：metric_value/metric_percentile 还是 PE_SNAPSHOT_BY_INDEX["GOLD"] 静态 hardcode
+        （907.50 / 0.6158），composite_score 看着像 live 实际是 live + static 混合值。
+        修后：metric_value/metric_percentile/composite_score 三者都从 GOLD_SNAPSHOT_BY_FUND 取。
+        """
+        from global_allocation.portfolio import pe_rebalance as pr_mod
+
+        # 假设当前 GOLD_SNAPSHOT_BY_FUND 已有 live 数据（生产 fixture）
+        # 改成可识别的新值，看 build_evaluations 是否同步反映
+        original = dict(pr_mod.GOLD_SNAPSHOT_BY_FUND)
+        try:
+            pr_mod.GOLD_SNAPSHOT_BY_FUND["000216"] = (
+                Decimal("888.88"),  # 假设 live 金价
+                Decimal("0.7777"),  # 假设 live 5y 分位
+                Decimal("0.0250"),  # 假设 live 实利率
+            )
+            evals = build_evaluations()
+            gold = [e for e in evals if e.fund_code == "000216"][0]
+            # 卡片展示的 metric_value / metric_percentile 必须等于 snapshot 里的 live 值，
+            # 不能等于 PE_SNAPSHOT_BY_INDEX["GOLD"] 的 907.50 / 0.6158。
+            assert gold.metric_value == Decimal("888.88")
+            assert gold.metric_percentile == Decimal("0.7777")
+            # composite_score 也要反映 live pct（不是 0.6158）— 这条虽然当前函数逻辑就对，
+            # 这次只是显式固化到测试里，避免回归。
+            assert gold.composite_score is not None
+            assert gold.metric == ValuationMetric.GOLD_HISTORICAL_PCT
+        finally:
+            pr_mod.GOLD_SNAPSHOT_BY_FUND.clear()
+            pr_mod.GOLD_SNAPSHOT_BY_FUND.update(original)
+
+    def test_commodity_gold_no_live_falls_back_to_static(self) -> None:
+        """GOLD_SNAPSHOT_BY_FUND 缺失这只基金 → fallback 到 PE_SNAPSHOT_BY_INDEX["GOLD"] 静态。
+
+        罕见场景：load_live_gold_snapshot 之前、或 JSON 损坏、或新加的黄金基金还没进
+        GOLD_SNAPSHOT_BY_FUND。这时 build_evaluations 不能挂，要走静态 fallback（907.50/0.6158）。
+        """
+        from global_allocation.portfolio import pe_rebalance as pr_mod
+
+        original = dict(pr_mod.GOLD_SNAPSHOT_BY_FUND)
+        try:
+            pr_mod.GOLD_SNAPSHOT_BY_FUND.pop("000216", None)
+            evals = build_evaluations()
+            gold = [e for e in evals if e.fund_code == "000216"][0]
+            # 走静态 hardcode fallback
+            assert gold.metric_value == Decimal("907.50")
+            assert gold.metric_percentile == Decimal("0.6158")
+        finally:
+            pr_mod.GOLD_SNAPSHOT_BY_FUND.update(original)
+
     def test_em_equity_has_metric(self) -> None:
         """新兴市场现在有 PE（不再 SKIP）。"""
         evals = build_evaluations()

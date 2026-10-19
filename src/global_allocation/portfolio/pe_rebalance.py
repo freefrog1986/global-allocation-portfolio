@@ -1143,15 +1143,28 @@ def build_evaluations() -> list[FundPEvaluation]:
 
     每只基金 1 个 FundPEvaluation（不合并 — 由 merge_by_etf 后续处理）。
     snapshot 缺数据的 → PE=None → evaluate_fund 返回 SKIP。
-    黄金（spec 099）：额外从 GOLD_SNAPSHOT_BY_FUND 算 2 指标综合分填 composite_score。
 
-    REITs（spec REITs-DY — liubo 2026-10-12 拍板）：优先用 LIVE_REIT_SNAPSHOT_BY_INDEX
-    的 DY 数据；空则 SKIP（reason 提示跑 `gap portfolio reit-fetch`）。
+    数据来源优先级（liubo 2026-10-19 拍板要让卡片显示真实信号）：
+    1. **黄金**（spec 099 — liubo 2026-10-08） → GOLD_SNAPSHOT_BY_FUND live（金价 + 5 年分位 + 实利率），
+       不再读 PE_SNAPSHOT_BY_INDEX["GOLD"] 静态 hardcode。之前 composite_score 用 live 但
+       metric_value/metric_percentile 还显示旧值（907.50 / 0.6158），卡片文字 misleading；
+       现在统一用 live，飞书表格的「估值」列才会显示当周真实金价 + 真实分位。
+    2. **REITs**（spec REITs-DY — liubo 2026-10-12） → LIVE_REIT_SNAPSHOT_BY_INDEX 的 DY 数据；
+       空则 SKIP（reason 提示跑 `gap portfolio reit-fetch`）。
+    3. 其它（股票 / 现金） → PE_SNAPSHOT_BY_INDEX 静态 or 缺失。
     """
     out: list[FundPEvaluation] = []
     for fund_code, (subclass, index_code, fund_name) in FUND_INDEX_MAP.items():
-        # REITs 走 live snapshot，stock / 黄金走静态 PE_SNAPSHOT_BY_INDEX
-        if index_code in LIVE_REIT_SNAPSHOT_BY_INDEX:
+        # 数据源选择：黄金 > REITs > 静态 PE_SNAPSHOT
+        if fund_code in GOLD_SNAPSHOT_BY_FUND:
+            # 黄金 live：3 字段 = (gold_price, gold_pct_5y, real_yield_dfii10)
+            # action 只取前 2 个（价格 + 分位）展示在卡片估值列；
+            # 第 3 字段（实际利率）走 composite_score 路径，详见 _compute_gold_composite
+            gold_price, gold_pct, _ry = GOLD_SNAPSHOT_BY_FUND[fund_code]
+            metric = ValuationMetric.GOLD_HISTORICAL_PCT
+            value = gold_price
+            pct = gold_pct
+        elif index_code in LIVE_REIT_SNAPSHOT_BY_INDEX:
             metric, value, pct, data_date = LIVE_REIT_SNAPSHOT_BY_INDEX[index_code]
         else:
             snapshot = PE_SNAPSHOT_BY_INDEX.get(index_code)
@@ -1159,7 +1172,7 @@ def build_evaluations() -> list[FundPEvaluation]:
                 metric, value, pct = ValuationMetric.PE_TTM, None, None
             else:
                 metric, value, pct = snapshot
-        # 黄金算综合分（spec 099）
+        # 黄金算综合分（spec 099 — 用 live pct + live ry）
         composite = _compute_gold_composite(fund_code, value, pct)
         out.append(
             FundPEvaluation(
