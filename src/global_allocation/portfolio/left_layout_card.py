@@ -9,16 +9,26 @@
 - **同基金冷却期**：30 天（同一只基金月度内不要频繁交易；liubo 2026-10-19 拍板从 7 天延长）
 - **无止盈止损**：纯主观，无自动规则
 
-卡片结构（liubo 2026-10-19 拍板，Card 2.0 schema）：
+卡片结构（liubo 2026-10-19 拍板 R10，Card 2.0 schema）：
 - header.title: "左侧布局组合周报"
 - header.subtitle: "YYYY-MM-DD"（独立副标题字段，v2 才支持）
 - header.template: purple
 - header.text_tag_list: ["左侧布局"] 状态标签
 - body.elements（3 段）：
-  - Section 1（组合总览）：div · fields 5 个 label-value + hr
-  - Section 2（类别上限状态）：chart · 柱状图（VChart spec）+ hr（liubo 2026-10-19 拍板从 table 改 chart）
-  - Section 3（各基金详情）：table 9 行 + 5 列
+  - Section 1（组合总览）：div · fields 6 个 label-value + hr
+  - Section 2（类别上限状态）：chart · 饼图（VChart spec）+ hr（liubo 2026-10-19 拍板从柱图改饼图）
+  - Section 3（各类别基金 + 估值 + 调仓建议）：5 个类别块，每块 5 段（liubo 2026-10-19 R10）：
+    1. 类别 header div：bold 类别名 + 2 个 inline text_tag（占比% + 状态）
+    2. 「类下基金」 sub-md + 每只基金 md（**基金全名（code）** 含 number_tag + 累计 CNY）
+    3. 「估值」 sub-md + div.fields 多列（参考指数 + 主指标，如 PE-TTM）
+    4. 「调仓建议」 md：emoji + action_with_unit + 简化理由
   - footer 灰色 markdown（原 v1 footer 字段在 v2 没了，改用 body 末尾灰色注释）
+
+R10 关键变化（liubo 2026-10-19 拍板）：
+- 类下基金行：用 `<number_tag>` 显示仓数（X.XX 仓），bold 基金全名 + 累计成本
+- 估值段：从 R9 的「5 指标 + YTD + ROE 季度史」巨长 markdown，简化为 div.fields 2 列
+  （参考指数 + 1 个主指标，如 PE-TTM：23.10@13.14%）
+- 调仓建议：简化 `⚠️ 减 1 仓  仓位超 15% 上限`，去掉冗余长理由
 
 Schema 升级原因：v1.0 header 没 `subtitle` 字段，要支持"主标题/副标题分开"必须升 v2.0。
 publisher 走的是 `msg_type: "interactive"`，v1/v2 同样适用，不影响发送层。
@@ -37,24 +47,14 @@ from global_allocation.portfolio.left_layout import (
     POSITION_UNIT_CNY,
     STRATEGY_CATEGORIES,
     TOTAL_COST_CNY,
-    CURRENT_TOTAL_ASSETS_CNY,
-    CURRENT_TOTAL_PNL_CNY,
-    CURRENT_TOTAL_RETURN_PCT,
-    CURRENT_SNAPSHOT_DATE,
     CATEGORY_CAP_PCT,
     COOLDOWN_DAYS,
-    INDEX_BY_CATEGORY,
     decide_category_action,
     get_category_cap_status,
     get_category_index,
-    get_category_index_name,
     get_index_name,
-    get_index_valuation,
-    get_index_valuation_summary,
+    get_index_primary_metric,
     get_position,
-    get_rebalance_suggestion,
-    get_strategy,
-    get_valuation,
 )
 
 
@@ -66,17 +66,6 @@ def _fmt_money(cny: Decimal, with_sign: bool = False) -> str:
     if with_sign:
         return f"{float(cny):+,.2f}"
     return f"{float(cny):,.2f}"
-
-
-def _fmt_pct(pct: Decimal, with_sign: bool = True) -> str:
-    """分位/收益率格式化（输入 fraction 0~1）：+12.34% / -6.52%。"""
-    sign = "+" if with_sign else ""
-    return f"{sign}{float(pct) * 100:.2f}%"
-
-
-def _fmt_position(pos: Decimal) -> str:
-    """仓位格式化：'X.XX 仓'（X.XX 单位 = 5,000 CNY）。"""
-    return f"{float(pos):.2f} 仓"
 
 
 # ─── Section 1: 组合总览 ─────────────────────────────
@@ -207,18 +196,21 @@ def _build_category_section(today: date) -> list[dict[str, Any]]:
 
 
 def _format_fund_line(code: str) -> str:
-    """生成单只基金的展示行（飞书卡片 Section 3 类别块里「类下基金」段用）。
+    """生成单只基金的展示行（liubo 2026-10-19 拍板 R10：number_tag）。
 
-    格式：**基金全名（code）**  累计 X CNY · 仓位 X.XX
-    （估值/调仓已上移到类别级，避免重复）
+    格式：`<number_tag background_color='grey' font_color='white'>X.XX</number_tag> **基金全名（code）**  累计 X CNY`
+
+    number_tag 直观显示仓位（仓数），bold 基金全名便于扫读，累计成本紧跟其后。
+    不再在末尾追加「X.XX 仓」文字 — 仓数已经在 number_tag 里。
     """
     cost = COST_BASIS_BY_CODE.get(code, Decimal("0"))
     pos = get_position(code)
+    pos_str = f"{float(pos):.2f}"
     fund_name = f"{FUND_FULL_NAME_BY_CODE.get(code, DISPLAY_NAME.get(code, code))}（{code}）"
     return (
+        f"<number_tag background_color='grey' font_color='white'>{pos_str}</number_tag> "
         f"**{fund_name}**  "
-        f"累计 {_fmt_money(cost)} CNY · "
-        f"仓位 {_fmt_position(pos)}"
+        f"累计 {_fmt_money(cost)} CNY"
     )
 
 
@@ -237,14 +229,41 @@ def _category_status_color(pct_of_total: float, is_over: bool) -> str:
     return "blue"
 
 
+def _build_valuation_fields(idx_code: str) -> list[dict[str, Any]]:
+    """估值段 fields（liubo 2026-10-19 拍板 R10：2 列 label-value）。
+
+    第一个 field = 参考指数（飞书卡片「参考指数：{name}（{code}）」）
+    第二个 field = 主指标（如 PE-TTM：23.10@13.14%；房地产用 PB：0.760@13.27%）
+
+    2 列 is_short=true 横向并排（参考指数 | 主指标）。
+
+    无 idx_code → 返回空 list（由调用方处理「无统一基准」展示）。
+    """
+    if not idx_code:
+        return []
+    idx_name = get_index_name(idx_code)
+    primary_label, primary_value = get_index_primary_metric(idx_code)
+    return [
+        {"is_short": True, "text": {"tag": "lark_md",
+                                    "content": f"**参考指数：** {idx_name}（{idx_code}）"}},
+        {"is_short": True, "text": {"tag": "lark_md",
+                                    "content": f"**{primary_label}：** {primary_value}"}},
+    ]
+
+
 def _build_category_block(category: str, today: date) -> list[dict[str, Any]]:
-    """单个类别的完整块（liubo 2026-10-19 拍板 R9：5 段）。
+    """单个类别的完整块（liubo 2026-10-19 拍板 R10：5 段）。
 
     5 段：
-    1. 类别 header div：bold 类别名 + 2 个 inline tag（占比% + 状态）
-    2. 「类下基金」 sub-header markdown + 每只基金 markdown
-    3. 「估值」 markdown：指数名称 + 5 项指标 + YTD + ROE 季度史
-    4. 「调仓建议」 markdown：4 选 1 + 理由
+    1. 类别 header div：bold 类别名 + 2 个 inline text_tag（占比% + 状态）
+    2. 「类下基金」 sub-md + 每只基金 md（含 number_tag）
+    3. 「估值」 sub-md + div.fields 多列（参考指数 + 1 个主指标）
+    4. 「调仓建议」 md：emoji + action_with_unit + 简化理由
+
+    R10 简化（liubo 2026-10-19 拍板）：
+    - 类下基金行加 number_tag，删「仓位 X.XX 仓」文字（仓数已显示在 tag 里）
+    - 估值段从 R9 的「5 指标 + YTD + ROE 季度史」巨长 markdown → div.fields 2 列
+    - 调仓建议去掉「占 X%，超 15% 上限（老仓位豁免）」冗余前缀 → 「仓位超 15% 上限」
     """
     status = get_category_cap_status(category)
     pct = float(status["pct_of_total"]) * 100
@@ -264,7 +283,7 @@ def _build_category_block(category: str, today: date) -> list[dict[str, Any]]:
         "icon": {"tag": "standard_icon", "token": "tag_outlined", "color": "purple"},
     }]
 
-    # 2. 类下基金：sub-header + 每只基金 markdown
+    # 2. 类下基金：sub-header + 每只基金 markdown（number_tag + bold name + cost）
     codes = STRATEGY_CATEGORIES[category]
     block.append({
         "tag": "markdown",
@@ -276,34 +295,24 @@ def _build_category_block(category: str, today: date) -> list[dict[str, Any]]:
             "content": _format_fund_line(code),
         })
 
-    # 3. 估值：指数名 + 5 指标 + YTD + ROE 季度史
+    # 3. 估值：sub-header + div.fields 多列
     idx_code = get_category_index(category)
-    idx_name = get_index_name(idx_code) if idx_code else "无统一基准"
-    val_summary = get_index_valuation_summary(idx_code)
-    ytd = get_index_valuation(idx_code, "ytd_pct")
-    roe_history = get_index_valuation(idx_code, "roe_history")
-    fund_count = get_index_valuation(idx_code, "fund_count")
-    followers = get_index_valuation(idx_code, "followers")
+    if idx_code:
+        idx_name = get_index_name(idx_code)
+        block.append({
+            "tag": "markdown",
+            "content": f"**估值**  _{idx_name}（{idx_code}）_",
+        })
+        fields = _build_valuation_fields(idx_code)
+        block.append({"tag": "div", "fields": fields})
+    else:
+        # 无统一基准（QDII 主动主题） — 仅保留向后兼容
+        block.append({
+            "tag": "markdown",
+            "content": "**估值**  _无统一基准_",
+        })
 
-    val_lines = [
-        f"**估值**  _{idx_name}" + (f"（{idx_code}）" if idx_code else "") + "_",
-        f"  {val_summary}",
-    ]
-    if ytd != "—":
-        val_lines.append(f"  今年 YTD：{ytd}")
-    if roe_history != "—":
-        val_lines.append(f"  ROE 季度史：{roe_history}")
-    if fund_count != "—":
-        val_lines.append(f"  跟踪基金：{fund_count}")
-    if followers != "—":
-        val_lines.append(f"  关注人数：{followers}")
-
-    block.append({
-        "tag": "markdown",
-        "content": "\n".join(val_lines),
-    })
-
-    # 4. 调仓建议（4 选 1）
+    # 4. 调仓建议（liubo 2026-10-19 拍板 R10：简化版）
     action = decide_category_action(category)
     action_color_map = {
         "减仓": "red",
@@ -317,7 +326,7 @@ def _build_category_block(category: str, today: date) -> list[dict[str, Any]]:
         "content": (
             f"**调仓建议**  "
             f"<text_tag color='{action_color}'>"
-            f"{action['emoji']} {action['action']}"
+            f"{action['emoji']} {action['action_with_unit']}"
             f"</text_tag>  "
             f"{action['reason']}"
         ),

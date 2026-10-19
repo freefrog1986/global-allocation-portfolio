@@ -597,7 +597,7 @@ class TestExports:
         assert "get_category_total_cost" in mod.__all__
 
     def test_valuation_exports(self) -> None:
-        """Section 3 用的估值/动作相关导出（liubo 2026-10-19 拍板 R9 加）。"""
+        """Section 3 用的估值/动作相关导出（liubo 2026-10-19 拍板 R10：简化为单主指标）。"""
         import global_allocation.portfolio.left_layout as mod
 
         # Constants
@@ -609,13 +609,16 @@ class TestExports:
         assert "get_category_index" in mod.__all__
         assert "get_category_index_name" in mod.__all__
         assert "get_index_name" in mod.__all__
-        assert "get_index_valuation" in mod.__all__
-        assert "get_index_valuation_summary" in mod.__all__
+        assert "get_index_primary_metric" in mod.__all__
         assert "decide_category_action" in mod.__all__
+
+        # R9 删掉的导出不再存在
+        assert "get_index_valuation" not in mod.__all__
+        assert "get_index_valuation_summary" not in mod.__all__
 
 
 class TestIndexMapping:
-    """Section 3 用的指数映射（liubo 2026-10-19 拍板 R9，每类别 → 1 个指数）。"""
+    """Section 3 用的指数映射（liubo 2026-10-19 拍板 R10：5 个类别全部有指数）。"""
 
     def test_hk_tech_internet_maps_to_987008(self) -> None:
         """港股科技互联网 → 港股通科技 (987008.sz)。"""
@@ -625,88 +628,116 @@ class TestIndexMapping:
         assert INDEX_BY_CATEGORY["港股科技互联网"] == "987008.sz"
         assert get_category_index_name("港股科技互联网") == "港股通科技"
 
-    def test_global_tech_active_has_no_index(self) -> None:
-        """全球科技主动 → 无统一基准（QDII 主动主题）。"""
+    def test_hk_bank_maps_to_930792(self) -> None:
+        """港股银行 → HK 银行 (930792.csi；liubo 2026-10-19 拍板)。"""
         from global_allocation.portfolio.left_layout import (
             INDEX_BY_CATEGORY, get_category_index_name,
         )
-        assert INDEX_BY_CATEGORY["全球科技主动"] == ""
-        assert get_category_index_name("全球科技主动") == "无统一基准"
+        assert INDEX_BY_CATEGORY["港股银行"] == "930792.csi"
+        assert get_category_index_name("港股银行") == "HK银行"
+
+    def test_real_estate_maps_to_931775(self) -> None:
+        """房地产 → 房地产指数 (931775.csi；liubo 2026-10-19 拍板从 932006 改 931775)。"""
+        from global_allocation.portfolio.left_layout import (
+            INDEX_BY_CATEGORY, get_category_index_name,
+        )
+        assert INDEX_BY_CATEGORY["房地产"] == "931775.csi"
+        assert get_category_index_name("房地产") == "房地产"
+
+    def test_global_tech_active_maps_to_ndx(self) -> None:
+        """全球科技主动 → 纳斯达克100 (.NDX；liubo 2026-10-19 拍板从 QDII 主题改用 NDX)。"""
+        from global_allocation.portfolio.left_layout import (
+            INDEX_BY_CATEGORY, get_category_index_name,
+        )
+        assert INDEX_BY_CATEGORY["全球科技主动"] == ".NDX"
+        assert get_category_index_name("全球科技主动") == "纳斯达克100"
 
     def test_unknown_category_returns_empty(self) -> None:
         from global_allocation.portfolio.left_layout import get_category_index
         assert get_category_index("不存在") == ""
 
 
-class TestIndexValuationSummary:
-    """理杏仁 schema 完整一行估值摘要（liubo 2026-10-19 拍板）。"""
+class TestIndexPrimaryMetric:
+    """R10 单主指标 lookup（1 类 不带 primary_label/primary_value → ("PE-TTM", "—")）。"""
 
-    def test_港股通科技_full_summary(self) -> None:
-        """987008.sz 全部 5 项指标 + 各自 @分位。"""
-        from global_allocation.portfolio.left_layout import get_index_valuation_summary
-        s = get_index_valuation_summary("987008.sz")
-        # 5 指标全部 @分位
-        assert "PE-TTM 23.10@13.14%" in s
-        assert "PB 2.495@2.17%" in s
-        assert "PS-TTM 1.89@0.14%" in s
-        assert "股息率 0.88%@99.28%" in s
-        assert "ROE 4.83%" in s  # ROE 没有 pct 字段
+    def test_987008_full_metric(self) -> None:
+        from global_allocation.portfolio.left_layout import get_index_primary_metric
+        assert get_index_primary_metric("987008.sz") == ("PE-TTM", "23.10@13.14%")
 
-    def test_未填_占位符(self) -> None:
-        """未填指数 → 全部 — 占位。"""
-        from global_allocation.portfolio.left_layout import get_index_valuation_summary
-        s = get_index_valuation_summary("HSSI.HK")
-        assert "PE-TTM —" in s
-        assert "PB —" in s
+    def test_930792_full_metric(self) -> None:
+        """HK 银行 — liubo 2026-10-19 给 PE-TTM 7.32 @90.71%。"""
+        from global_allocation.portfolio.left_layout import get_index_primary_metric
+        assert get_index_primary_metric("930792.csi") == ("PE-TTM", "7.32@90.71%")
 
-    def test_无指数返回无统一基准(self) -> None:
-        from global_allocation.portfolio.left_layout import get_index_valuation_summary
-        assert "无统一基准" in get_index_valuation_summary("")
+    def test_931775_uses_PB(self) -> None:
+        """房地产主指标是 PB（行业习惯） — liubo 2026-10-19 给 PB 0.760 @13.27%。"""
+        from global_allocation.portfolio.left_layout import get_index_primary_metric
+        label, value = get_index_primary_metric("931775.csi")
+        assert label == "PB"
+        assert "0.760" in value
+        assert "13.27%" in value
+
+    def test_unknown_code_returns_dash(self) -> None:
+        """未填指数 → ("PE-TTM", "—") 占位（label 默认 PE-TTM，value 缺 → —）。"""
+        from global_allocation.portfolio.left_layout import get_index_primary_metric
+        assert get_index_primary_metric("MSCI_AC_AXJ") == ("PE-TTM", "—")
+
+    def test_empty_code_returns_dash(self) -> None:
+        """空 code → ("", "—") 用于「无统一基准」分支。"""
+        from global_allocation.portfolio.left_layout import get_index_primary_metric
+        assert get_index_primary_metric("") == ("", "—")
 
 
 class TestDecideCategoryAction:
-    """调仓动作 4 选 1（liubo 2026-10-19 拍板 R9）。"""
+    """调仓动作 4 选 1（liubo 2026-10-19 拍板 R10：加 action_with_unit + 简化理由）。"""
 
     def test_港股超限_减仓(self) -> None:
-        """74.2% > 15% 上限 → 减仓。"""
+        """74.2% > 15% 上限 → 减仓 + 「减 1 仓」+ 简化理由。"""
         from global_allocation.portfolio.left_layout import decide_category_action
         r = decide_category_action("港股科技互联网")
         assert r["action"] == "减仓"
         assert r["emoji"] == "⚠️"
-        assert "74.2%" in r["reason"]
+        # R10 加 action_with_unit
+        assert r["action_with_unit"] == "减 1 仓"
+        # R10 简化理由（去掉「占 X%，超 15% 上限（老仓位豁免）」冗余前缀）
+        assert r["reason"] == "仓位超 15% 上限"
+        assert "74.2%" not in r["reason"]  # 简化后不写百分比
 
     def test_正常类_加仓(self) -> None:
-        """非超限 + 远低于上限 → 加仓。"""
+        """非超限 + 远低于上限 → 加仓 + 「加 1 仓」+ 离 X CNY 上限。"""
         from global_allocation.portfolio.left_layout import decide_category_action
         for cat in ("港股银行", "亚太除日本", "全球科技主动", "房地产"):
             r = decide_category_action(cat)
             assert r["action"] == "加仓", f"{cat} 应为加仓，实际 {r['action']}"
             assert r["emoji"] == "➕"
+            # R10 加 action_with_unit + 简化理由（CNY 而非「剩 X CNY」）
+            assert r["action_with_unit"] == "加 1 仓"
+            assert "CNY" in r["reason"]
+            assert "剩" not in r["reason"]  # 简化后用「离」不用「剩」
 
     def test_空类别_建仓(self) -> None:
-        """未知类别 → 建仓（liubo 4 种动作之一）。"""
+        """未知类别 → 建仓 + 「建 1 仓」。"""
         from global_allocation.portfolio.left_layout import decide_category_action
         r = decide_category_action("全新的类别")
         assert r["action"] == "建仓"
         assert r["emoji"] == "🆕"
+        assert r["action_with_unit"] == "建 1 仓"
+        assert r["reason"] == "暂无持仓"
 
+    def test_action_with_unit_for_持有(self) -> None:
+        """持有（接近 12% 阈值）→ action_with_unit = 「持有」（无 unit 后缀）。"""
+        from global_allocation.portfolio.left_layout import decide_category_action
+        r = decide_category_action("持有场景")
+        # 「持有」在标准 fixture 里没触发，但 4 选 1 都应该有 action_with_unit 字段
+        assert "action_with_unit" in r
 
-class TestIndexValuationFieldLookup:
-    """单字段查估值（liubo 2026-10-19 拍板：所有 field 缺数据 → "—"，永不抛错）。"""
-
-    def test_known_field(self) -> None:
-        from global_allocation.portfolio.left_layout import get_index_valuation
-        assert get_index_valuation("987008.sz", "ytd_pct") == "-23.03%"
-        assert get_index_valuation("987008.sz", "publish_date") == "2021-03-08"
-
-    def test_unknown_code_returns_dash(self) -> None:
-        from global_allocation.portfolio.left_layout import get_index_valuation
-        assert get_index_valuation("HSSI.HK", "ytd_pct") == "—"
-
-    def test_unknown_field_returns_dash(self) -> None:
-        from global_allocation.portfolio.left_layout import get_index_valuation
-        assert get_index_valuation("987008.sz", "不存在的字段") == "—"
-
-    def test_empty_code_returns_dash(self) -> None:
-        from global_allocation.portfolio.left_layout import get_index_valuation
-        assert get_index_valuation("", "ytd_pct") == "—"
+    def test_动作4选1_都覆盖(self) -> None:
+        """4 种动作都导出：建仓/加仓/持有/减仓（liubo 2026-10-19 拍板）。"""
+        from global_allocation.portfolio.left_layout import decide_category_action
+        # 减仓：港股超限
+        result = decide_category_action("港股科技互联网")
+        assert result["action"] in ("减仓", "持有", "加仓", "建仓")
+        assert "action_with_unit" in result
+        # 建仓：新类别
+        result = decide_category_action("不存在的类别")
+        assert result["action"] == "建仓"

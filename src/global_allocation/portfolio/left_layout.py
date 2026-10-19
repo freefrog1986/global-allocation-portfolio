@@ -125,58 +125,48 @@ INDEX_BY_CATEGORY: dict[str, str] = {
     # 006327 跟踪中证海外互联网 50，014673 跟踪中证港股通互联网，016495 跟踪中证港股通科技
     # 3 只主题近似但跟踪指数不同；先选 016495 的港股通科技（liubo 2026-10-19 拍板理杏仁示例）
     "港股科技互联网": "987008.sz",  # 港股通科技指数（016495 跟踪）
-    "港股银行": "HSSI.HK",           # 港股银行指数（HSSI / HK Bank Index）
-    "亚太除日本": "MSCI_AC_AXJ",     # MSCI AC Asia ex Japan
-    "全球科技主动": "",               # QDII 主动主题，无统一基准
-    "房地产": "932006.CSI",          # 中证全指房地产（008613/010989 跟踪的中证房地产指数近似 932006）
+    "港股银行": "930792.csi",        # liubo 2026-10-19 拍板：HK 银行（理杏仁）
+    "亚太除日本": "MSCI_AC_AXJ",     # MSCI AC Asia ex Japan（数据未填）
+    "全球科技主动": ".NDX",          # 纳斯达克 100（liubo 2026-10-19 拍板；数据未填）
+    "房地产": "931775.csi",          # liubo 2026-10-19 拍板：房地产指数（理杏仁）
 }
 
 
 # 指数代码 → 显示名称（liubo 2026-10-19 拍板 Section 3 「估值」首字段）。
 INDEX_DISPLAY_NAME_BY_CODE: dict[str, str] = {
     "987008.sz": "港股通科技",
-    "HSSI.HK": "港股银行指数 (HSSI)",
+    "930792.csi": "HK银行",
     "MSCI_AC_AXJ": "MSCI AC Asia ex Japan",
-    "932006.CSI": "中证全指房地产 (932006)",
+    ".NDX": "纳斯达克100",
+    "931775.csi": "房地产",
 }
 
 
-# 指数代码 → 完整估值 dict（liubo 手动维护，飞书卡片「估值」字段用）。
-# 字段集（参照理杏仁指数详情页 liubo 2026-10-19 给的 schema）：
-#   publish_date: 发布时间
-#   ytd_pct: 今年以来涨跌幅（如 "-23.03%"）
-#   fund_count: 跟踪基金数（如 "30"）
-#   pe_ttm: PE-TTM 当前值
-#   pe_pct: PE-TTM 当前值分位点%
-#   pb: PB 当前值
-#   pb_pct: PB 分位点%
-#   ps_ttm: PS-TTM 当前值
-#   ps_pct: PS-TTM 分位点%
-#   div_yield: 股息率
-#   div_pct: 股息率 分位点%
-#   roe: ROE %
-#   roe_history: 近 3 季度 ROE（"11.00% / 6.44% / 4.83%"）
-#   followers: 关注数
-# 空 dict = 估值字段全 "—"，等 liubo 后填（liubo 2026-10-19 拍板加完整 schema）。
+# 指数代码 → 估值 dict（liubo 手动维护，飞书卡片「估值」字段用）。
+# liubo 2026-10-19 拍板 R10：每个类别只展示 1 个主打估值指标（简化版）。
+# 字段集：
+#   primary_label: 主指标名（如 "PE-TTM" / "PB"）
+#   primary_value: 主指标的值（如 "23.10@13.14%" — 值 @ 当前值分位点%）
+# 注意：R9 schema 全 11 字段已简化为这 2 个；未来如需多指标，扩展 primary_label 为 list。
 INDEX_VALUATION_BY_CODE: dict[str, dict[str, str]] = {
-    # 港股通科技 (987008.sz) — liubo 2026-10-19 拍板给的值（理杏仁指数详情页截图）
+    # 港股通科技 (987008.sz) — PE-TTM 23.10 @13.14%（liubo 2026-10-19 拍板 R10）
     "987008.sz": {
-        "publish_date": "2021-03-08",
-        "ytd_pct": "-23.03%",
-        "fund_count": "30 (6 场内 + 14 场外)",
-        "pe_ttm": "23.10",
-        "pe_pct": "13.14%",
-        "pb": "2.495",
-        "pb_pct": "2.17%",
-        "ps_ttm": "1.89",
-        "ps_pct": "0.14%",
-        "div_yield": "0.88%",
-        "div_pct": "99.28%",
-        "roe": "4.83%",
-        "roe_history": "11.00% / 6.44% / 4.83%（2025Q2 → 2026Q2）",
-        "followers": "99",
+        "primary_label": "PE-TTM",
+        "primary_value": "23.10@13.14%",
     },
-    # 其余 4 个指数暂未填，liubo 后续补
+    # HK 银行 (930792.csi) — PE-TTM 7.32 @90.71%（liubo 2026-10-19 给数据）
+    "930792.csi": {
+        "primary_label": "PE-TTM",
+        "primary_value": "7.32@90.71%",
+    },
+    # 房地产 (931775.csi) — PB 0.760 @13.27%（liubo 2026-10-19 给数据）
+    # 注意：房地产的主指标是 PB 不是 PE-TTM（行业习惯用 PB 看估值）
+    "931775.csi": {
+        "primary_label": "PB",
+        "primary_value": "0.760@13.27%",
+    },
+    # 纳斯达克100 (.NDX) — 数据未填（liubo 后续补）
+    # 亚太除日本 (MSCI_AC_AXJ) — 数据未填
 }
 
 
@@ -185,14 +175,22 @@ def get_index_name(index_code: str) -> str:
     return INDEX_DISPLAY_NAME_BY_CODE.get(index_code, index_code or "无统一基准")
 
 
-def get_index_valuation(index_code: str, field: str) -> str:
-    """查指数某字段估值（liubo 2026-10-19 拍板 Section 3 用）。
-    未知 code / 未知 field → "—"（永不抛错）。
+def get_index_primary_metric(index_code: str) -> tuple[str, str]:
+    """查指数的主打估值指标（liubo 2026-10-19 拍板 R10：1 个指标简版）。
+
+    Returns:
+        (label, value) 元组：
+        - label = "PE-TTM" 等指标名，未填 → ""
+        - value = "23.10@13.14%" 等值 + 分位点%，未填 → "—"
+
+    例：get_index_primary_metric("987008.sz") → ("PE-TTM", "23.10@13.14%")
+        get_index_primary_metric("") → ("", "—")
+        get_index_primary_metric("HSSI.HK") → ("PE-TTM", "—")  # 字段缺
     """
     if not index_code:
-        return "—"
+        return ("", "—")
     data = INDEX_VALUATION_BY_CODE.get(index_code, {})
-    return data.get(field, "—")
+    return (data.get("primary_label", "PE-TTM"), data.get("primary_value", "—"))
 
 
 # 合计：71,420 元（9 只左侧布局组合基金；2026-09-28 liubo 全部校准完成 + 2026-09-29 减 013127 -25000 + 2026-09-30 加 010989 +5000）
@@ -277,36 +275,8 @@ def get_category_index_name(category: str) -> str:
     return INDEX_DISPLAY_NAME_BY_CODE.get(code, code)
 
 
-def get_index_valuation_summary(index_code: str) -> str:
-    """一行格式摘要（liubo 2026-10-19 拍板 Section 3 用）。
-
-    字段 = 「PE-TTM val@pct% · PB val@pct% · PS-TTM val@pct% · 股息率 val@pct% · ROE val%」
-    缺数据 → "—"，无指数 → "无统一基准"
-    """
-    if not index_code:
-        return "无统一基准（QDII 主动主题）"
-    fields = (
-        ("pe_ttm", "pe_pct", "PE-TTM"),
-        ("pb", "pb_pct", "PB"),
-        ("ps_ttm", "ps_pct", "PS-TTM"),
-        ("div_yield", "div_pct", "股息率"),
-        ("roe", None, "ROE"),
-    )
-    parts: list[str] = []
-    for val_field, pct_field, label in fields:
-        v = get_index_valuation(index_code, val_field)
-        p = get_index_valuation(index_code, pct_field) if pct_field else ""
-        if v == "—":
-            parts.append(f"{label} —")
-        elif p and p != "—":
-            parts.append(f"{label} {v}@{p}")
-        else:
-            parts.append(f"{label} {v}")
-    return " · ".join(parts)
-
-
 def decide_category_action(category: str) -> dict[str, str]:
-    """给某类别决定调仓动作（liubo 2026-10-19 拍板 Section 3 4 选 1）。
+    """给某类别决定调仓动作（liubo 2026-10-19 拍板 Section 3 R10：4 选 1 + 仓数单位）。
 
     4 种动作：
     - **减仓** — 类别累计 > 15% 上限（老仓位豁免，但动作还是减仓以提示集中度风险）
@@ -314,12 +284,19 @@ def decide_category_action(category: str) -> dict[str, str]:
     - **加仓** — 距离上限有空间 → 还有加仓余地
     - **建仓** — 该类别还没有任何子基金 → 主观选标的
 
+    R10 加 unit 字段：单笔 = 1 仓（POSITION_UNIT_CNY = 5000）。
+    - 减仓 → 「减 1 仓」
+    - 加仓 → 「加 1 仓」
+    - 建仓 → 「建 1 仓」
+    - 持有 → 「持有」（无 unit）
+
     Args:
         category: 类别名。
 
     Returns:
         dict 含:
           - action: 4 选 1（"减仓" / "持有" / "加仓" / "建仓"）
+          - action_with_unit: 卡片里显示的动作字符串（"减 1 仓" 等）
           - reason: 人类可读的具体原因（含具体数字）
           - emoji: 在卡片里用的 emoji 前缀
     """
@@ -328,7 +305,8 @@ def decide_category_action(category: str) -> dict[str, str]:
         # 该类别下还没有任何子基金 → 建仓
         return {
             "action": "建仓",
-            "reason": f"{category} 暂无持仓",
+            "action_with_unit": "建 1 仓",
+            "reason": "暂无持仓",
             "emoji": "🆕",
         }
 
@@ -340,20 +318,23 @@ def decide_category_action(category: str) -> dict[str, str]:
     if status["is_over"]:
         return {
             "action": "减仓",
-            "reason": f"占 {pct:.1f}%，超 15% 上限（老仓位豁免）",
+            "action_with_unit": "减 1 仓",
+            "reason": "仓位超 15% 上限",
             "emoji": "⚠️",
         }
     if pct >= near_threshold:
         return {
             "action": "持有",
-            "reason": f"占 {pct:.1f}%，接近 12% 阈值（≤ 15% 上限），不加不减",
+            "action_with_unit": "持有",
+            "reason": f"仓位 {pct:.1f}%，接近 12% 阈值，不加不减",
             "emoji": "✋",
         }
     return {
         "action": "加仓",
+        "action_with_unit": "加 1 仓",
         "reason": (
-            f"占 {pct:.1f}%，离 15% 上限还有 {cap_pct - pct:.1f}% 余地（剩 "
-            f"{float(status['remaining_cny']):,.0f} CNY）"
+            f"仓位 {pct:.1f}%，离 15% 上限还有 "
+            f"{float(status['remaining_cny']):,.0f} CNY"
         ),
         "emoji": "➕",
     }
@@ -622,7 +603,6 @@ __all__ = [
     "INDEX_BY_CATEGORY",
     "INDEX_DISPLAY_NAME_BY_CODE",
     "INDEX_VALUATION_BY_CODE",
-    "CATEGORY_VALUATION_BY_CATEGORY",
     "get_strategy",
     "get_cost_basis",
     "get_position",
@@ -630,8 +610,7 @@ __all__ = [
     "get_category_index",
     "get_category_index_name",
     "get_index_name",
-    "get_index_valuation",
-    "get_index_valuation_summary",
+    "get_index_primary_metric",
     "decide_category_action",
     "get_rebalance_suggestion",
     "get_category_total_cost",
