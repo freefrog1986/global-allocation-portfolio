@@ -1592,7 +1592,7 @@ class TestPerFundSection:
         raise AssertionError("Section 2 标题 '持仓与调仓建议' 未找到")
 
     def test_table_has_55_rows(self, journal: PortfolioJournal) -> None:
-        """per-fund 表行数 = COST_BASIS_BY_CODE 52 + INDEX_WATCHLIST 5（HSCG/HSIDI/N225/FCHI/A100） - 7 dedupe。
+        """per-fund 表行数 = COST_BASIS_BY_CODE 52 + INDEX_WATCHLIST 5（HSCGSI/HSIDI/N225/FCHI/A100） - 7 dedupe。
 
         liubo 2026-10-18 拍板：未持仓的指数也列出，持仓写 0。
         第三十六轮（liubo 2026-10-19）：加 8 个 CN_EQUITY ETF 指数到 INDEX_WATCHLIST（A50/A100/A500/
@@ -1692,7 +1692,7 @@ class TestPerFundSection:
     def test_sorted_by_subclass_then_etf_index_then_code(self, journal: PortfolioJournal) -> None:
         """第三十三轮（liubo 2026-10-18）：按 (subclass_order, etf_index_code, code_or_marker) 排。
 
-        同 ETF 指数聚一起（如 NDX 5 只挨着），未持仓指数（HSCG/HSIDI/N225/FCHI/A100）夹在大类里出现。
+        同 ETF 指数聚一起（如 NDX 5 只挨着），未持仓指数（HSCGSI/HSIDI/N225/FCHI/A100）夹在大类里出现。
         """
         from global_allocation.portfolio.breakdown import SUBCLASS_BY_CODE
         from global_allocation.portfolio.cost_basis import COST_BASIS_BY_CODE
@@ -1727,7 +1727,7 @@ class TestPerFundSection:
                 actual_codes.append(code)
         # watchlist rows use etf_index as marker — adjust expected accordingly
         expected_markers_with_index = [
-            f"({code})" if code in {"HSCG", "HSIDI", ".N225", ".FCHI"} else code
+            f"({code})" if code in {"HSCGSI", "HSIDI", ".N225", ".FCHI"} else code
             for code in expected_markers
         ]
         # 简化：只检查排序 key（subclass 顺序），不强求精确代码对齐 watchlist

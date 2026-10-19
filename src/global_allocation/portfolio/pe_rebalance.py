@@ -380,28 +380,29 @@ INDEX_WATCHLIST: list[tuple[SwensenClass, str, str, ValuationMetric, Decimal, De
         Decimal("0.3645"),
     ),
     # ── 港股 恒生消费指数（liubo 2026-10-19 拍板：港股也要跟踪）──
-    # HSCG = Hang Seng Consumer Goods Index / 恒生消费指数（理杏仁代码）。
-    # PE / 分位数据 liubo 待补；先用 0 占位让 watchlist 行能渲染（显示 "PE-TTM 0.00 / 分位 0.00%"）。
-    # liubo 给数据后直接改这两个 Decimal 即可。
+    # 理杏仁代码 = HSCGSI（Hang Seng Consumer Goods & Services Index，不是 HSCG）。
+    # 数据源：data/lixinger/frog_20261016.csv（liubo 2026-10-19 提供）。
+    # 分位 0.73% < 20% → 深价值，建仓窗口。
     (
         SwensenClass.HK_EQUITY,
-        "HSCG",
+        "HSCGSI",
         "恒生消费指数",
         ValuationMetric.PE_TTM,
-        Decimal("0"),  # TODO liubo 2026-10-19：恒生消费指数 PE-TTM 待补
-        Decimal("0"),  # TODO liubo 2026-10-19：10 年分位待补
+        Decimal("13.5728"),   # 理杏仁 2026-10-16
+        Decimal("0.0073"),    # 10 年分位 0.73% < 20% → 深价值
     ),
     # ── 港股 恒生创新药指数（liubo 2026-10-19 拍板：港股加跟踪）──
-    # HSIDI = Hang Seng Innovative Drug Index / 恒生创新药指数。
+    # HSIDI = Hang Seng Innovative Drug Index。
     # URL: https://www.lixinger.com/analytics/index/detail/hk/HSIDI/2198
-    # PE / 分位数据 liubo 待补；先用 0 占位。
+    # 数据源：data/lixinger/frog_20261016.csv（liubo 2026-10-19 提供）。
+    # 分位 9.23% < 20% → 深价值，建仓窗口。
     (
         SwensenClass.HK_EQUITY,
         "HSIDI",
         "恒生创新药指数",
         ValuationMetric.PE_TTM,
-        Decimal("0"),  # TODO liubo 2026-10-19：恒生创新药指数 PE-TTM 待补
-        Decimal("0"),  # TODO liubo 2026-10-19：10 年分位待补
+        Decimal("32.0545"),   # 理杏仁 2026-10-16
+        Decimal("0.0923"),    # 10 年分位 9.23% < 20% → 深价值
     ),
 ]
 
@@ -528,7 +529,7 @@ INDEX_DISPLAY_NAME: dict[str, str] = {
     ".MSCI_US_REIT": "MSCI US REIT",
     "932006": "中证 REITs",
     "HSTECH": "恒生科技",   # 第三十六轮（liubo 2026-10-19）补：港股卡 013127 行 etf_index 列之前显示 "—"
-    "HSCG": "恒生消费指数",  # 第三十六轮（liubo 2026-10-19 拍板）：港股也跟踪
+    "HSCGSI": "恒生消费指数",  # 第三十六轮（liubo 2026-10-19 拍板）：港股也跟踪；理杏仁代码 HSCGSI
     "HSIDI": "恒生创新药指数",  # 第三十六轮（liubo 2026-10-19 拍板）：港股加跟踪
     "GOLD": "黄金",
 }
