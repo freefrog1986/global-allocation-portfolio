@@ -129,18 +129,20 @@ STRATEGY_CATEGORIES: dict[str, list[str]] = {
 
 
 # 各类别用的估值指数（liubo 2026-10-19 拍板 Section 3 加「估值」字段用）。
-# 格式：{类别名: 指数代码}，跟理杏仁对得上；空字符串 = 无统一基准。
-# liubo 选指数时只挑**一个权威指数**作为该类别估值参照；
-# QDII 主动主题类别没有共同跟踪指数 → 标 "" 不估值。
-INDEX_BY_CATEGORY: dict[str, str] = {
+# 格式：{类别名: [指数代码, ...]}，跟理杏仁对得上；空 list = 无统一基准。
+# liubo 选指数时挑**权威指数**作为该类别估值参照；
+# 2026-10-20 liubo 拍板：全球科技主动要**同时参考两个**指数（纳指100 + 费城半导体），
+# 所以值改成 list，卡片里用「 / 」并列展示。QDII 主动主题类别 → 空 list 不估值。
+INDEX_BY_CATEGORY: dict[str, list[str]] = {
     # 港股科技互联网 3 只：006327 / 014673 / 016495
     # 006327 跟踪中证海外互联网 50，014673 跟踪中证港股通互联网，016495 跟踪中证港股通科技
     # 3 只主题近似但跟踪指数不同；先选 016495 的港股通科技（liubo 2026-10-19 拍板理杏仁示例）
-    "港股科技互联网": "987008.sz",  # 港股通科技指数（016495 跟踪）
-    "港股银行": "930792.csi",        # liubo 2026-10-19 拍板：HK 银行（理杏仁）
-    "亚太除日本": "MSCI_AC_AXJ",     # MSCI AC Asia ex Japan（数据未填）
-    "全球科技主动": ".SOX",          # 费城半导体（liubo 2026-10-20 拍板，原 .NDX；数据未填）
-    "房地产": "931775.csi",          # liubo 2026-10-19 拍板：房地产指数（理杏仁）
+    "港股科技互联网": ["987008.sz"],  # 港股通科技指数（016495 跟踪）
+    "港股银行": ["930792.csi"],        # liubo 2026-10-19 拍板：HK 银行（理杏仁）
+    "亚太除日本": ["MSCI_AC_AXJ"],     # MSCI AC Asia ex Japan（数据未填）
+    # 全球科技主动：liubo 2026-10-20 拍板**两个都要**，不删纳指 100
+    "全球科技主动": [".NDX", ".SOX"],
+    "房地产": ["931775.csi"],          # liubo 2026-10-19 拍板：房地产指数（理杏仁）
 }
 
 
@@ -289,17 +291,21 @@ def get_valuation(fund_code: str) -> str:
     return VALUATION_BY_CODE.get(fund_code, "—")
 
 
-def get_category_index(category: str) -> str:
-    """查某类别用的估值指数代码（liubo 2026-10-19 拍板 Section 3 用）。未知 → ""。"""
-    return INDEX_BY_CATEGORY.get(category, "")
+def get_category_indices(category: str) -> list[str]:
+    """查某类别用的估值指数代码列表（liubo 2026-10-19 拍板 Section 3 用）。
+
+    2026-10-20 liubo 拍板全球科技主动要同时参考 2 个指数 → 改成返回 list。
+    未知类别 → 空 list。
+    """
+    return INDEX_BY_CATEGORY.get(category, [])
 
 
 def get_category_index_name(category: str) -> str:
-    """查某类别用的估值指数显示名（liubo 2026-10-19 拍板 Section 3 用）。"""
-    code = get_category_index(category)
-    if not code:
+    """查某类别用的估值指数显示名（多指数用「 / 」并列）。未知 → 「无统一基准」。"""
+    codes = get_category_indices(category)
+    if not codes:
         return "无统一基准"
-    return INDEX_DISPLAY_NAME_BY_CODE.get(code, code)
+    return " / ".join(INDEX_DISPLAY_NAME_BY_CODE.get(c, c) for c in codes)
 
 
 def decide_category_action(category: str) -> dict[str, str]:
@@ -634,7 +640,7 @@ __all__ = [
     "get_cost_basis",
     "get_position",
     "get_valuation",
-    "get_category_index",
+    "get_category_indices",
     "get_category_index_name",
     "get_index_name",
     "get_index_primary_metric",

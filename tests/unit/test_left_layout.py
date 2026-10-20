@@ -622,7 +622,7 @@ class TestExports:
         assert "INDEX_VALUATION_BY_CODE" in mod.__all__
 
         # Functions
-        assert "get_category_index" in mod.__all__
+        assert "get_category_indices" in mod.__all__
         assert "get_category_index_name" in mod.__all__
         assert "get_index_name" in mod.__all__
         assert "get_index_primary_metric" in mod.__all__
@@ -641,7 +641,7 @@ class TestIndexMapping:
         from global_allocation.portfolio.left_layout import (
             INDEX_BY_CATEGORY, get_category_index_name,
         )
-        assert INDEX_BY_CATEGORY["港股科技互联网"] == "987008.sz"
+        assert INDEX_BY_CATEGORY["港股科技互联网"] == ["987008.sz"]
         assert get_category_index_name("港股科技互联网") == "港股通科技"
 
     def test_hk_bank_maps_to_930792(self) -> None:
@@ -649,7 +649,7 @@ class TestIndexMapping:
         from global_allocation.portfolio.left_layout import (
             INDEX_BY_CATEGORY, get_category_index_name,
         )
-        assert INDEX_BY_CATEGORY["港股银行"] == "930792.csi"
+        assert INDEX_BY_CATEGORY["港股银行"] == ["930792.csi"]
         assert get_category_index_name("港股银行") == "HK银行"
 
     def test_real_estate_maps_to_931775(self) -> None:
@@ -657,23 +657,25 @@ class TestIndexMapping:
         from global_allocation.portfolio.left_layout import (
             INDEX_BY_CATEGORY, get_category_index_name,
         )
-        assert INDEX_BY_CATEGORY["房地产"] == "931775.csi"
+        assert INDEX_BY_CATEGORY["房地产"] == ["931775.csi"]
         assert get_category_index_name("房地产") == "房地产"
 
-    def test_global_tech_active_maps_to_sox(self) -> None:
-        """全球科技主动 → 费城半导体 (.SOX；liubo 2026-10-20 从 .NDX 改成费城半导体)。
+    def test_global_tech_active_has_two_indices(self) -> None:
+        """全球科技主动 → **两个**指数：纳指100 (.NDX) + 费城半导体 (.SOX)。
 
-        2026-10-20 加了 501226/019331/017436 后 liubo 指定费城半导体作估值基准。
+        liubo 2026-10-20 拍板：「全球科技主动这个类别要参考的估值包括两个指数，
+        一个是纳斯达克100，一个是费城半导体，你不要删除纳指100」。
         """
         from global_allocation.portfolio.left_layout import (
-            INDEX_BY_CATEGORY, get_category_index_name,
+            INDEX_BY_CATEGORY, get_category_index_name, get_category_indices,
         )
-        assert INDEX_BY_CATEGORY["全球科技主动"] == ".SOX"
-        assert get_category_index_name("全球科技主动") == "费城半导体"
+        assert INDEX_BY_CATEGORY["全球科技主动"] == [".NDX", ".SOX"]
+        assert get_category_indices("全球科技主动") == [".NDX", ".SOX"]
+        assert get_category_index_name("全球科技主动") == "纳斯达克100 / 费城半导体"
 
     def test_unknown_category_returns_empty(self) -> None:
-        from global_allocation.portfolio.left_layout import get_category_index
-        assert get_category_index("不存在") == ""
+        from global_allocation.portfolio.left_layout import get_category_indices
+        assert get_category_indices("不存在") == []
 
 
 class TestIndexPrimaryMetric:

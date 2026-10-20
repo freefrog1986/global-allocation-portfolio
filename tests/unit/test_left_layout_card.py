@@ -711,11 +711,12 @@ class TestFundSection:
         # 估值状态：13.27% < 20% → 低估（green）
         assert "<text_tag color='green'>低估</text_tag>" in fields[2]["text"]["content"]
 
-    def test_全球科技主动_SOX(self) -> None:
-        """全球科技主动 → 费城半导体 (.SOX)，数据未填 → 主指标/估值状态都显示「—」。
+    def test_全球科技主动_两个指数_NDX_and_SOX(self) -> None:
+        """全球科技主动 → 纳指100 (.NDX) + 费城半导体 (.SOX) **两个都显示**。
 
-        2026-10-20 liubo 加 501226/019331/017436 后把估值基准从 .NDX 改成
-        费城半导体（.SOX）；PE/PB + 分位点 liubo 还没给，所以主指标和状态都空。
+        liubo 2026-10-20 拍板：「全球科技主动这个类别要参考的估值包括两个指数，
+        一个是纳斯达克100，一个是费城半导体，你不要删除纳指100」。
+        .NDX 有 PB 9.08（无分位），.SOX 数据未填 → 两个状态都是灰色「—」。
         """
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         block = self._get_block(card, 3)
@@ -724,12 +725,19 @@ class TestFundSection:
             if el.get("tag") == "div" and "fields" in el
         )
         fields = fields_div["fields"]
-        assert "费城半导体" in fields[0]["text"]["content"]
-        assert ".SOX" in fields[0]["text"]["content"]
-        # 主指标：.SOX 未填数据 → 「—」
-        assert "—" in fields[1]["text"]["content"]
-        # 估值状态：没有分位数据 → 显示「—」灰色
-        assert "<text_tag color='grey'>—</text_tag>" in fields[2]["text"]["content"]
+        # 列 1：两个参考指数并列
+        col1 = fields[0]["text"]["content"]
+        assert "纳斯达克100（.NDX）" in col1
+        assert "费城半导体（.SOX）" in col1
+        assert " / " in col1
+        # 列 2：两个主指标并列（.NDX 有 PB 9.08，.SOX 未填 → PE-TTM —）
+        col2 = fields[1]["text"]["content"]
+        assert "PB：9.08" in col2
+        assert "PE-TTM：—" in col2
+        # 列 3：两个估值状态并列，都无分位 → 灰色「—」
+        assert fields[2]["text"]["content"].count(
+            "<text_tag color='grey'>—</text_tag>"
+        ) == 2
 
     # ─── 调仓建议段（liubo 2026-10-19 R12：在 div.fields 第 4 列） ───
 

@@ -51,7 +51,7 @@ from global_allocation.portfolio.left_layout import (
     COOLDOWN_DAYS,
     decide_category_action,
     get_category_cap_status,
-    get_category_index,
+    get_category_indices,
     get_index_name,
     get_index_primary_metric,
     get_position,
@@ -270,7 +270,7 @@ def _valuation_status(pct: float | None) -> tuple[str, str]:
     return ("中性", "blue")
 
 
-def _build_category_fields(idx_code: str, action: dict[str, str]) -> list[dict[str, Any]]:
+def _build_category_fields(idx_codes: list[str], action: dict[str, str]) -> list[dict[str, Any]]:
     """类别块底部 div.fields（liubo 2026-10-19 拍板 R12：4 列合并）。
 
     4 列 is_short=true（横向并排 2×2）：
@@ -281,16 +281,22 @@ def _build_category_fields(idx_code: str, action: dict[str, str]) -> list[dict[s
 
     合并 R11 的「估值 div.fields（3 列）+ 调仓建议 md（1 段）」到 1 个 div.fields，
     删掉两个 sub-md 小标题（类下基金 / 估值），更紧凑。
+
+    2026-10-20 liubo 拍板：全球科技主动要**同时参考 2 个指数**（纳指100 + 费城半导体），
+    所以列 1-3 各按「 / 」并列第 N 个指数的数据；单指数类别输出与之前完全一致。
     """
-    # 列 1-3：估值数据
-    if idx_code:
-        idx_name = get_index_name(idx_code)
-        primary_label, primary_value = get_index_primary_metric(idx_code)
-        pct = _parse_primary_pct(primary_value)
-        status_text, status_color = _valuation_status(pct)
-        col1 = f"参考指数：{idx_name}（{idx_code}）"
-        col2 = f"{primary_label}：{primary_value}"
-        col3 = f"估值：<text_tag color='{status_color}'>{status_text}</text_tag>"
+    # 列 1-3：估值数据（多指数用「 / 」并列）
+    if idx_codes:
+        names, metrics, status_tags = [], [], []
+        for c in idx_codes:
+            label, value = get_index_primary_metric(c)
+            status_text, status_color = _valuation_status(_parse_primary_pct(value))
+            names.append(f"{get_index_name(c)}（{c}）")
+            metrics.append(f"{label}：{value}")
+            status_tags.append(f"<text_tag color='{status_color}'>{status_text}</text_tag>")
+        col1 = "参考指数：" + " / ".join(names)
+        col2 = " / ".join(metrics)
+        col3 = "估值：" + " / ".join(status_tags)
     else:
         # 无统一基准（QDII 主动主题）
         col1 = "参考指数：无统一基准"
@@ -374,9 +380,9 @@ def _build_category_block(category: str, today: date, ordinal: int) -> list[dict
         })
 
     # 3. 合并的 div.fields 4 列：参考指数 / 主指标 / 估值 / 调仓建议
-    idx_code = get_category_index(category)
+    idx_codes = get_category_indices(category)
     action = decide_category_action(category)
-    fields = _build_category_fields(idx_code, action)
+    fields = _build_category_fields(idx_codes, action)
     block.append({"tag": "div", "fields": fields})
 
     return block
