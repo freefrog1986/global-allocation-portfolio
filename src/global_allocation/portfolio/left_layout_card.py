@@ -196,26 +196,25 @@ def _build_category_section(today: date) -> list[dict[str, Any]]:
 
 
 def _format_fund_line(code: str) -> str:
-    """生成单只基金的展示行（liubo 2026-10-19 拍板 R10/R11：text_tag 显示仓位）。
+    """生成单只基金的展示行（liubo 2026-10-20 拍板 R17：markdown 列表 + 仓位移到后面）。
 
-    格式：`<text_tag color='grey'>X.XX 仓</text_tag> 基金全名（code）  累计 X CNY`
+    格式：`- {基金全名}（{code}） {X.XX} 仓  累计 {cost} CNY`
 
-    R11 修订：R10 用 `<number_tag value='X.XX' color='grey' />` 是 OK 的（API 200），
-    但 liubo 飞书客户端 renderer 不识别 number_tag，把源码字面量当文本显示出来。
-    退回 R10 之前的方案：用 text_tag 包「X.XX 仓」整个串，text_tag 在 R9 验证能渲染。
-
-    R15 修订：去掉基金全名的 **bold**（liubo 2026-10-20：「除了各标题，其他字体不要加粗」）。
-    只保留 text_tag 作为视觉重点，bold 仅用于标题（Section header / 类别 header）。
-
-    text_tag 视觉：灰底白字圆角 tag，便于扫读；不靠 bold 强调。
+    变更历史：
+    - R10/R11：用 `<text_tag color='grey'>X.XX 仓</text_tag>` 包在最前
+    - R15：去掉基金全名的 **bold**
+    - R17（liubo 2026-10-20）：
+      - 去掉 text_tag，仓位「X.XX 仓」移到最后当普通文字（liubo：
+        「前面的xx仓，不要用tag，就放后面和文字一样」）
+      - 基金行用 markdown 列表 `- ` 前缀（liubo：「这些基金搞成富文本的列表星星」）
+        — 飞书 lark_md 渲染为带项目符号的列表
     """
     cost = COST_BASIS_BY_CODE.get(code, Decimal("0"))
     pos = get_position(code)
     pos_str = f"{float(pos):.2f}"
     fund_name = f"{FUND_FULL_NAME_BY_CODE.get(code, DISPLAY_NAME.get(code, code))}（{code}）"
     return (
-        f"<text_tag color='grey'>{pos_str} 仓</text_tag> "
-        f"{fund_name}  "
+        f"- {fund_name} {pos_str} 仓  "
         f"累计 {_fmt_money(cost)} CNY"
     )
 

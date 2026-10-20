@@ -352,7 +352,7 @@ class TestFundSection:
     每类别块结构（liubo 2026-10-19 R12）：
     1. div category header：`**{类别}** <tag 占比> <tag 状态>`（icon=tag_outlined）
     2. N 个 markdown 基金行（无 sub-md，直接列）
-       `<text_tag>X.XX 仓</text_tag> **基金全名（code）**  累计 X CNY`
+       `- 基金全名（code） X.XX 仓  累计 X CNY`
     3. div · fields 4 列合并：
        - 参考指数 / 主指标 / 估值状态 / 调仓建议
 
@@ -384,10 +384,11 @@ class TestFundSection:
         return elements[start:end]
 
     def _get_fund_lines(self, card: dict) -> list[str]:
-        """类下基金段：所有「<text_tag>X.XX 仓</text_tag> **基金全名（code）** ...」行
+        """类下基金段：所有 `- 基金全名（code） X.XX 仓  累计 X CNY` 行
         （不含 类下基金 sub-header / 估值 sub-header / 调仓建议）。
 
-        历史：R10 用 `<number_tag` 标识基金行；R11 改 text_tag 后更新过滤条件。
+        R10 用 `<number_tag` 标识；R11 改 text_tag；R17 改 markdown 列表 `- ` 前缀，
+        不再用 tag 包仓位，过滤条件改为「以 - 开头 + 含全名（code）」。
         """
         els = self._get_fund_section_elements(card)
         lines: list[str] = []
@@ -402,8 +403,8 @@ class TestFundSection:
                 continue
             if "调仓" in content:
                 continue
-            # 基金行特征：含 text_tag（仓位）+ bold + 全名（code）
-            if "<text_tag" in content and "（" in content and "）" in content:
+            # 基金行特征：markdown 列表前缀 `- ` + 全名（code）
+            if content.startswith("- ") and "（" in content and "）" in content:
                 lines.append(content)
         return lines
 
@@ -557,36 +558,40 @@ class TestFundSection:
             for el in block:
                 if el.get("tag") == "markdown" and "**类下基金**" in el.get("content", ""):
                     pytest.fail(f"{cat}: 不应有「类下基金」sub-md，发现 {el['content']!r}")
-            # 但应至少有 N 行基金 markdown
+            # 但应至少有 N 行基金 markdown（R17：markdown 列表 `- ` 前缀）
             fund_md_count = sum(
                 1 for el in block
-                if el.get("tag") == "markdown" and "<text_tag" in el.get("content", "")
+                if el.get("tag") == "markdown" and el.get("content", "").startswith("- ")
             )
             assert fund_md_count == len(codes), (
                 f"{cat}: 期望 {len(codes)} 行基金，实际 {fund_md_count}"
             )
 
-    def test_fund_lines_use_text_tag(self) -> None:
-        """基金行含 `<text_tag color='grey'>X.XX 仓</text_tag>`
-        （liubo 2026-10-19 R11：number_tag 在 liubo 客户端显示字面量，
-        改用 text_tag 渲染「X.XX 仓」）。
+    def test_fund_lines_markdown_list_no_tag(self) -> None:
+        """基金行 = markdown 列表 + 仓位普通文字（liubo 2026-10-20 R17 拍板）。
 
-        历史：R10 试过 `<number_tag value='X.XX' color='grey' />` 自闭合语法，
-        Feishu API 通过但 liubo 客户端 renderer 不识别，文本中字面量泄漏。
+        - 前缀 `- `（liubo：「这些基金搞成富文本的列表星星」）
+        - 仓位 `X.XX 仓` 不再用 tag 包，移到基金名后面当普通文字
+          （liubo：「前面的 xx 仓，不要用 tag，就放后面和文字一样」）
+
+        历史：R10 number_tag → R11 text_tag → R17 全部去掉 tag。
         """
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         fund_lines = self._get_fund_lines(card)
         # 006327 成本 10,000 → 2.00 仓
         text_006327 = next(l for l in fund_lines if "006327" in l)
-        assert "<text_tag color='grey'>2.00 仓</text_tag>" in text_006327
+        assert text_006327.startswith("- ")
+        assert "易方达中证海外互联网50ETF联接(QDII)A（006327） 2.00 仓" in text_006327
         assert "10,000.00 CNY" in text_006327
         # 457001 成本 4,640 → 0.93 仓
         text_457001 = next(l for l in fund_lines if "457001" in l)
-        assert "<text_tag color='grey'>0.93 仓</text_tag>" in text_457001
+        assert text_457001.startswith("- ")
+        assert "0.93 仓" in text_457001
         assert "4,640.00 CNY" in text_457001
-        # 不再含 number_tag（已切到 text_tag）
-        assert "<number_tag" not in text_006327
-        assert "<number_tag" not in text_457001
+        # 仓位不再被任何 tag 包裹
+        for line in fund_lines:
+            assert "<text_tag" not in line, f"基金行不应含 text_tag：{line!r}"
+            assert "<number_tag" not in line, f"基金行不应含 number_tag：{line!r}"
 
     def test_all_9_funds_present(self) -> None:
         """9 只基金全名 + code 都在 markdown 行里。"""
