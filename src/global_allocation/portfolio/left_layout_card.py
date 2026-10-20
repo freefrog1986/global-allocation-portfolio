@@ -58,12 +58,6 @@ from global_allocation.portfolio.left_layout import (
 )
 
 
-# 「组合规则」section 头部实图（liubo 2026-10-20 直接给的图表插画，替换 standard_icon）。
-# 飞书图片必须先上传换 img_key（POST /open-apis/im/v1/images，image_type=message），
-# 这里存的是上传后返回的 key —— 长期有效，不用每次发卡重新传。
-RULES_SECTION_IMG_KEY = "img_v3_0216l_c9adb839-9a1d-4357-bb14-1112cc25296g"
-
-
 # ─── 格式化 helpers ─────────────────────────────
 
 
@@ -213,9 +207,12 @@ def _build_rules_section(today: date) -> list[dict[str, Any]]:
     - 现在 7 行统一 `名称：<关键值 tag>  说明` 三段式，纵向对齐，一眼看下去有节奏
 
     liubo 2026-10-20 第三轮：把 section 头的 standard_icon 换成他给的实图
-    （图表插画）。飞书 section header div 只吃 icon 不吃 img，所以 header 保留
-    纯文字标题，实图作为紧随其后的 img 元素渲染。
-    （注意：card 2.0 的 img 不认 `aspect_ratio` / 字符串 `title`，加了会 400）
+    （图表插画）。**后来澄清是误解** —— 他只是要我自己换一个图标，不是把他的图
+    贴上去。实图已撤掉，回到 standard_icon。
+    候选 token 实测都合法（compass / flag / lightbulb / info / book / setting /
+    bulb / trophy / check-circle-filled / ok / star / guide），
+    最终用 `setting_outlined`（参数设置，跟这 5 条数值型规则语义贴，
+    也跟另外三段的 report / wallet / 原文的 bookmark+shield 都不撞）。
 
     liubo 2026-10-20 第四轮：规则内容收敛成 5 条（去掉「选标的 / 老仓位豁免 /
     止盈止损」，加「调仓信号」，单仓单位→一仓金额，同基金冷却期→调仓冷却期）。
@@ -247,13 +244,7 @@ def _build_rules_section(today: date) -> list[dict[str, Any]]:
         {
             "tag": "div",
             "text": {"tag": "lark_md", "content": "**组合规则**"},
-        },
-        {
-            "tag": "img",
-            "img_key": RULES_SECTION_IMG_KEY,
-            "alt": {"tag": "plain_text", "content": "组合规则"},
-            "corner_radius": "8px",
-            "preview": False,
+            "icon": {"tag": "standard_icon", "token": "setting_outlined", "color": "purple"},
         },
         *({"tag": "markdown", "content": line} for line in lines),
         {"tag": "hr"},

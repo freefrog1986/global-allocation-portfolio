@@ -7,14 +7,14 @@ liubo 2026-09-28：扩到 9 只基金，全部成本由 liubo 校准完成（91,
 - 港股科技互联网（3）：006327 / 014673 / 016495
 - 港股银行（1）：006809
 - 亚太除日本（1）：457001
-- 全球科技主动（6）：016664 / 006373 / 017730 + 501226 / 019331 / 017436
+- 全球科技主动（7）：016664 / 006373 / 017730 + 501226 / 019331 / 017436 / 011612
 - 房地产（1）：010989
 
 成本演变：
 - 2026-09-28：457001 = 4,640（liubo 第一轮确认），013127/016495（第二轮），其余 6 只（第三轮，全部 liubo 给准确数）
 - 2026-09-29：013127 转出 → 8 只
 - 2026-09-30：加 010989 = 5000 CNY（新类别「房地产」）→ 9 只
-- 2026-10-20：加 501226 / 019331 / 017436 3 只到「全球科技主动」（**未买入 cost=0**）→ 12 只
+- 2026-10-20：加 501226 / 019331 / 017436 / 011612 4 只到「全球科技主动」（**未买入 cost=0**）→ 13 只
 """
 
 from __future__ import annotations
@@ -41,32 +41,33 @@ from global_allocation.portfolio.left_layout import (
 )
 
 
-# 12 只基金分 5 类（2026-10-20 加 501226/019331/017436 到「全球科技主动」后）
+# 13 只基金分 5 类（2026-10-20 加 501226/019331/017436/011612 到「全球科技主动」后）
 EXPECTED_FUNDS = {
     "006327", "014673", "016495",      # 港股科技互联网（3）
     "006809",                          # 港股银行
     "457001",                          # 亚太除日本
     "016664", "006373", "017730",      # 全球科技主动（老 3 只）
     "501226", "019331", "017436",      # 全球科技主动（2026-10-20 加 3 只，cost=0）
+    "011612",                          # 全球科技主动（华夏科创50ETF联接A，2026-10-20 加，cost=0）
     "010989",                          # 房地产（2026-09-30 加）
 }
 
 # 2026-10-20 liubo 暂定要买但**尚未买入**的 3 只（cost = 0）
-NEW_ZERO_COST_FUNDS = {"501226", "019331", "017436"}
+NEW_ZERO_COST_FUNDS = {"501226", "019331", "017436", "011612"}
 
 
 class TestLeftLayoutByCode:
-    def test_has_twelve_funds(self) -> None:
-        """2026-10-20 加 501226/019331/017436 后 12 只（仍是 5 类）。"""
-        assert len(LEFT_LAYOUT_BY_CODE) == 12
+    def test_has_thirteen_funds(self) -> None:
+        """2026-10-20 加 501226/019331/017436/011612 后 13 只（仍是 5 类）。"""
+        assert len(LEFT_LAYOUT_BY_CODE) == 13
 
     def test_new_funds_cost_zero(self) -> None:
-        """3 只新基金尚未买入 → 成本 0（不影响总成本 / 类别占比）。"""
+        """新加的 4 只尚未买入 → 成本 0（不影响总成本 / 类别占比）。"""
         for code in NEW_ZERO_COST_FUNDS:
             assert COST_BASIS_BY_CODE[code] == Decimal("0"), f"{code} 成本应为 0"
 
     def test_new_funds_all_global_tech(self) -> None:
-        """3 只新基金都归「全球科技主动」（liubo 2026-10-20：不新建类别）。"""
+        """新加的 4 只都归「全球科技主动」（liubo 2026-10-20：不新建类别）。"""
         for code in NEW_ZERO_COST_FUNDS:
             assert LEFT_LAYOUT_BY_CODE[code] == "全球科技主动"
 
@@ -106,11 +107,11 @@ class TestStrategyCategories:
         """亚太除日本 1 只：457001。"""
         assert STRATEGY_CATEGORIES["亚太除日本"] == ["457001"]
 
-    def test_global_tech_active_has_six(self) -> None:
-        """全球科技主动 6 只：老 3 只 + 2026-10-20 加的 501226/019331/017436。"""
+    def test_global_tech_active_has_seven(self) -> None:
+        """全球科技主动 7 只：老 3 只 + 2026-10-20 加的 501226/019331/017436/011612。"""
         assert set(STRATEGY_CATEGORIES["全球科技主动"]) == {
             "016664", "006373", "017730",
-            "501226", "019331", "017436",
+            "501226", "019331", "017436", "011612",
         }
 
     def test_real_estate_has_one(self) -> None:
@@ -118,7 +119,7 @@ class TestStrategyCategories:
         assert STRATEGY_CATEGORIES["房地产"] == ["010989"]
 
     def test_categories_cover_all_funds(self) -> None:
-        """5 类的基金并集 = LEFT_LAYOUT_BY_CODE 的全部 12 只。"""
+        """5 类的基金并集 = LEFT_LAYOUT_BY_CODE 的全部 13 只。"""
         all_in_categories: set[str] = set()
         for codes in STRATEGY_CATEGORIES.values():
             all_in_categories.update(codes)

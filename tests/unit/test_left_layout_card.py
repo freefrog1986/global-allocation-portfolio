@@ -208,8 +208,8 @@ class TestOverviewSection:
         labels = " ".join(f["text"]["content"] for f in fields_div["fields"])
         # 总成本 → 71,420.00 CNY（_fmt_money 格式带 .00）
         assert "71,420" in labels
-        # 总基金数量 → 12 只（2026-10-20 加 501226/019331/017436）
-        assert "12 只" in labels
+        # 总基金数量 → 13 只（2026-10-20 加 501226/019331/017436/011612）
+        assert "13 只" in labels
         # 总类别数量 → 5 类
         assert "5 类" in labels
         # 单仓 → 5,000
@@ -371,13 +371,12 @@ class TestRulesSection:
                 return out
         pytest.fail("没找到「组合规则」section")
 
-    def test_has_header_with_liubo_image(self) -> None:
-        """header 用实图（liubo 2026-10-20 直接给的图表插画）替代 standard_icon。
+    def test_has_header_with_setting_icon(self) -> None:
+        """header 用 standard_icon（不是 img）。
 
-        飞书 section header div 只吃 icon 不吃 img，所以 header 留纯文字标题，
-        实图作为紧随其后的 img 元素渲染。
+        liubo 2026-10-20 澄清：他只是要我自己换个图标，不是把他的图贴上去。
+        `setting_outlined`（参数设置）跟另外三段的 report / wallet 都不撞。
         """
-        from global_allocation.portfolio.left_layout_card import RULES_SECTION_IMG_KEY
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         elements = card["body"]["elements"]
         header_idx = next(
@@ -386,11 +385,20 @@ class TestRulesSection:
         )
         header = elements[header_idx]
         assert header["tag"] == "div"
-        assert "icon" not in header
-        img = elements[header_idx + 1]
-        assert img["tag"] == "img"
-        assert img["img_key"] == RULES_SECTION_IMG_KEY
-        assert img["img_key"].startswith("img_")
+        assert header["icon"]["tag"] == "standard_icon"
+        assert header["icon"]["token"] == "setting_outlined"
+        # 段内不应再有 img 元素
+        assert all(e.get("tag") != "img" for e in elements[header_idx:])
+
+    def test_section_icons_are_all_distinct(self) -> None:
+        """4 个 section header 的图标互不相同（避免视觉混淆）。"""
+        card = build_left_layout_card(report_date=date(2026, 9, 30))
+        tokens = [
+            el["icon"]["token"] for el in card["body"]["elements"]
+            if el.get("tag") == "div" and "icon" in el
+            and el.get("text", {}).get("content", "").startswith("**")
+        ]
+        assert len(tokens) == len(set(tokens)), f"图标重复：{tokens}"
 
     def test_five_rules_all_markdown_list(self) -> None:
         """5 条规则，每条一行 markdown 列表（`- ` 前缀），不再是 div.fields。"""
@@ -703,8 +711,8 @@ class TestFundSection:
             assert "<text_tag" not in line, f"基金行不应含 text_tag：{line!r}"
             assert "<number_tag" not in line, f"基金行不应含 number_tag：{line!r}"
 
-    def test_all_12_funds_present(self) -> None:
-        """12 只基金全名 + code 都在 markdown 行里（2026-10-20 加 3 只全球科技）。"""
+    def test_all_13_funds_present(self) -> None:
+        """13 只基金全名 + code 都在 markdown 行里（2026-10-20 加 4 只全球科技）。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         all_text = "\n".join(self._get_fund_lines(card))
         expected = [
@@ -720,6 +728,7 @@ class TestFundSection:
             "长程全球新能源汽车股票(QDII)A（501226）",
             "华泰柏瑞中证沪港深云计算产业ETF联接C（019331）",
             "华宝纳斯达克精选股票(QDII)A（017436）",
+            "华夏科创50ETF联接A（011612）",
             "南方中证房地产ETF发起联接E（010989）",
         ]
         for name in expected:
