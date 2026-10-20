@@ -408,14 +408,26 @@ class TestFundSection:
         return lines
 
     def _get_category_block_starts(self, card: dict) -> list[tuple[int, str]]:
-        """返回 [(idx, category_name)]：5 个类别 div header 的位置。"""
+        """返回 [(idx, category_name)]：5 个类别 div header 的位置。
+
+        liubo 2026-10-20 R13：类别 header 去掉 standard_icon，改用序号 emoji（1️⃣–5️⃣）。
+        通过识别序号 emoji 来定位类别 div header（不靠 icon token）。
+        """
         els = self._get_fund_section_elements(card)
-        return [
-            (i, el["text"]["content"].split("<")[0].strip().strip("*").strip())
-            for i, el in enumerate(els)
-            if (el.get("tag") == "div"
-                and el.get("icon", {}).get("token") == "tag_outlined")
-        ]
+        digit_emojis = {"1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"}
+        starts = []
+        for i, el in enumerate(els):
+            if el.get("tag") != "div":
+                continue
+            content = el.get("text", {}).get("content", "")
+            if any(content.startswith(e) for e in digit_emojis):
+                # 提取类别名（去 emoji + bold）
+                name = content
+                for e in digit_emojis:
+                    name = name.replace(e, "", 1)
+                name = name.split("<")[0].strip().strip("*").strip()
+                starts.append((i, name))
+        return starts
 
     def _get_block(self, card: dict, block_idx: int) -> list[dict]:
         """返回第 block_idx 个类别块的元素列表（cat header div 到下个 cat div 或 hr 之前）。"""
@@ -486,7 +498,10 @@ class TestFundSection:
             )
 
     def test_category_header_has_inline_tags(self) -> None:
-        """类别 header div 用 lark_md 内嵌 text_tag：占比 + 状态（liubo 2026-10-19 拍板）。"""
+        """类别 header div 用 lark_md 内嵌 text_tag：占比 + 状态（liubo 2026-10-19 拍板）。
+
+        liubo 2026-10-20 R13：header 前加序号 emoji（1️⃣2️⃣3️⃣4️⃣5️⃣），不再用 standard_icon。
+        """
         card = build_left_layout_card(report_date=date(2026, 9, 30))
 
         # 港股科技互联网 74.2% 应该 red
@@ -494,7 +509,8 @@ class TestFundSection:
         cat_header = block[0]
         content = cat_header["text"]["content"]
         assert cat_header["text"]["tag"] == "lark_md"
-        # 类别名 + text_tag 占比% + text_tag 状态
+        # R13 序号 emoji + 类别名 + text_tag 占比% + text_tag 状态
+        assert "1️⃣" in content
         assert "**港股科技互联网**" in content
         assert "<text_tag color='red'>74.2%</text_tag>" in content
         assert "<text_tag color='red'>超限</text_tag>" in content
@@ -502,18 +518,27 @@ class TestFundSection:
         # 港股银行 1.4% 应该 blue
         block = self._get_block(card, 1)
         content = block[0]["text"]["content"]
+        assert "2️⃣" in content
+        assert "**港股银行**" in content
         assert "<text_tag color='blue'>1.4%</text_tag>" in content
         assert "<text_tag color='blue'>正常</text_tag>" in content
 
-    def test_category_header_uses_tag_icon(self) -> None:
-        """类别 header 用 tag_outlined icon + 紫色。"""
+    def test_category_header_no_icon(self) -> None:
+        """liubo 2026-10-20 R13：类别 header 去掉 standard_icon，只剩序号 emoji + 类别名。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         starts = self._get_category_block_starts(card)
         for idx, (pos, _) in enumerate(starts):
             block = self._get_block(card, idx)
             cat_div = block[0]
-            assert cat_div.get("icon", {}).get("token") == "tag_outlined"
-            assert cat_div.get("icon", {}).get("color") == "purple"
+            # 不再有 standard_icon（liubo R13 拍板）
+            assert "icon" not in cat_div, (
+                f"类 {idx}: R13 拍板去掉 icon，仍含 {cat_div.get('icon')!r}"
+            )
+            # 应该有对应的数字 emoji
+            digit_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+            assert digit_emojis[idx] in cat_div["text"]["content"], (
+                f"类 {idx}: 应有 {digit_emojis[idx]} 序号 emoji"
+            )
 
     def test_no_类下基金_subheader(self) -> None:
         """liubo R12 拍板：删除「类下基金」sub-md，基金行直接列。"""
