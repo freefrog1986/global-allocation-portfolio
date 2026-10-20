@@ -351,19 +351,28 @@ class TestCategorySection:
 
 
 class TestRulesSection:
-    """Section 3：组合规则（liubo 2026-10-20 拍板加，排在类别明细之前）。"""
+    """Section 3：组合规则（liubo 2026-10-20 拍板加，排在类别明细之前）。
 
-    def _rules_fields(self, card: dict) -> list[str]:
+    第二轮 liubo 反馈「这部分太乱了」→ 从 7 个 div.fields（4 行、最后落单、
+    每条格式不一致）改成**单列 markdown 列表**，7 行统一三段式。
+    """
+
+    def _rules_lines(self, card: dict) -> list[str]:
+        """规则段里 7 行 markdown 列表项。"""
         elements = card["body"]["elements"]
         for i, el in enumerate(elements):
             if _is_section_header(el, "组合规则"):
-                fields_div = next(
-                    e for e in elements[i + 1:] if e.get("tag") == "div" and "fields" in e
-                )
-                return [f["text"]["content"] for f in fields_div["fields"]]
+                out = []
+                for e in elements[i + 1:]:
+                    if e.get("tag") == "hr":
+                        break
+                    if e.get("tag") == "markdown":
+                        out.append(e["content"])
+                return out
         pytest.fail("没找到「组合规则」section")
 
-    def test_has_header_with_icon(self) -> None:
+    def test_has_header_with_shield_icon(self) -> None:
+        """图标用 shield_outlined（liubo 2026-10-20 要求换掉原来的 bookmark_outlined）。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         header = next(
             el for el in card["body"]["elements"]
@@ -371,39 +380,44 @@ class TestRulesSection:
         )
         assert header["tag"] == "div"
         assert header["icon"]["tag"] == "standard_icon"
+        assert header["icon"]["token"] == "shield_outlined"
 
-    def test_covers_the_seven_rules(self) -> None:
-        """7 条规则全覆盖（都取自 left_layout 模块常量，不硬编码写死）。"""
-        fields = self._rules_fields(build_left_layout_card(report_date=date(2026, 9, 30)))
-        text = "\n".join(fields)
+    def test_seven_rules_all_markdown_list(self) -> None:
+        """7 条规则，每条一行 markdown 列表（`- ` 前缀），不再是 div.fields。"""
+        lines = self._rules_lines(build_left_layout_card(report_date=date(2026, 9, 30)))
+        assert len(lines) == 7
+        assert all(line.startswith("- ") for line in lines)
+
+    def test_each_line_same_three_part_shape(self) -> None:
+        """每行统一 `名称：<关键值 tag>  说明` 三段式，扫读对齐。"""
+        lines = self._rules_lines(build_left_layout_card(report_date=date(2026, 9, 30)))
+        for line in lines:
+            assert "<text_tag color='" in line, f"关键值应带 tag：{line}"
+            assert "</text_tag>" in line, f"关键值应带 tag：{line}"
+            assert "：" in line, f"名称与关键值之间应有冒号：{line}"
+
+    def test_covers_all_rules(self) -> None:
+        """7 条规则全覆盖（数值取自 left_layout 模块常量，不硬编码）。"""
+        text = "\n".join(
+            self._rules_lines(build_left_layout_card(report_date=date(2026, 9, 30)))
+        )
         assert "完全主观" in text          # 选标的
         assert "每次 1 仓" in text        # 单笔规模
-        assert "1 仓 = 5,000 CNY" in text
+        assert "5,000 CNY" in text        # 单仓单位
         assert "老仓位豁免" in text
         assert "30 天" in text            # 同基金冷却期
-        assert "无止盈止损" in text
+        assert "不设" in text             # 止盈止损
 
     def test_cap_amount_tracks_total_cost(self) -> None:
         """类别上限的 CNY 金额 = 总成本 × 15%，改了 CAP 或总成本这里自动跟上。"""
         from global_allocation.portfolio.left_layout import (
             CATEGORY_CAP_PCT, TOTAL_COST_CNY,
         )
-        fields = self._rules_fields(build_left_layout_card(report_date=date(2026, 9, 30)))
+        text = "\n".join(
+            self._rules_lines(build_left_layout_card(report_date=date(2026, 9, 30)))
+        )
         expected = float(TOTAL_COST_CNY * CATEGORY_CAP_PCT)
-        assert f"{expected:,.0f} CNY" in "\n".join(fields)
-
-    def test_all_fields_is_short(self) -> None:
-        """两两并排布局（is_short=True）。"""
-        card = build_left_layout_card(report_date=date(2026, 9, 30))
-        elements = card["body"]["elements"]
-        for i, el in enumerate(elements):
-            if _is_section_header(el, "组合规则"):
-                fields_div = next(
-                    e for e in elements[i + 1:] if e.get("tag") == "div" and "fields" in e
-                )
-                assert all(f["is_short"] is True for f in fields_div["fields"])
-                return
-        pytest.fail("没找到「组合规则」section")
+        assert f"{expected:,.0f} CNY" in text
 
     def test_section_precedes_fund_detail(self) -> None:
         """规则段必须在「各类别基金 + 估值 + 调仓建议」之前。"""

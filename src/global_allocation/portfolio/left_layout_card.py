@@ -201,47 +201,41 @@ def _build_rules_section(today: date) -> list[dict[str, Any]]:
     把 left_layout.py 里 liubo 定的策略规则显式写出来，读卡的人不用猜
     「1 仓多少」「为什么这个类别建议减仓」。
 
+    liubo 2026-10-20 第二轮反馈「这部分太乱了」→ 改成**单列 markdown 列表**：
+    - 原来 7 个 div.fields 两两并排 = 4 行、最后一行落单，且 7 条格式各不相同
+      （有的 `名称：tag 说明`、有的纯文字），扫读时对不齐
+    - 现在 7 行统一 `名称：<关键值 tag>  说明` 三段式，纵向对齐，一眼看下去有节奏
+
     数值直接取模块常量（POSITION_UNIT_CNY / CATEGORY_CAP_PCT / COOLDOWN_DAYS），
     规则改了这里自动跟上，不会跟实际逻辑漂移。
     """
     unit = float(POSITION_UNIT_CNY)
     cap_pct = float(CATEGORY_CAP_PCT) * 100
     cap_cny = float(TOTAL_COST_CNY * CATEGORY_CAP_PCT)
+
+    # 统一三段式：名称：<关键值 tag>  说明
+    rules = [
+        ("选标的", "blue", "完全主观", "看哪只顺眼买哪次，觉得不好就卖，不用算法信号"),
+        ("单笔规模", "blue", "每次 1 仓", "不超买不超卖"),
+        ("单仓单位", "blue", f"{unit:,.0f} CNY", "本组合独立计价，不跟大类资产配置的 1 万混"),
+        ("类别上限", "orange", f"{cap_pct:.0f}% 总成本",
+         f"单类累计不超过，当前 {cap_cny:,.0f} CNY"),
+        ("老仓位豁免", "orange", "已超限可继续买", "只卡超限后再加仓"),
+        ("同基金冷却期", "blue", f"{COOLDOWN_DAYS} 天", "同一只基金两次买入的最小间隔"),
+        ("止盈止损", "grey", "不设", "纯主观判断，无自动买卖规则"),
+    ]
+    lines = [
+        f"- {name}：<text_tag color='{color}'>{value}</text_tag>  {note}"
+        for name, color, value, note in rules
+    ]
+
     return [
         {
             "tag": "div",
             "text": {"tag": "lark_md", "content": "**组合规则**"},
-            "icon": {"tag": "standard_icon", "token": "bookmark_outlined", "color": "purple"},
+            "icon": {"tag": "standard_icon", "token": "shield_outlined", "color": "purple"},
         },
-        {"tag": "div", "fields": [
-            {"is_short": True, "text": {"tag": "lark_md", "content": (
-                f"选标的：<text_tag color='blue'>完全主观</text_tag>  "
-                "看哪只顺眼买哪次，觉得不好就卖，不用算法信号"
-            )}},
-            {"is_short": True, "text": {"tag": "lark_md", "content": (
-                f"单笔规模：<text_tag color='blue'>每次 1 仓</text_tag>  "
-                "不超买不超卖"
-            )}},
-            {"is_short": True, "text": {"tag": "lark_md", "content": (
-                f"1 仓 = {unit:,.0f} CNY  （本组合独立计价，不跟大类资产配置的 1 万混）"
-            )}},
-            {"is_short": True, "text": {"tag": "lark_md", "content": (
-                f"类别上限：单类累计 ≤ 总成本 {cap_pct:.0f}%"
-                f"（当前 {cap_cny:,.0f} CNY）"
-            )}},
-            {"is_short": True, "text": {"tag": "lark_md", "content": (
-                "老仓位豁免：<text_tag color='orange'>已超限的类别允许继续买</text_tag>  "
-                "只卡超限后再加仓"
-            )}},
-            {"is_short": True, "text": {"tag": "lark_md", "content": (
-                f"同基金冷却期：<text_tag color='blue'>{COOLDOWN_DAYS} 天</text_tag>  "
-                "同一只基金两次买入的最小间隔"
-            )}},
-            {"is_short": True, "text": {"tag": "lark_md", "content": (
-                "<text_tag color='grey'>无止盈止损</text_tag>  "
-                "纯主观，不设自动买卖规则"
-            )}},
-        ]},
+        *({"tag": "markdown", "content": line} for line in lines),
         {"tag": "hr"},
     ]
 
