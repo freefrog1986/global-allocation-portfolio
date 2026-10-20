@@ -410,23 +410,28 @@ class TestFundSection:
     def _get_category_block_starts(self, card: dict) -> list[tuple[int, str]]:
         """返回 [(idx, category_name)]：5 个类别 div header 的位置。
 
-        liubo 2026-10-20 R14：类别 header 去掉 standard_icon + keycap emoji，
-        改用飞书原生有序列表格式 "1. " "2. " 等前缀。
-        通过识别 "{N}. " 前缀定位类别 div header（不靠 icon token）。
+        liubo 2026-10-20 R16：类别 header 去掉 standard_icon + 飞书有序列表前缀，
+        改用 number_tag 序号 `<number_tag background_color='blue' font_color='white'>N</number_tag>`。
+        通过识别 number_tag 来定位类别 div header（不靠 icon token 也不靠 prefix）。
         """
+        import re
         els = self._get_fund_section_elements(card)
-        digit_prefixes = {f"{n}. " for n in range(1, 10)}  # "1. " - "9. "
+        number_tag_re = re.compile(
+            r"<number_tag[^>]*>(\d{1,2})</number_tag>"
+        )
         starts = []
         for i, el in enumerate(els):
             if el.get("tag") != "div":
                 continue
             content = el.get("text", {}).get("content", "")
-            for prefix in digit_prefixes:
-                if content.startswith(prefix):
-                    # 提取类别名（去序号 + bold）
-                    name = content[len(prefix):].split("<")[0].strip().strip("*").strip()
-                    starts.append((i, name))
-                    break
+            m = number_tag_re.search(content)
+            if not m:
+                continue
+            # ordinal = m.group(1)
+            # 提取类别名（在 number_tag 后到下个 < 之前）
+            after_tag = content[m.end():]
+            name = after_tag.split("<")[0].strip().strip("*").strip()
+            starts.append((i, name))
         return starts
 
     def _get_block(self, card: dict, block_idx: int) -> list[dict]:
@@ -500,8 +505,8 @@ class TestFundSection:
     def test_category_header_has_inline_tags(self) -> None:
         """类别 header div 用 lark_md 内嵌 text_tag：占比 + 状态（liubo 2026-10-19 拍板）。
 
-        liubo 2026-10-20 R14：header 前加飞书原生有序列表序号（1. 2. 3. 4. 5.），
-        取代 R13 的 keycap emoji + standard_icon。
+        liubo 2026-10-20 R16：header 改用 number_tag（demo 里的格式），
+        取代 R14 飞书原生有序列表。
         """
         card = build_left_layout_card(report_date=date(2026, 9, 30))
 
@@ -510,24 +515,22 @@ class TestFundSection:
         cat_header = block[0]
         content = cat_header["text"]["content"]
         assert cat_header["text"]["tag"] == "lark_md"
-        # R14 飞书原生有序列表序号 + 类别名 + text_tag 占比% + text_tag 状态
-        assert content.startswith("1. **港股科技互联网**"), (
-            f"类 0 期望以 '1. **港股科技互联网**' 开头，实际 {content[:60]!r}"
-        )
+        # R16 number_tag 序号（沿用 demo 格式）+ 类别名 + text_tag 占比% + text_tag 状态
+        assert "<number_tag background_color='blue' font_color='white'>1</number_tag>" in content
+        assert "**港股科技互联网**" in content
         assert "<text_tag color='red'>74.2%</text_tag>" in content
         assert "<text_tag color='red'>超限</text_tag>" in content
 
         # 港股银行 1.4% 应该 blue
         block = self._get_block(card, 1)
         content = block[0]["text"]["content"]
-        assert content.startswith("2. **港股银行**"), (
-            f"类 1 期望以 '2. **港股银行**' 开头，实际 {content[:60]!r}"
-        )
+        assert "<number_tag background_color='blue' font_color='white'>2</number_tag>" in content
+        assert "**港股银行**" in content
         assert "<text_tag color='blue'>1.4%</text_tag>" in content
         assert "<text_tag color='blue'>正常</text_tag>" in content
 
     def test_category_header_no_icon(self) -> None:
-        """liubo 2026-10-20 R14：类别 header 去掉 standard_icon，只剩飞书原生序号 + 类别名。"""
+        """liubo 2026-10-20 R16：类别 header 去掉 standard_icon，用 number_tag 序号。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         starts = self._get_category_block_starts(card)
         for idx, (pos, _) in enumerate(starts):
@@ -535,12 +538,14 @@ class TestFundSection:
             cat_div = block[0]
             # 不再有 standard_icon（liubo R13/R14 拍板）
             assert "icon" not in cat_div, (
-                f"类 {idx}: R14 拍板去掉 icon，仍含 {cat_div.get('icon')!r}"
+                f"类 {idx}: R16 拍板去掉 icon，仍含 {cat_div.get('icon')!r}"
             )
-            # 应该有飞书原生有序列表序号（"1. " "2. " 等）
-            assert cat_div["text"]["content"].startswith(f"{idx + 1}. "), (
-                f"类 {idx}: 应以 '{idx + 1}. ' 开头，实际 {cat_div['text']['content'][:30]!r}"
-            )
+            # 应该有对应 ordinal 的 number_tag
+            ordinal = idx + 1
+            assert (
+                f"<number_tag background_color='blue' font_color='white'>{ordinal}</number_tag>"
+                in cat_div["text"]["content"]
+            ), f"类 {idx}: 应有 ordinal={ordinal} 的 number_tag"
 
     def test_no_类下基金_subheader(self) -> None:
         """liubo R12 拍板：删除「类下基金」sub-md，基金行直接列。"""

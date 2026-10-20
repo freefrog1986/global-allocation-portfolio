@@ -323,10 +323,11 @@ def _build_category_fields(idx_code: str, action: dict[str, str]) -> list[dict[s
 
 
 def _build_category_block(category: str, today: date, ordinal: int) -> list[dict[str, Any]]:
-    """单个类别的完整块（liubo 2026-10-20 拍板 R14：飞书原生有序列表序号 + 文字标题，无 icon）。
+    """单个类别的完整块（liubo 2026-10-20 拍板 R16：number_tag 序号 + 文字标题，无 icon）。
 
     3 段：
-    1. 类别 header div：`{序号}. {类别名}`（liubo R14 拍板，飞书原生有序列表格式）
+    1. 类别 header div：`<number_tag>{序号}</number_tag>` + 类别名
+       （liubo R16 拍板，用 demo 里的 number_tag 格式替代 R14 飞书原生有序列表）
        + 2 个 inline text_tag（占比% + 状态）
     2. N 个基金 markdown（直接列基金行，删 R11 的「类下基金」sub-md）
     3. div.fields 4 列合并：参考指数 / 主指标 / 估值 / 调仓建议
@@ -336,11 +337,15 @@ def _build_category_block(category: str, today: date, ordinal: int) -> list[dict
     - 删 2 个 sub-md 小标题（类下基金 / 估值），让 4 个 label-value 紧凑挤进 1 个 div.fields
     - 估值 + 调仓建议合并到 1 个 div.fields（不再单独占段）
 
-    R13 → R14 改动（liubo 2026-10-20 拍板）：
+    R13 → R14 → R16 改动（liubo 2026-10-20 拍板）：
     - R13：1️⃣2️⃣3️⃣4️⃣5️⃣ Keycap digit emoji + 类别名
-    - R14：飞书原生有序列表格式 `1. 2. 3. 4. 5.`（Markdown 标准 syntax，
-      lark_md 渲染为带数字方块的有序列表前缀，不再依赖 emoji 或 standard_icon）
+    - R14：飞书原生有序列表 `1. 2. 3. 4. 5.`
+    - R16：`<number_tag background_color='blue' font_color='white'>{N}</number_tag>`
+      （沿用 feishu_card_demo.py 里 markdown 部分的 number_tag 格式）
     - 序号 ordinal 由 _build_fund_section 传入（1-based，从 STRATEGY_CATEGORIES 顺序）
+
+    R16 number_tag 格式参考自 demo：
+        `<number_tag background_color='blue' font_color='white'>9</number_tag>`
     """
     status = get_category_cap_status(category)
     pct = float(status["pct_of_total"]) * 100
@@ -348,10 +353,11 @@ def _build_category_block(category: str, today: date, ordinal: int) -> list[dict
     status_text = "超限" if is_over else "正常"
     status_color = _category_status_color(pct, is_over)
 
-    # 1. 类别 header（div，无 icon）：飞书原生有序列表序号 + bold 类别名 + 2 个 inline tag
-    #    liubo 2026-10-20 R14：1. 2. 3. 4. 5. — 飞书原生有序列表语法
+    # 1. 类别 header（div，无 icon）：number_tag 序号 + bold 类别名 + 2 个 inline text_tag
+    #    liubo 2026-10-20 R16：沿用 demo 的 number_tag 格式
     header_content = (
-        f"{ordinal}. **{category}** "
+        f"<number_tag background_color='blue' font_color='white'>{ordinal}</number_tag> "
+        f"**{category}** "
         f"<text_tag color='{status_color}'>{pct:.1f}%</text_tag> "
         f"<text_tag color='{status_color}'>{status_text}</text_tag>"
     )
