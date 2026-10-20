@@ -58,6 +58,12 @@ from global_allocation.portfolio.left_layout import (
 )
 
 
+# 「组合规则」section 头部实图（liubo 2026-10-20 直接给的图表插画，替换 standard_icon）。
+# 飞书图片必须先上传换 img_key（POST /open-apis/im/v1/images，image_type=message），
+# 这里存的是上传后返回的 key —— 长期有效，不用每次发卡重新传。
+RULES_SECTION_IMG_KEY = "img_v3_0216l_c9adb839-9a1d-4357-bb14-1112cc25296g"
+
+
 # ─── 格式化 helpers ─────────────────────────────
 
 
@@ -206,6 +212,14 @@ def _build_rules_section(today: date) -> list[dict[str, Any]]:
       （有的 `名称：tag 说明`、有的纯文字），扫读时对不齐
     - 现在 7 行统一 `名称：<关键值 tag>  说明` 三段式，纵向对齐，一眼看下去有节奏
 
+    liubo 2026-10-20 第三轮：把 section 头的 standard_icon 换成他给的实图
+    （图表插画）。飞书 section header div 只吃 icon 不吃 img，所以 header 保留
+    纯文字标题，实图作为紧随其后的 img 元素渲染。
+    （注意：card 2.0 的 img 不认 `aspect_ratio` / 字符串 `title`，加了会 400）
+
+    liubo 2026-10-20 第四轮：规则内容收敛成 5 条（去掉「选标的 / 老仓位豁免 /
+    止盈止损」，加「调仓信号」，单仓单位→一仓金额，同基金冷却期→调仓冷却期）。
+
     数值直接取模块常量（POSITION_UNIT_CNY / CATEGORY_CAP_PCT / COOLDOWN_DAYS），
     规则改了这里自动跟上，不会跟实际逻辑漂移。
     """
@@ -214,26 +228,32 @@ def _build_rules_section(today: date) -> list[dict[str, Any]]:
     cap_cny = float(TOTAL_COST_CNY * CATEGORY_CAP_PCT)
 
     # 统一三段式：名称：<关键值 tag>  说明
-    rules = [
-        ("选标的", "blue", "完全主观", "看哪只顺眼买哪次，觉得不好就卖，不用算法信号"),
-        ("单笔规模", "blue", "每次 1 仓", "不超买不超卖"),
-        ("单仓单位", "blue", f"{unit:,.0f} CNY", "本组合独立计价，不跟大类资产配置的 1 万混"),
-        ("类别上限", "orange", f"{cap_pct:.0f}% 总成本",
-         f"单类累计不超过，当前 {cap_cny:,.0f} CNY"),
-        ("老仓位豁免", "orange", "已超限可继续买", "只卡超限后再加仓"),
-        ("同基金冷却期", "blue", f"{COOLDOWN_DAYS} 天", "同一只基金两次买入的最小间隔"),
-        ("止盈止损", "grey", "不设", "纯主观判断，无自动买卖规则"),
-    ]
     lines = [
-        f"- {name}：<text_tag color='{color}'>{value}</text_tag>  {note}"
-        for name, color, value, note in rules
+        f"- 单笔规模：<text_tag color='blue'>每次 1 仓</text_tag>  不超买不超卖",
+        f"- 一仓金额：<text_tag color='blue'>{unit:,.0f} CNY</text_tag>"
+        f"  本组合独立计价，不跟大类资产配置的 1 万混",
+        f"- 类别上限：<text_tag color='orange'>{cap_pct:.0f}% 总成本</text_tag>"
+        f"  单类累计不超过（当前 {cap_cny:,.0f} CNY）",
+        f"- 调仓冷却期：<text_tag color='blue'>{COOLDOWN_DAYS} 天</text_tag>"
+        f"  同一只基金两次买入的最小间隔",
+        "- 调仓信号："
+        "<text_tag color='green'>分位 <20% 买入</text_tag> / "
+        "<text_tag color='red'>分位 >80% 卖出</text_tag> / "
+        "<text_tag color='grey'>其余持有</text_tag>"
+        "  依据各类别的估值指标",
     ]
 
     return [
         {
             "tag": "div",
             "text": {"tag": "lark_md", "content": "**组合规则**"},
-            "icon": {"tag": "standard_icon", "token": "shield_outlined", "color": "purple"},
+        },
+        {
+            "tag": "img",
+            "img_key": RULES_SECTION_IMG_KEY,
+            "alt": {"tag": "plain_text", "content": "组合规则"},
+            "corner_radius": "8px",
+            "preview": False,
         },
         *({"tag": "markdown", "content": line} for line in lines),
         {"tag": "hr"},

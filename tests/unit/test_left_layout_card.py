@@ -371,21 +371,31 @@ class TestRulesSection:
                 return out
         pytest.fail("没找到「组合规则」section")
 
-    def test_has_header_with_shield_icon(self) -> None:
-        """图标用 shield_outlined（liubo 2026-10-20 要求换掉原来的 bookmark_outlined）。"""
+    def test_has_header_with_liubo_image(self) -> None:
+        """header 用实图（liubo 2026-10-20 直接给的图表插画）替代 standard_icon。
+
+        飞书 section header div 只吃 icon 不吃 img，所以 header 留纯文字标题，
+        实图作为紧随其后的 img 元素渲染。
+        """
+        from global_allocation.portfolio.left_layout_card import RULES_SECTION_IMG_KEY
         card = build_left_layout_card(report_date=date(2026, 9, 30))
-        header = next(
-            el for el in card["body"]["elements"]
+        elements = card["body"]["elements"]
+        header_idx = next(
+            i for i, el in enumerate(elements)
             if _is_section_header(el, "组合规则")
         )
+        header = elements[header_idx]
         assert header["tag"] == "div"
-        assert header["icon"]["tag"] == "standard_icon"
-        assert header["icon"]["token"] == "shield_outlined"
+        assert "icon" not in header
+        img = elements[header_idx + 1]
+        assert img["tag"] == "img"
+        assert img["img_key"] == RULES_SECTION_IMG_KEY
+        assert img["img_key"].startswith("img_")
 
-    def test_seven_rules_all_markdown_list(self) -> None:
-        """7 条规则，每条一行 markdown 列表（`- ` 前缀），不再是 div.fields。"""
+    def test_five_rules_all_markdown_list(self) -> None:
+        """5 条规则，每条一行 markdown 列表（`- ` 前缀），不再是 div.fields。"""
         lines = self._rules_lines(build_left_layout_card(report_date=date(2026, 9, 30)))
-        assert len(lines) == 7
+        assert len(lines) == 5
         assert all(line.startswith("- ") for line in lines)
 
     def test_each_line_same_three_part_shape(self) -> None:
@@ -396,17 +406,36 @@ class TestRulesSection:
             assert "</text_tag>" in line, f"关键值应带 tag：{line}"
             assert "：" in line, f"名称与关键值之间应有冒号：{line}"
 
+    def test_rule_names_match_liubo_spec(self) -> None:
+        """liubo 2026-10-20 指定的 5 条规则名。"""
+        lines = self._rules_lines(build_left_layout_card(report_date=date(2026, 9, 30)))
+        for name in ("单笔规模", "一仓金额", "类别上限", "调仓冷却期", "调仓信号"):
+            assert any(line.startswith(f"- {name}：") for line in lines), f"缺规则：{name}"
+
+    def test_signal_thresholds_match_valuation_status(self) -> None:
+        """调仓信号的分位阈值必须和 `_valuation_status` 的判断口径一致（<20 买 / >80 卖）。
+
+        两边不同步的话，卡片写的规则会跟实际调仓建议对不上。
+        """
+        lines = self._rules_lines(build_left_layout_card(report_date=date(2026, 9, 30)))
+        signal = next(line for line in lines if line.startswith("- 调仓信号："))
+        assert "<20% 买入" in signal
+        assert ">80% 卖出" in signal
+        assert "其余持有" in signal
+        # 颜色约定跟卡片里「估值」列一致：绿买 / 红卖 / 灰持有
+        assert "<text_tag color='green'>分位 <20% 买入</text_tag>" in signal
+        assert "<text_tag color='red'>分位 >80% 卖出</text_tag>" in signal
+        assert "<text_tag color='grey'>其余持有</text_tag>" in signal
+
     def test_covers_all_rules(self) -> None:
-        """7 条规则全覆盖（数值取自 left_layout 模块常量，不硬编码）。"""
+        """5 条规则全覆盖（数值取自 left_layout 模块常量，不硬编码）。"""
         text = "\n".join(
             self._rules_lines(build_left_layout_card(report_date=date(2026, 9, 30)))
         )
-        assert "完全主观" in text          # 选标的
-        assert "每次 1 仓" in text        # 单笔规模
-        assert "5,000 CNY" in text        # 单仓单位
-        assert "老仓位豁免" in text
-        assert "30 天" in text            # 同基金冷却期
-        assert "不设" in text             # 止盈止损
+        assert "每次 1 仓" in text
+        assert "5,000 CNY" in text
+        assert "15% 总成本" in text
+        assert "30 天" in text
 
     def test_cap_amount_tracks_total_cost(self) -> None:
         """类别上限的 CNY 金额 = 总成本 × 15%，改了 CAP 或总成本这里自动跟上。"""
