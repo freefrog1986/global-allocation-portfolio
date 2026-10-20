@@ -134,15 +134,20 @@ class TestCardStructure:
         assert last_md is not None
         assert "左侧布局" in last_md["content"]
 
-    def test_three_sections(self) -> None:
-        """3 个 section header: 组合总览 / 类别上限状态 / 各类别基金 + 估值 + 调仓建议。"""
+    def test_four_sections_in_order(self) -> None:
+        """4 个 section header，按顺序：组合总览 / 类别上限状态 / 组合规则 / 各类别基金 + 估值 + 调仓建议。
+
+        liubo 2026-10-20 拍板：在「各类别基金 + 估值 + 调仓建议」**之前**
+        插入「组合规则」段。
+        """
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         notes = _all_note_texts(card)
-        assert "组合总览" in notes
-        # 类别上限 section 改了更详细的名字（liubo 2026-10-19 加括号）
-        assert any("类别上限状态" in n for n in notes)
-        # Section 3 改名（liubo 2026-10-19 拍板 R9：含完整 指数/估值/动作 三段）
-        assert "各类别基金 + 估值 + 调仓建议" in notes
+        assert notes == [
+            "组合总览",
+            "类别上限状态（占总成本 %）",
+            "组合规则",
+            "各类别基金 + 估值 + 调仓建议",
+        ]
 
     def test_section_titles_match(self) -> None:
         """section header 完整文本（liubo 2026-10-19 拍板改用实际占比）。"""
@@ -345,8 +350,70 @@ class TestCategorySection:
                         f"Section 2 不应有 table 元素，发现第{j}项: {elements[j]['tag']}"
 
 
+class TestRulesSection:
+    """Section 3：组合规则（liubo 2026-10-20 拍板加，排在类别明细之前）。"""
+
+    def _rules_fields(self, card: dict) -> list[str]:
+        elements = card["body"]["elements"]
+        for i, el in enumerate(elements):
+            if _is_section_header(el, "组合规则"):
+                fields_div = next(
+                    e for e in elements[i + 1:] if e.get("tag") == "div" and "fields" in e
+                )
+                return [f["text"]["content"] for f in fields_div["fields"]]
+        pytest.fail("没找到「组合规则」section")
+
+    def test_has_header_with_icon(self) -> None:
+        card = build_left_layout_card(report_date=date(2026, 9, 30))
+        header = next(
+            el for el in card["body"]["elements"]
+            if _is_section_header(el, "组合规则")
+        )
+        assert header["tag"] == "div"
+        assert header["icon"]["tag"] == "standard_icon"
+
+    def test_covers_the_seven_rules(self) -> None:
+        """7 条规则全覆盖（都取自 left_layout 模块常量，不硬编码写死）。"""
+        fields = self._rules_fields(build_left_layout_card(report_date=date(2026, 9, 30)))
+        text = "\n".join(fields)
+        assert "完全主观" in text          # 选标的
+        assert "每次 1 仓" in text        # 单笔规模
+        assert "1 仓 = 5,000 CNY" in text
+        assert "老仓位豁免" in text
+        assert "30 天" in text            # 同基金冷却期
+        assert "无止盈止损" in text
+
+    def test_cap_amount_tracks_total_cost(self) -> None:
+        """类别上限的 CNY 金额 = 总成本 × 15%，改了 CAP 或总成本这里自动跟上。"""
+        from global_allocation.portfolio.left_layout import (
+            CATEGORY_CAP_PCT, TOTAL_COST_CNY,
+        )
+        fields = self._rules_fields(build_left_layout_card(report_date=date(2026, 9, 30)))
+        expected = float(TOTAL_COST_CNY * CATEGORY_CAP_PCT)
+        assert f"{expected:,.0f} CNY" in "\n".join(fields)
+
+    def test_all_fields_is_short(self) -> None:
+        """两两并排布局（is_short=True）。"""
+        card = build_left_layout_card(report_date=date(2026, 9, 30))
+        elements = card["body"]["elements"]
+        for i, el in enumerate(elements):
+            if _is_section_header(el, "组合规则"):
+                fields_div = next(
+                    e for e in elements[i + 1:] if e.get("tag") == "div" and "fields" in e
+                )
+                assert all(f["is_short"] is True for f in fields_div["fields"])
+                return
+        pytest.fail("没找到「组合规则」section")
+
+    def test_section_precedes_fund_detail(self) -> None:
+        """规则段必须在「各类别基金 + 估值 + 调仓建议」之前。"""
+        card = build_left_layout_card(report_date=date(2026, 9, 30))
+        notes = _all_note_texts(card)
+        assert notes.index("组合规则") < notes.index("各类别基金 + 估值 + 调仓建议")
+
+
 class TestFundSection:
-    """Section 3：各类别基金 + 估值 + 调仓建议
+    """Section 4：各类别基金 + 估值 + 调仓建议
     （liubo 2026-10-19 拍板 R12：删 2 个 sub-md + 估值/调仓建议合并到 1 个 div.fields）。
 
     每类别块结构（liubo 2026-10-19 R12）：

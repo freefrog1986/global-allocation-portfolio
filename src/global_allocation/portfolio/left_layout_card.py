@@ -192,7 +192,61 @@ def _build_category_section(today: date) -> list[dict[str, Any]]:
     ]
 
 
-# ─── Section 3: 各基金详情 ─────────────────────────────
+# ─── Section 3: 组合规则 ─────────────────────────────
+
+
+def _build_rules_section(today: date) -> list[dict[str, Any]]:
+    """Section 3：组合规则（liubo 2026-10-20 拍板加，排在类别明细之前）。
+
+    把 left_layout.py 里 liubo 定的策略规则显式写出来，读卡的人不用猜
+    「1 仓多少」「为什么这个类别建议减仓」。
+
+    数值直接取模块常量（POSITION_UNIT_CNY / CATEGORY_CAP_PCT / COOLDOWN_DAYS），
+    规则改了这里自动跟上，不会跟实际逻辑漂移。
+    """
+    unit = float(POSITION_UNIT_CNY)
+    cap_pct = float(CATEGORY_CAP_PCT) * 100
+    cap_cny = float(TOTAL_COST_CNY * CATEGORY_CAP_PCT)
+    return [
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": "**组合规则**"},
+            "icon": {"tag": "standard_icon", "token": "bookmark_outlined", "color": "purple"},
+        },
+        {"tag": "div", "fields": [
+            {"is_short": True, "text": {"tag": "lark_md", "content": (
+                f"选标的：<text_tag color='blue'>完全主观</text_tag>  "
+                "看哪只顺眼买哪次，觉得不好就卖，不用算法信号"
+            )}},
+            {"is_short": True, "text": {"tag": "lark_md", "content": (
+                f"单笔规模：<text_tag color='blue'>每次 1 仓</text_tag>  "
+                "不超买不超卖"
+            )}},
+            {"is_short": True, "text": {"tag": "lark_md", "content": (
+                f"1 仓 = {unit:,.0f} CNY  （本组合独立计价，不跟大类资产配置的 1 万混）"
+            )}},
+            {"is_short": True, "text": {"tag": "lark_md", "content": (
+                f"类别上限：单类累计 ≤ 总成本 {cap_pct:.0f}%"
+                f"（当前 {cap_cny:,.0f} CNY）"
+            )}},
+            {"is_short": True, "text": {"tag": "lark_md", "content": (
+                "老仓位豁免：<text_tag color='orange'>已超限的类别允许继续买</text_tag>  "
+                "只卡超限后再加仓"
+            )}},
+            {"is_short": True, "text": {"tag": "lark_md", "content": (
+                f"同基金冷却期：<text_tag color='blue'>{COOLDOWN_DAYS} 天</text_tag>  "
+                "同一只基金两次买入的最小间隔"
+            )}},
+            {"is_short": True, "text": {"tag": "lark_md", "content": (
+                "<text_tag color='grey'>无止盈止损</text_tag>  "
+                "纯主观，不设自动买卖规则"
+            )}},
+        ]},
+        {"tag": "hr"},
+    ]
+
+
+# ─── Section 4: 各基金详情 ─────────────────────────────
 
 
 def _format_fund_line(code: str) -> str:
@@ -432,6 +486,7 @@ def build_left_layout_card(
     elements: list[dict[str, Any]] = []
     elements.extend(_build_overview_section(report_date))
     elements.extend(_build_category_section(report_date))
+    elements.extend(_build_rules_section(report_date))
     elements.extend(_build_fund_section(report_date))
 
     # 总基金数（信息栏用）
