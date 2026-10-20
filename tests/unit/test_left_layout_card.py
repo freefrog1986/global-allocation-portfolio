@@ -203,8 +203,8 @@ class TestOverviewSection:
         labels = " ".join(f["text"]["content"] for f in fields_div["fields"])
         # 总成本 → 71,420.00 CNY（_fmt_money 格式带 .00）
         assert "71,420" in labels
-        # 总基金数量 → 9 只
-        assert "9 只" in labels
+        # 总基金数量 → 12 只（2026-10-20 加 501226/019331/017436）
+        assert "12 只" in labels
         # 总类别数量 → 5 类
         assert "5 类" in labels
         # 单仓 → 5,000
@@ -593,8 +593,8 @@ class TestFundSection:
             assert "<text_tag" not in line, f"基金行不应含 text_tag：{line!r}"
             assert "<number_tag" not in line, f"基金行不应含 number_tag：{line!r}"
 
-    def test_all_9_funds_present(self) -> None:
-        """9 只基金全名 + code 都在 markdown 行里。"""
+    def test_all_12_funds_present(self) -> None:
+        """12 只基金全名 + code 都在 markdown 行里（2026-10-20 加 3 只全球科技）。"""
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         all_text = "\n".join(self._get_fund_lines(card))
         expected = [
@@ -606,6 +606,10 @@ class TestFundSection:
             "天弘全球高端制造混合(QDII)A（016664）",
             "国富全球科技互联混合(QDII)人民币A（006373）",
             "嘉实全球产业升级股票发起式(QDII)A（017730）",
+            # 2026-10-20 liubo 加，暂定未买入（0.00 仓）
+            "长程全球新能源汽车股票(QDII)A（501226）",
+            "华泰柏瑞中证沪港深云计算产业ETF联接C（019331）",
+            "华宝纳斯达克精选股票(QDII)A（017436）",
             "南方中证房地产ETF发起联接E（010989）",
         ]
         for name in expected:
@@ -707,11 +711,11 @@ class TestFundSection:
         # 估值状态：13.27% < 20% → 低估（green）
         assert "<text_tag color='green'>低估</text_tag>" in fields[2]["text"]["content"]
 
-    def test_全球科技主动_NDX_PB(self) -> None:
-        """全球科技主动 → 纳斯达克100 (.NDX) PB 9.08 → 状态「—」（liubo 2026-10-19 给数据）。
+    def test_全球科技主动_SOX(self) -> None:
+        """全球科技主动 → 费城半导体 (.SOX)，数据未填 → 主指标/估值状态都显示「—」。
 
-        行业习惯用 PB 看科技股估值；纳斯达克 100 PB 9.08，分位暂未填，
-        所以估值状态显示「—」灰色。
+        2026-10-20 liubo 加 501226/019331/017436 后把估值基准从 .NDX 改成
+        费城半导体（.SOX）；PE/PB + 分位点 liubo 还没给，所以主指标和状态都空。
         """
         card = build_left_layout_card(report_date=date(2026, 9, 30))
         block = self._get_block(card, 3)
@@ -720,13 +724,11 @@ class TestFundSection:
             if el.get("tag") == "div" and "fields" in el
         )
         fields = fields_div["fields"]
-        assert "纳斯达克100" in fields[0]["text"]["content"]
-        assert ".NDX" in fields[0]["text"]["content"]
-        # PB 主指标（不是 PE-TTM）
-        assert "PB" in fields[1]["text"]["content"]
-        assert "9.08" in fields[1]["text"]["content"]
-        assert "PE-TTM" not in fields[1]["text"]["content"]
-        # 估值状态：无分位数据 → 显示「—」灰色
+        assert "费城半导体" in fields[0]["text"]["content"]
+        assert ".SOX" in fields[0]["text"]["content"]
+        # 主指标：.SOX 未填数据 → 「—」
+        assert "—" in fields[1]["text"]["content"]
+        # 估值状态：没有分位数据 → 显示「—」灰色
         assert "<text_tag color='grey'>—</text_tag>" in fields[2]["text"]["content"]
 
     # ─── 调仓建议段（liubo 2026-10-19 R12：在 div.fields 第 4 列） ───

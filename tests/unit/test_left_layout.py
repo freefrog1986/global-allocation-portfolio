@@ -7,13 +7,14 @@ liubo 2026-09-28：扩到 9 只基金，全部成本由 liubo 校准完成（91,
 - 港股科技互联网（3）：006327 / 014673 / 016495
 - 港股银行（1）：006809
 - 亚太除日本（1）：457001
-- 全球科技主动（3）：016664 / 006373 / 017730
+- 全球科技主动（6）：016664 / 006373 / 017730 + 501226 / 019331 / 017436
 - 房地产（1）：010989
 
 成本演变：
 - 2026-09-28：457001 = 4,640（liubo 第一轮确认），013127/016495（第二轮），其余 6 只（第三轮，全部 liubo 给准确数）
 - 2026-09-29：013127 转出 → 8 只
 - 2026-09-30：加 010989 = 5000 CNY（新类别「房地产」）→ 9 只
+- 2026-10-20：加 501226 / 019331 / 017436 3 只到「全球科技主动」（**未买入 cost=0**）→ 12 只
 """
 
 from __future__ import annotations
@@ -40,20 +41,34 @@ from global_allocation.portfolio.left_layout import (
 )
 
 
-# 9 只基金分 5 类（2026-09-30 加 010989 +「房地产」类后）
+# 12 只基金分 5 类（2026-10-20 加 501226/019331/017436 到「全球科技主动」后）
 EXPECTED_FUNDS = {
     "006327", "014673", "016495",      # 港股科技互联网（3）
     "006809",                          # 港股银行
     "457001",                          # 亚太除日本
-    "016664", "006373", "017730",      # 全球科技主动
+    "016664", "006373", "017730",      # 全球科技主动（老 3 只）
+    "501226", "019331", "017436",      # 全球科技主动（2026-10-20 加 3 只，cost=0）
     "010989",                          # 房地产（2026-09-30 加）
 }
 
+# 2026-10-20 liubo 暂定要买但**尚未买入**的 3 只（cost = 0）
+NEW_ZERO_COST_FUNDS = {"501226", "019331", "017436"}
+
 
 class TestLeftLayoutByCode:
-    def test_has_nine_funds(self) -> None:
-        """2026-09-30 加 010989 后 9 只。"""
-        assert len(LEFT_LAYOUT_BY_CODE) == 9
+    def test_has_twelve_funds(self) -> None:
+        """2026-10-20 加 501226/019331/017436 后 12 只（仍是 5 类）。"""
+        assert len(LEFT_LAYOUT_BY_CODE) == 12
+
+    def test_new_funds_cost_zero(self) -> None:
+        """3 只新基金尚未买入 → 成本 0（不影响总成本 / 类别占比）。"""
+        for code in NEW_ZERO_COST_FUNDS:
+            assert COST_BASIS_BY_CODE[code] == Decimal("0"), f"{code} 成本应为 0"
+
+    def test_new_funds_all_global_tech(self) -> None:
+        """3 只新基金都归「全球科技主动」（liubo 2026-10-20：不新建类别）。"""
+        for code in NEW_ZERO_COST_FUNDS:
+            assert LEFT_LAYOUT_BY_CODE[code] == "全球科技主动"
 
     def test_all_expected_funds_present(self) -> None:
         assert set(LEFT_LAYOUT_BY_CODE.keys()) == EXPECTED_FUNDS
@@ -91,10 +106,11 @@ class TestStrategyCategories:
         """亚太除日本 1 只：457001。"""
         assert STRATEGY_CATEGORIES["亚太除日本"] == ["457001"]
 
-    def test_global_tech_active_has_three(self) -> None:
-        """全球科技主动 3 只：016664/006373/017730。"""
+    def test_global_tech_active_has_six(self) -> None:
+        """全球科技主动 6 只：老 3 只 + 2026-10-20 加的 501226/019331/017436。"""
         assert set(STRATEGY_CATEGORIES["全球科技主动"]) == {
             "016664", "006373", "017730",
+            "501226", "019331", "017436",
         }
 
     def test_real_estate_has_one(self) -> None:
@@ -102,7 +118,7 @@ class TestStrategyCategories:
         assert STRATEGY_CATEGORIES["房地产"] == ["010989"]
 
     def test_categories_cover_all_funds(self) -> None:
-        """5 类的基金并集 = LEFT_LAYOUT_BY_CODE 的全部 9 只。"""
+        """5 类的基金并集 = LEFT_LAYOUT_BY_CODE 的全部 12 只。"""
         all_in_categories: set[str] = set()
         for codes in STRATEGY_CATEGORIES.values():
             all_in_categories.update(codes)
@@ -644,13 +660,16 @@ class TestIndexMapping:
         assert INDEX_BY_CATEGORY["房地产"] == "931775.csi"
         assert get_category_index_name("房地产") == "房地产"
 
-    def test_global_tech_active_maps_to_ndx(self) -> None:
-        """全球科技主动 → 纳斯达克100 (.NDX；liubo 2026-10-19 拍板从 QDII 主题改用 NDX)。"""
+    def test_global_tech_active_maps_to_sox(self) -> None:
+        """全球科技主动 → 费城半导体 (.SOX；liubo 2026-10-20 从 .NDX 改成费城半导体)。
+
+        2026-10-20 加了 501226/019331/017436 后 liubo 指定费城半导体作估值基准。
+        """
         from global_allocation.portfolio.left_layout import (
             INDEX_BY_CATEGORY, get_category_index_name,
         )
-        assert INDEX_BY_CATEGORY["全球科技主动"] == ".NDX"
-        assert get_category_index_name("全球科技主动") == "纳斯达克100"
+        assert INDEX_BY_CATEGORY["全球科技主动"] == ".SOX"
+        assert get_category_index_name("全球科技主动") == "费城半导体"
 
     def test_unknown_category_returns_empty(self) -> None:
         from global_allocation.portfolio.left_layout import get_category_index
