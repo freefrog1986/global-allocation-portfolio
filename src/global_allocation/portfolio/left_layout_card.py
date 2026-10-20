@@ -89,17 +89,17 @@ def _build_overview_section(today: date) -> list[dict[str, Any]]:
     n_categories = len(STRATEGY_CATEGORIES)
     fields = [
         {"is_short": True, "text": {"tag": "lark_md",
-                                    "content": f"**总成本：** {_fmt_money(TOTAL_COST_CNY)} CNY"}},
+                                    "content": f"总成本：{_fmt_money(TOTAL_COST_CNY)} CNY"}},
         {"is_short": True, "text": {"tag": "lark_md",
-                                    "content": f"**总基金数量：** {n_funds} 只"}},
+                                    "content": f"总基金数量：{n_funds} 只"}},
         {"is_short": True, "text": {"tag": "lark_md",
-                                    "content": f"**总类别数量：** {n_categories} 类"}},
+                                    "content": f"总类别数量：{n_categories} 类"}},
         {"is_short": True, "text": {"tag": "lark_md",
-                                    "content": f"**单仓：** {float(POSITION_UNIT_CNY):,.0f} CNY"}},
+                                    "content": f"单仓：{float(POSITION_UNIT_CNY):,.0f} CNY"}},
         {"is_short": True, "text": {"tag": "lark_md",
-                                    "content": f"**类别上限：** {float(CATEGORY_CAP_PCT) * 100:.0f}% 总成本"}},
+                                    "content": f"类别上限：{float(CATEGORY_CAP_PCT) * 100:.0f}% 总成本"}},
         {"is_short": True, "text": {"tag": "lark_md",
-                                    "content": f"**同基金冷却期：** {COOLDOWN_DAYS} 天"}},
+                                    "content": f"同基金冷却期：{COOLDOWN_DAYS} 天"}},
     ]
     return [
         {
@@ -198,13 +198,16 @@ def _build_category_section(today: date) -> list[dict[str, Any]]:
 def _format_fund_line(code: str) -> str:
     """生成单只基金的展示行（liubo 2026-10-19 拍板 R10/R11：text_tag 显示仓位）。
 
-    格式：`<text_tag color='grey'>X.XX 仓</text_tag> **基金全名（code）**  累计 X CNY`
+    格式：`<text_tag color='grey'>X.XX 仓</text_tag> 基金全名（code）  累计 X CNY`
 
     R11 修订：R10 用 `<number_tag value='X.XX' color='grey' />` 是 OK 的（API 200），
     但 liubo 飞书客户端 renderer 不识别 number_tag，把源码字面量当文本显示出来。
     退回 R10 之前的方案：用 text_tag 包「X.XX 仓」整个串，text_tag 在 R9 验证能渲染。
 
-    text_tag 视觉：灰底白字圆角 tag，bold 基金全名便于扫读，累计成本紧跟其后。
+    R15 修订：去掉基金全名的 **bold**（liubo 2026-10-20：「除了各标题，其他字体不要加粗」）。
+    只保留 text_tag 作为视觉重点，bold 仅用于标题（Section header / 类别 header）。
+
+    text_tag 视觉：灰底白字圆角 tag，便于扫读；不靠 bold 强调。
     """
     cost = COST_BASIS_BY_CODE.get(code, Decimal("0"))
     pos = get_position(code)
@@ -212,7 +215,7 @@ def _format_fund_line(code: str) -> str:
     fund_name = f"{FUND_FULL_NAME_BY_CODE.get(code, DISPLAY_NAME.get(code, code))}（{code}）"
     return (
         f"<text_tag color='grey'>{pos_str} 仓</text_tag> "
-        f"**{fund_name}**  "
+        f"{fund_name}  "
         f"累计 {_fmt_money(cost)} CNY"
     )
 
@@ -286,14 +289,14 @@ def _build_category_fields(idx_code: str, action: dict[str, str]) -> list[dict[s
         primary_label, primary_value = get_index_primary_metric(idx_code)
         pct = _parse_primary_pct(primary_value)
         status_text, status_color = _valuation_status(pct)
-        col1 = f"**参考指数：** {idx_name}（{idx_code}）"
-        col2 = f"**{primary_label}：** {primary_value}"
-        col3 = f"**估值：** <text_tag color='{status_color}'>{status_text}</text_tag>"
+        col1 = f"参考指数：{idx_name}（{idx_code}）"
+        col2 = f"{primary_label}：{primary_value}"
+        col3 = f"估值：<text_tag color='{status_color}'>{status_text}</text_tag>"
     else:
         # 无统一基准（QDII 主动主题）
-        col1 = "**参考指数：** _无统一基准_"
-        col2 = "**主指标：** —"
-        col3 = "**估值：** <text_tag color='grey'>—</text_tag>"
+        col1 = "参考指数：无统一基准"
+        col2 = "主指标：—"
+        col3 = "估值：<text_tag color='grey'>—</text_tag>"
 
     # 列 4：调仓建议（合并自 R11 的调仓建议 md）
     action_color_map = {
@@ -304,7 +307,7 @@ def _build_category_fields(idx_code: str, action: dict[str, str]) -> list[dict[s
     }
     action_color = action_color_map.get(action["action"], "blue")
     col4 = (
-        f"**调仓建议：** "
+        f"调仓建议："
         f"<text_tag color='{action_color}'>"
         f"{action['emoji']} {action['action_with_unit']}"
         f"</text_tag>  "

@@ -636,7 +636,8 @@ class TestFundSection:
             assert all(f["text"]["tag"] == "lark_md" for f in fields)
             # 列 1 = 参考指数，列 2 = 主指标，列 3 = 估值，列 4 = 调仓建议
             assert "参考指数" in fields[0]["text"]["content"]
-            assert "**" in fields[1]["text"]["content"]  # PE-TTM / PB / —
+            # R15：去掉 bold，列 2 是 PE-TTM / PB / —
+            assert "**" not in fields[1]["text"]["content"]
             assert "估值" in fields[2]["text"]["content"]
             assert "<text_tag" in fields[2]["text"]["content"]
             assert "调仓建议" in fields[3]["text"]["content"]
@@ -738,7 +739,9 @@ class TestFundSection:
                 if el.get("tag") == "div" and "fields" in el
             )
             field4 = fields_div["fields"][3]
-            assert "**调仓建议：**" in field4["text"]["content"]
+            # R15：去掉 bold，只剩 text_tag
+            assert "调仓建议：" in field4["text"]["content"]
+            assert "**" not in field4["text"]["content"]
             assert "<text_tag" in field4["text"]["content"]
 
     def test_港股超限_减仓(self) -> None:
