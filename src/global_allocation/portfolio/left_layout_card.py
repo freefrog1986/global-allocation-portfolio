@@ -216,6 +216,7 @@ def _build_rules_section(today: date) -> list[dict[str, Any]]:
 
     liubo 2026-10-20 第四轮：规则内容收敛成 5 条（去掉「选标的 / 老仓位豁免 /
     止盈止损」，加「调仓信号」，单仓单位→一仓金额，同基金冷却期→调仓冷却期）。
+    第五轮加「调仓节奏」：每周五定调仓决定，周一执行；周报每周五发。
 
     数值直接取模块常量（POSITION_UNIT_CNY / CATEGORY_CAP_PCT / COOLDOWN_DAYS），
     规则改了这里自动跟上，不会跟实际逻辑漂移。
@@ -238,6 +239,9 @@ def _build_rules_section(today: date) -> list[dict[str, Any]]:
         "<text_tag color='red'>分位 >80% 卖出</text_tag> / "
         "<text_tag color='grey'>其余持有</text_tag>"
         "  依据各类别的估值指标",
+        # liubo 2026-10-20 加：每周五定调仓决定，周一执行
+        "- 调仓节奏：<text_tag color='blue'>周五定，周一执行</text_tag>"
+        "  周五做调仓决定并出周报，周一按决定执行",
     ]
 
     return [

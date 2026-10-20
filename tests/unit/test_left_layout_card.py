@@ -401,9 +401,9 @@ class TestRulesSection:
         assert len(tokens) == len(set(tokens)), f"图标重复：{tokens}"
 
     def test_five_rules_all_markdown_list(self) -> None:
-        """5 条规则，每条一行 markdown 列表（`- ` 前缀），不再是 div.fields。"""
+        """6 条规则，每条一行 markdown 列表（`- ` 前缀），不再是 div.fields。"""
         lines = self._rules_lines(build_left_layout_card(report_date=date(2026, 9, 30)))
-        assert len(lines) == 5
+        assert len(lines) == 6
         assert all(line.startswith("- ") for line in lines)
 
     def test_each_line_same_three_part_shape(self) -> None:
@@ -415,10 +415,17 @@ class TestRulesSection:
             assert "：" in line, f"名称与关键值之间应有冒号：{line}"
 
     def test_rule_names_match_liubo_spec(self) -> None:
-        """liubo 2026-10-20 指定的 5 条规则名。"""
+        """liubo 2026-10-20 指定的 6 条规则名。"""
         lines = self._rules_lines(build_left_layout_card(report_date=date(2026, 9, 30)))
-        for name in ("单笔规模", "一仓金额", "类别上限", "调仓冷却期", "调仓信号"):
+        for name in ("单笔规模", "一仓金额", "类别上限", "调仓冷却期", "调仓信号", "调仓节奏"):
             assert any(line.startswith(f"- {name}：") for line in lines), f"缺规则：{name}"
+
+    def test_cadence_is_friday_decide_monday_execute(self) -> None:
+        """调仓节奏：每周五定调仓决定，周一执行（liubo 2026-10-20 拍板）。"""
+        lines = self._rules_lines(build_left_layout_card(report_date=date(2026, 9, 30)))
+        cadence = next(line for line in lines if line.startswith("- 调仓节奏："))
+        assert "周五定，周一执行" in cadence
+        assert "周报" in cadence
 
     def test_signal_thresholds_match_valuation_status(self) -> None:
         """调仓信号的分位阈值必须和 `_valuation_status` 的判断口径一致（<20 买 / >80 卖）。
