@@ -1236,8 +1236,8 @@ class TestWeeklyRebalancePlan:
     def test_hscg_appears_with_real_pe(self) -> None:
         """HSCGSI 恒生消费指数 watchlist 出现在 plan 里。
 
-        liubo 2026-10-19 提供 lixinger 2026-10-16 CSV：
-        PE-TTM = 13.5728 / 分位 0.73% < 20% → 深价值 → BUILD +1（不是占位 0 的 SKIP 路径）。
+        liubo 2026-10-23 提供 lixinger 2026-10-23 CSV：
+        PE-TTM = 13.3542 / 分位 0.28% < 20% → 深价值 → BUILD +1（不是占位 0 的 SKIP 路径）。
         """
         actions = weekly_rebalance_plan()
         hscgsi_actions = [a for a in actions if a.etf_index_code == "HSCGSI"]
@@ -1246,18 +1246,18 @@ class TestWeeklyRebalancePlan:
         assert hscgsi.subclass == SwensenClass.HK_EQUITY
         assert hscgsi.current_position == Decimal("0")
         assert hscgsi.metric == ValuationMetric.PE_TTM
-        # 分位 0.73% < 20% → 深价值 → BUILD（空仓 + 分位 < 50%）
+        # 分位 0.28% < 20% → 深价值 → BUILD（空仓 + 分位 < 50%）
         assert hscgsi.signal == PESignal.BUILD
-        assert hscgsi.metric_percentile == Decimal("0.0073")
-        assert hscgsi.metric_value == Decimal("13.5728")
+        assert hscgsi.metric_percentile == Decimal("0.0028")
+        assert hscgsi.metric_value == Decimal("13.3542")
 
     def test_hsidi_appears_with_real_pe(self) -> None:
         """HSIDI 恒生创新药指数 watchlist 出现在 plan 里。
 
-        liubo 2026-10-19 提供 lixinger 2026-10-16 CSV。
+        liubo 2026-10-23 提供 lixinger 2026-10-23 CSV。
         liubo 2026-10-19 拍板：创新药改 PS-TTM（创新药公司大量亏损或微利，PE-TTM 失真；
         跟 A 股科创板同口径）。
-        PS-TTM = 2.7825 / 分位 65.13% → 区间内（20-80%）→ HOLD（不是 BUILD）。
+        PS-TTM = 2.7499 / 分位 64.32% → 区间内（20-80%）→ HOLD（不是 BUILD）。
         """
         actions = weekly_rebalance_plan()
         hsidi_actions = [a for a in actions if a.etf_index_code == "HSIDI"]
@@ -1266,10 +1266,10 @@ class TestWeeklyRebalancePlan:
         assert hsidi.subclass == SwensenClass.HK_EQUITY
         assert hsidi.current_position == Decimal("0")
         assert hsidi.metric == ValuationMetric.PS_TTM
-        # 分位 65.13% 在 50-80% 区间 → HOLD
+        # 分位 64.32% 在 50-80% 区间 → HOLD
         assert hsidi.signal == PESignal.HOLD
-        assert hsidi.metric_percentile == Decimal("0.6513")
-        assert hsidi.metric_value == Decimal("2.7825")
+        assert hsidi.metric_percentile == Decimal("0.6432")
+        assert hsidi.metric_value == Decimal("2.7499")
 
     def test_hsschky_appears_with_real_pe(self) -> None:
         """HSSCHKY 恒生港股通高股息率指数 watchlist 出现在 plan 里。
@@ -1277,10 +1277,11 @@ class TestWeeklyRebalancePlan:
         liubo 2026-10-19 拍板：原用 HSHDYI 但没对应 ETF，改用 HSSCHKY（跟踪 ETF = 513690 港股红利ETF博时）。
         50 只港股通高息股，覆盖 H 股 + A 股互通的中资高股息龙头。
 
-        lixinger 不直接给 HSSCHKY PE 分位（frog_20261016.csv 没有）。用 legulegu 月度估值：
-        PE-TTM = 8.18 / 历史分位 98.77%（2019-11~2026-08 区间，>80% 算 REDUCE 区间）。
+        2026-10-23 起 lixinger frog_20261023.csv 收录 HSSCHKY，改用理杏仁 10 年分位口径
+        （此前 frog_20261016.csv 没有，用 legulegu 月度分位，已弃用）：
+        PE-TTM = 7.4298 / 10 年分位 82.55%。
 
-        注意：HSSCHKY 0 仓位 + 分位 98.77% >= 50% → 走 HOLD（等便宜），不是 REDUCE。
+        注意：HSSCHKY 0 仓位 + 分位 82.55% >= 50% → 走 HOLD（等便宜），不是 REDUCE。
         REDUCE 只对仓位 >0 触发；持仓为空时高分位是「别追」信号。
         """
         actions = weekly_rebalance_plan()
@@ -1290,10 +1291,10 @@ class TestWeeklyRebalancePlan:
         assert hsschky.subclass == SwensenClass.HK_EQUITY
         assert hsschky.current_position == Decimal("0")
         assert hsschky.metric == ValuationMetric.PE_TTM
-        # 仓位 = 0 + 分位 98.77% >= 50% → HOLD（不是 REDUCE — REDUCE 只对仓位 >0 触发）
+        # 仓位 = 0 + 分位 82.55% >= 50% → HOLD（不是 REDUCE — REDUCE 只对仓位 >0 触发）
         assert hsschky.signal == PESignal.HOLD
-        assert hsschky.metric_percentile == Decimal("0.9877")
-        assert hsschky.metric_value == Decimal("8.18")
+        assert hsschky.metric_percentile == Decimal("0.8255")
+        assert hsschky.metric_value == Decimal("7.4298")
         assert hsschky.fund_code == "(HSSCHKY)"  # watchlist 标记
 
     def test_hstech_appears_with_013127(self) -> None:

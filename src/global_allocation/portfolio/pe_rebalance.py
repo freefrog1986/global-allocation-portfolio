@@ -166,10 +166,12 @@ class RebalanceAction:
 # PE_SNAPSHOT_BY_INDEX: 指数代码 → (估值指标, 倍数, 10年分位)
 # 注意：分位值是 fraction（0.1694 = 16.94%），不是整数百分比。
 #
-# 数据来源（2026-10-09 末，liubo 给的理杏仁 CSV "frog 勿删_总市值加权_10年_20261009_110800.csv"）：
+# 数据来源（最新一期 2026-10-23，liubo 给的理杏仁 CSV，已归档 data/lixinger/frog_20261023.csv；
+# 上一期 2026-10-16 → data/lixinger/frog_20261016.csv）：
 #   A 股: 理杏仁 CSV（000510/000852/000903/930050/931643 + 2026-10-09 新加 000688/000698/399673）
 #   美股 INX/OEX: 同上 CSV（OEX 用 INX 代理）
-#   美股 NDX: 理杏仁 CSV 无数据 → entry 删除 → 5 只纳指 100 基金（018966/539001/016452/019172/019441）SKIP（liubo 2026-10-09 拍板）
+#   美股 NDX: 理杏仁 CSV **两期都无数据**（2026-10-16 / 2026-10-23 都只有空行）→
+#     数值留 None，分位改用螺丝钉估值表口径（liubo 2026-10-18 提供）
 #   国外发达 (N225/GDAXI/FCHI): guchacha.com 2026-09-22
 #     - N225 用日本股市整体市场口径月频（不是 N225 指数本身）
 #     - GDAXI 用 DAX 指数本身周频 2016 起
@@ -181,24 +183,24 @@ class RebalanceAction:
 #   HSTECH: 理杏仁 2026-10-09（PE 21.8289 / 分位 19.69%；触发 ADD +1 — 欠配 0.65 仓 + PE < 20%）
 #   baifenwei.com 2026-09-24 也提供 PE 分位（沪深300/科创50 等 A 股）作为交叉验证。
 PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal | None, Decimal | None]] = {
-    # ── A 股（PE-TTM，理杏仁 2026-10-16）──
-    "000510": (ValuationMetric.PE_TTM, Decimal("15.1264"), Decimal("0.3863")),  # 中证 A500（< 50% → 欠配就 ADD）
-    "000852": (ValuationMetric.PE_TTM, Decimal("38.5559"), Decimal("0.5428")),  # 中证 1000（50-80% → HOLD）
-    "000903": (ValuationMetric.PE_TTM, Decimal("16.1075"), Decimal("0.8913")),  # 中证 A100（> 80% → REDUCE）
-    "930050": (ValuationMetric.PE_TTM, Decimal("15.5991"), Decimal("0.1488")),  # 中证 A50（< 20% 深价值 → ADD，但有冷却期冻结）
-    # ── A 股科创/创业类（PS-TTM，理杏仁 2026-10-16）───
-    "931643": (ValuationMetric.PS_TTM, Decimal("5.9562"), Decimal("0.6022")),   # 科创创业 50
-    "000688": (ValuationMetric.PS_TTM, Decimal("8.1792"), Decimal("0.6918")),   # 科创 50
-    "000698": (ValuationMetric.PS_TTM, Decimal("5.7253"), Decimal("0.3645")),   # 科创 100（< 50% → 欠配就 ADD；冷却期冻结）
-    "399673": (ValuationMetric.PS_TTM, Decimal("3.8127"), Decimal("0.1330")),   # 创业板 50（< 20% 深价值 → ADD；冷却期冻结）
-    # ── 美股（PE-TTM，理杏仁 2026-10-16）──
-    ".INX": (ValuationMetric.PE_TTM, Decimal("25.7531"), Decimal("0.5888")),    # 标普 500
-    # .NDX: 螺丝钉估值表 2026-10-16（理杏仁 CSV 无数据，liubo 2026-10-18 提供）
-    # 口径：PE-TTM 10 年分位（跟其他指数保持一致）
+    # ── A 股（PE-TTM，理杏仁 2026-10-23）──
+    "000510": (ValuationMetric.PE_TTM, Decimal("14.9487"), Decimal("0.3665")),  # 中证 A500（< 50% → 欠配就 ADD）
+    "000852": (ValuationMetric.PE_TTM, Decimal("38.3001"), Decimal("0.5309")),  # 中证 1000（50-80% → HOLD）
+    "000903": (ValuationMetric.PE_TTM, Decimal("15.8502"), Decimal("0.8855")),  # 中证 A100（> 80% → REDUCE）
+    "930050": (ValuationMetric.PE_TTM, Decimal("15.3410"), Decimal("0.1019")),  # 中证 A50（< 20% 深价值 → ADD，但有冷却期冻结）
+    # ── A 股科创/创业类（PS-TTM，理杏仁 2026-10-23）───
+    "931643": (ValuationMetric.PS_TTM, Decimal("5.5724"), Decimal("0.5715")),   # 科创创业 50
+    "000688": (ValuationMetric.PS_TTM, Decimal("8.2313"), Decimal("0.6948")),   # 科创 50
+    "000698": (ValuationMetric.PS_TTM, Decimal("5.8879"), Decimal("0.3969")),   # 科创 100（< 50% → 欠配就 ADD；冷却期冻结）
+    "399673": (ValuationMetric.PS_TTM, Decimal("3.5209"), Decimal("0.1050")),   # 创业板 50（< 20% 深价值 → ADD；冷却期冻结）
+    # ── 美股（PE-TTM，理杏仁 2026-10-23）──
+    ".INX": (ValuationMetric.PE_TTM, Decimal("25.4957"), Decimal("0.5633")),    # 标普 500
+    # .NDX: 理杏仁 CSV 两期都无数据 → 数值 None，分位沿用螺丝钉估值表 2026-10-16
+    # （liubo 2026-10-18 提供；口径 PE-TTM 10 年分位，跟其他指数保持一致）
     ".NDX": (ValuationMetric.PE_TTM, None, Decimal("0.7259")),                  # 纳指 100（10 年 PE 分位 72.59% → 50-80% 区间 → HOLD）
-    ".OEX": (ValuationMetric.PE_TTM, Decimal("25.7531"), Decimal("0.5888")),    # 标普 100（INX 代理，2026-10-16 更新）
-    # ── 港股（PE-TTM，理杏仁 2026-10-16）──
-    "HSTECH": (ValuationMetric.PE_TTM, Decimal("22.0142"), Decimal("0.2156")),  # 恒生科技（21.56% > 20%，不再深价值；冷却期冻结）
+    ".OEX": (ValuationMetric.PE_TTM, Decimal("25.4957"), Decimal("0.5633")),    # 标普 100（INX 代理，2026-10-23 更新）
+    # ── 港股（PE-TTM，理杏仁 2026-10-23）──
+    "HSTECH": (ValuationMetric.PE_TTM, Decimal("20.6272"), Decimal("0.0942")),  # 恒生科技（9.42% < 20% → 深价值买入信号；冷却期冻结）
     # ── 国外发达（PE-TTM，guchacha.com 2026-09-22）──
     ".N225": (ValuationMetric.PE_TTM, Decimal("19.21"), Decimal("0.698")),      # 日经 225（日本整体市场口径）
     ".GDAXI": (ValuationMetric.PE_TTM, Decimal("16.90"), Decimal("0.471")),     # 德国 DAX（DAX 指数本身口径）
@@ -314,97 +316,97 @@ INDEX_WATCHLIST: list[tuple[SwensenClass, str, str, ValuationMetric, Decimal, De
     # ── A 股 8 个 ETF 指数跟踪（liubo 2026-10-19 拍板：周报 A 股卡要覆盖全 8 个）──
     # 7 只已有持仓（014532/022434/022424/022448/017644/011612/019857/023414/013310），
     # 持仓行会通过 dedupe 覆盖 watchlist 行；A100 (000903) 没持仓，仍是 watchlist 唯一行。
-    # 数据源：理杏仁 2026-10-16（PE-TTM）/ 科创+创业类用 PS-TTM（liubo 2026-10-09 改）
+    # 数据源：理杏仁 2026-10-23（PE-TTM）/ 科创+创业类用 PS-TTM（liubo 2026-10-09 改）
     (
         SwensenClass.CN_EQUITY,
         "930050",
         "中证 A50",
         ValuationMetric.PE_TTM,
-        Decimal("15.5991"),  # 理杏仁 2026-10-16
-        Decimal("0.1488"),
+        Decimal("15.3410"),  # 理杏仁 2026-10-23
+        Decimal("0.1019"),
     ),
     (
         SwensenClass.CN_EQUITY,
         "000903",
         "中证 A100",
         ValuationMetric.PE_TTM,
-        Decimal("16.1075"),  # 理杏仁 2026-10-16（> 80% → REDUCE 信号）
-        Decimal("0.8913"),
+        Decimal("15.8502"),  # 理杏仁 2026-10-23（> 80% → REDUCE 信号）
+        Decimal("0.8855"),
     ),
     (
         SwensenClass.CN_EQUITY,
         "000510",
         "中证 A500",
         ValuationMetric.PE_TTM,
-        Decimal("15.1264"),
-        Decimal("0.3863"),
+        Decimal("14.9487"),
+        Decimal("0.3665"),
     ),
     (
         SwensenClass.CN_EQUITY,
         "000852",
         "中证 1000",
         ValuationMetric.PE_TTM,
-        Decimal("38.5559"),  # 50-80% → HOLD
-        Decimal("0.5428"),
+        Decimal("38.3001"),  # 50-80% → HOLD
+        Decimal("0.5309"),
     ),
     (
         SwensenClass.CN_EQUITY,
         "931643",
         "科创创业 50",
         ValuationMetric.PS_TTM,
-        Decimal("5.9562"),
-        Decimal("0.6022"),
+        Decimal("5.5724"),
+        Decimal("0.5715"),
     ),
     (
         SwensenClass.CN_EQUITY,
         "399673",
         "创业板 50",
         ValuationMetric.PS_TTM,
-        Decimal("3.8127"),   # < 20% 深价值 → ADD
-        Decimal("0.1330"),
+        Decimal("3.5209"),   # < 20% 深价值 → ADD
+        Decimal("0.1050"),
     ),
     (
         SwensenClass.CN_EQUITY,
         "000688",
         "科创 50",
         ValuationMetric.PS_TTM,
-        Decimal("8.1792"),
-        Decimal("0.6918"),
+        Decimal("8.2313"),
+        Decimal("0.6948"),
     ),
     (
         SwensenClass.CN_EQUITY,
         "000698",
         "科创 100",
         ValuationMetric.PS_TTM,
-        Decimal("5.7253"),
-        Decimal("0.3645"),
+        Decimal("5.8879"),
+        Decimal("0.3969"),
     ),
     # ── 港股 恒生消费指数（liubo 2026-10-19 拍板：港股也要跟踪）──
     # 理杏仁代码 = HSCGSI（Hang Seng Consumer Goods & Services Index，不是 HSCG）。
-    # 数据源：data/lixinger/frog_20261016.csv（liubo 2026-10-19 提供）。
-    # 分位 0.73% < 20% → 深价值，建仓窗口。
+    # 数据源：data/lixinger/frog_20261023.csv（liubo 2026-10-23 提供）。
+    # 分位 0.28% < 20% → 深价值，建仓窗口。
     (
         SwensenClass.HK_EQUITY,
         "HSCGSI",
         "恒生消费指数",
         ValuationMetric.PE_TTM,
-        Decimal("13.5728"),   # 理杏仁 2026-10-16
-        Decimal("0.0073"),    # 10 年分位 0.73% < 20% → 深价值
+        Decimal("13.3542"),   # 理杏仁 2026-10-23
+        Decimal("0.0028"),    # 10 年分位 0.28% < 20% → 深价值
     ),
     # ── 港股 恒生创新药指数（liubo 2026-10-19 拍板：港股加跟踪）──
     # HSIDI = Hang Seng Innovative Drug Index。
     # URL: https://www.lixinger.com/analytics/index/detail/hk/HSIDI/2198
-    # 数据源：data/lixinger/frog_20261016.csv（liubo 2026-10-19 提供）。
+    # 数据源：data/lixinger/frog_20261023.csv（liubo 2026-10-23 提供）。
     # 估值指标：PS-TTM（liubo 2026-10-19 拍板 — 创新药公司大量亏损或微利，PE-TTM 失真；
     # 跟 A 股科创 50/100/创业板 50/科创创业 50 同口径，参考 pe_rebalance.py:84-85 注释）。
-    # PS-TTM 2.7825 / 分位 65.13% → 区间内不动。
+    # PS-TTM 2.7499 / 分位 64.32% → 区间内不动。
     (
         SwensenClass.HK_EQUITY,
         "HSIDI",
         "恒生创新药指数",
         ValuationMetric.PS_TTM,
-        Decimal("2.7825"),    # 理杏仁 2026-10-16
-        Decimal("0.6513"),    # 10 年分位 65.13% → 区间内
+        Decimal("2.7499"),    # 理杏仁 2026-10-23
+        Decimal("0.6432"),    # 10 年分位 64.32% → 区间内
     ),
     # ── 港股 恒生港股通高股息率指数（liubo 2026-10-19 拍板：加 HSSCHKY 跟踪）──
     # HSSCHKY = Hang Seng SCHK High Dividend Yield Index（恒生港股通高股息率指数）。
@@ -413,17 +415,17 @@ INDEX_WATCHLIST: list[tuple[SwensenClass, str, str, ValuationMetric, Decimal, De
     # **关键**：跟踪 ETF = 513690 港股红利ETF博时（市面主流 HK 高股息 ETF，liubo 拍板 替换 HSHDYI 的原因）。
     # HSHDYI 没用：lixinger 页 1067 只样本数，跟踪 ETF 散乱（513060/159010 等小基金，
     # 没找到「明星产品」），liubo 拍板换 HSSCHKY。
-    # lixinger frog_20261016.csv 没 HSSCHKY，用 legulegu 月度估值（2019-11-30 ~ 2026-08-31，81 个月）：
-    # - PE-TTM 加权值 8.18（2026-10-14）
-    # - 历史分位 PE 9.96 倍 / 区间 3.08~10.17 / 分位 98.77%（近历史最高，>80% REDUCE 区间）
+    # 2026-10-23 起 lixinger frog_20261023.csv **已收录 HSSCHKY**，改用理杏仁 10 年分位口径，
+    # 口径跟其他港股指数统一（此前 legulegu 2019-11~2026-08 月度加权分位偏高，已弃用）：
+    # - PE-TTM 7.4298 / 10 年分位 82.55%（>80% REDUCE 区间）
     # 0 仓位 + 高分位 → 走「等便宜」 HOLD（_evaluate_signal: pos==0 且 pct>=0.50 → HOLD）。
     (
         SwensenClass.HK_EQUITY,
         "HSSCHKY",
         "恒生港股通高股息率指数",
         ValuationMetric.PE_TTM,
-        Decimal("8.18"),      # legulegu 2019-11~2026-08 加权 PE
-        Decimal("0.9877"),    # 历史分位 98.77%（>80% REDUCE 区间）
+        Decimal("7.4298"),    # 理杏仁 2026-10-23
+        Decimal("0.8255"),    # 10 年分位 82.55%（>80% REDUCE 区间）
     ),
 ]
 
