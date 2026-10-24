@@ -32,6 +32,7 @@ import pytest
 
 from global_allocation.portfolio.breakdown import SwensenClass
 from global_allocation.portfolio.pe_rebalance import (
+    AUTHORITATIVE_SNAPSHOT_BY_INDEX,
     FUND_INDEX_MAP,
     INDEX_DISPLAY_NAME,
     INDEX_WATCHLIST,
@@ -41,7 +42,6 @@ from global_allocation.portfolio.pe_rebalance import (
     RebalanceAction,
     FundPEvaluation,
     ValuationMetric,
-    WIND_PE_SNAPSHOT_BY_INDEX,
     build_evaluations,
     build_watchlist_evaluations,
     evaluate_fund,
@@ -1001,11 +1001,11 @@ class TestBuildEvaluations:
             pr_mod.GOLD_SNAPSHOT_BY_FUND.update(original)
 
     def test_em_equity_has_metric(self) -> None:
-        """新兴市场现在有 PE（不再 SKIP）。"""
+        """新兴市场现在有估值指标（不再 SKIP）—— 2026-10-25 起走权威 CAPE 快照。"""
         evals = build_evaluations()
         em = [e for e in evals if e.subclass == SwensenClass.EM_EQUITY]
         assert len(em) == 1
-        assert em[0].metric == ValuationMetric.PE_TTM
+        assert em[0].metric == ValuationMetric.CAPE
         assert em[0].metric_value is not None
 
 
@@ -1013,12 +1013,14 @@ class TestBuildEvaluations:
 
 
 class TestOverseasLiveSnapshot:
-    """海外指数估值的数据源优先级：Wind PE-TTM > live DY > 静态兜底。
+    """海外指数估值的数据源优先级：权威快照 > live DY > 静态兜底。
 
     liubo 2026-10-24：「华安德国 DAX 联接、摩根全球新兴市场…这几个还是你去自动获取拉数据」
     → 自动拉的 live DY（ETF 代理 + 月度 DY-TTM 10 年分位）。
     liubo 2026-10-25：又从 Wind 查了国外发达 3 个指数的 PE-TTM + 十年分位
-    → WIND_PE_SNAPSHOT_BY_INDEX 优先（口径跟 A 股 / 港股 / 美股一致，都是 PE-TTM）。
+    → AUTHORITATIVE_SNAPSHOT_BY_INDEX 优先（口径跟 A 股 / 港股 / 美股一致，都是 PE-TTM）。
+    同日 liubo 给了 MSCI 新兴市场的 MSCI 官网数据（PE 14.90 / P/B 2.39 / DY 2.02%）
+    + Research Affiliates 口径 CAPE 23.1（自身历史 91% 分位）→ 同样进 AUTHORITATIVE 快照。
     """
 
     @staticmethod
@@ -1063,10 +1065,33 @@ class TestOverseasLiveSnapshot:
         assert gdaxi[0].metric_value == Decimal("17.10")
         assert gdaxi[0].metric_percentile == Decimal("0.5292")
 
-    def test_em_fund_uses_live_dy(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """378006 摩根全球新兴市场走 live DY 数据（Wind 没覆盖这个指数）。"""
+    def test_em_fund_uses_authoritative_cape(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """378006 摩根全球新兴市场优先用权威快照（MSCI 官网 + RA CAPE），不是自动拉的 live DY。
+
+        liubo 2026-10-25 给的 MSCI 官网数据（截至 2026-09-30）：PE 14.90 / P/B 2.39 / DY 2.02%；
+        分位用第三方 Research Affiliates 口径的 CAPE 23.1，自身历史 91% 分位 → 偏贵。
+        """
         from global_allocation.portfolio import pe_rebalance as pr_mod
         monkeypatch.setattr(pr_mod, "OVERSEAS_SNAPSHOT_BY_INDEX", self._live_data())
+
+        evals = build_evaluations()
+        em = [e for e in evals if e.subclass == SwensenClass.EM_EQUITY]
+        assert len(em) == 1
+        assert em[0].metric == ValuationMetric.CAPE
+        assert em[0].metric_value == Decimal("23.1")
+        assert em[0].metric_percentile == Decimal("0.91")
+
+    def test_em_falls_back_to_live_dy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """权威快照没有 .MSCI_EM 时才回落自动拉的 live DY。"""
+        from global_allocation.portfolio import pe_rebalance as pr_mod
+        monkeypatch.setattr(pr_mod, "OVERSEAS_SNAPSHOT_BY_INDEX", self._live_data())
+        monkeypatch.setattr(
+            pr_mod,
+            "AUTHORITATIVE_SNAPSHOT_BY_INDEX",
+            {k: v for k, v in AUTHORITATIVE_SNAPSHOT_BY_INDEX.items() if k != ".MSCI_EM"},
+        )
 
         evals = build_evaluations()
         em = [e for e in evals if e.subclass == SwensenClass.EM_EQUITY]
@@ -1092,7 +1117,7 @@ class TestOverseasLiveSnapshot:
         """没有 Wind 数据时（liubo 还没给）回落自动拉的 live DY。"""
         from global_allocation.portfolio import pe_rebalance as pr_mod
         monkeypatch.setattr(pr_mod, "OVERSEAS_SNAPSHOT_BY_INDEX", self._live_data())
-        monkeypatch.setattr(pr_mod, "WIND_PE_SNAPSHOT_BY_INDEX", {})
+        monkeypatch.setattr(pr_mod, "AUTHORITATIVE_SNAPSHOT_BY_INDEX", {})
 
         evals = build_evaluations()
         gdaxi = [e for e in evals if e.etf_index_code == ".GDAXI"]
@@ -1103,7 +1128,7 @@ class TestOverseasLiveSnapshot:
     def test_falls_back_to_static_when_no_live_data(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Wind + live 都没有时回落 INDEX_WATCHLIST 静态值（不 SKIP）。"""
         from global_allocation.portfolio import pe_rebalance as pr_mod
-        monkeypatch.setattr(pr_mod, "WIND_PE_SNAPSHOT_BY_INDEX", {})
+        monkeypatch.setattr(pr_mod, "AUTHORITATIVE_SNAPSHOT_BY_INDEX", {})
 
         evals = build_watchlist_evaluations()
         by_idx = {e.etf_index_code: e for e in evals}
@@ -1138,7 +1163,11 @@ class TestOverseasLiveSnapshot:
     def test_msci_em_expensive_triggers_reduce_signal(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """全球新兴市场 live 分位 81.54% > 80% + 有仓位 → REDUCE（减仓信号）。"""
+        """全球新兴市场 CAPE 分位 91% > 80% + 有仓位 → REDUCE（减仓信号）。
+
+        liubo 2026-10-25：Research Affiliates 口径 CAPE 23.1 处于自身历史 91% 分位
+        —— 「相对发达市场便宜，但相对自己历史已偏贵」。
+        """
         from global_allocation.portfolio import pe_rebalance as pr_mod
         monkeypatch.setattr(pr_mod, "OVERSEAS_SNAPSHOT_BY_INDEX", self._live_data())
 
@@ -1622,25 +1651,39 @@ class TestPESnapshotData:
         assert oex_pct == Decimal("0.7474")  # 标普 100 无螺丝钉行 → INX 代理
 
     def test_foreign_dm_indices_present(self) -> None:
-        """国外发达 3 个指数在 WIND_PE_SNAPSHOT_BY_INDEX（liubo 2026-10-25 从 Wind 查的）。"""
-        assert ".N225" in WIND_PE_SNAPSHOT_BY_INDEX
-        assert ".GDAXI" in WIND_PE_SNAPSHOT_BY_INDEX
-        assert ".FCHI" in WIND_PE_SNAPSHOT_BY_INDEX
+        """国外发达 3 个指数在 AUTHORITATIVE_SNAPSHOT_BY_INDEX（liubo 2026-10-25 从 Wind 查的）。"""
+        assert ".N225" in AUTHORITATIVE_SNAPSHOT_BY_INDEX
+        assert ".GDAXI" in AUTHORITATIVE_SNAPSHOT_BY_INDEX
+        assert ".FCHI" in AUTHORITATIVE_SNAPSHOT_BY_INDEX
         # 静态兜底表里不再留旧值（避免两套数打架）
         assert ".N225" not in PE_SNAPSHOT_BY_INDEX
         assert ".GDAXI" not in PE_SNAPSHOT_BY_INDEX
         assert ".FCHI" not in PE_SNAPSHOT_BY_INDEX
 
+    def test_msci_em_authoritative_cape(self) -> None:
+        """MSCI 新兴市场在 AUTHORITATIVE_SNAPSHOT_BY_INDEX，用 RA CAPE 口径 + 自身历史分位。
+
+        liubo 2026-10-25 给的 MSCI 官网数据（截至 2026-09-30）：
+        PE 14.90 / P/B 2.39 / 股息率 2.02% / 成分股 1,165 / 市值 12.28 万亿美元；
+        第三方 Research Affiliates 口径 CAPE 23.1，自身历史 91% 分位。
+        """
+        metric, value, pct = AUTHORITATIVE_SNAPSHOT_BY_INDEX[".MSCI_EM"]
+        assert metric == ValuationMetric.CAPE
+        assert value == Decimal("23.1")
+        assert pct == Decimal("0.91")
+
     def test_all_metric_percentiles_are_fraction(self) -> None:
         """所有分位值都是 fraction (0~1)，不是整数百分比。"""
         for idx, (metric, val, pct) in PE_SNAPSHOT_BY_INDEX.items():
             assert Decimal("0") <= pct <= Decimal("1"), f"{idx} 分位 {pct} 超出 [0, 1]"
-        for idx, (metric, val, pct) in WIND_PE_SNAPSHOT_BY_INDEX.items():
+        for idx, (metric, val, pct) in AUTHORITATIVE_SNAPSHOT_BY_INDEX.items():
             assert Decimal("0") <= pct <= Decimal("1"), f"{idx} 分位 {pct} 超出 [0, 1]"
 
     def test_em_reit_snapshot_entries(self) -> None:
-        """MSCI EM 在 PE_SNAPSHOT_BY_INDEX；REITs 移到 LIVE_REIT_SNAPSHOT_BY_INDEX（spec REITs-DY）。"""
+        """MSCI EM 在 PE_SNAPSHOT_BY_INDEX + AUTHORITATIVE_SNAPSHOT_BY_INDEX；
+        REITs 移到 LIVE_REIT_SNAPSHOT_BY_INDEX（spec REITs-DY）。"""
         assert ".MSCI_EM" in PE_SNAPSHOT_BY_INDEX
+        assert ".MSCI_EM" in AUTHORITATIVE_SNAPSHOT_BY_INDEX
         # spec REITs-DY — liubo 2026-10-12 拍板：REITs 不再硬编码
         assert ".MSCI_US_REIT" not in PE_SNAPSHOT_BY_INDEX
         assert "932006" not in PE_SNAPSHOT_BY_INDEX

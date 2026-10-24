@@ -26,7 +26,9 @@
 逻辑要点：分位 < 50% + 仓位 < 1 是「欠配 + 便宜」的组合信号——既低于价值中点、仓位又没到目标，应该补到 1 仓；仓位已 ≥ 1 后，只在深价值（< 20%）才继续加，避免单一子类过度向 1 仓以上累积。
 
 估值指标（liubo 2026-09-24 扩展）：
-- A 股 / 美股 / 港股 / 国外发达 / 新兴市场：用 PE-TTM（PE-TTM 是默认）。
+- A 股 / 美股 / 港股 / 国外发达：用 PE-TTM（PE-TTM 是默认）。
+- 新兴市场：用 CAPE（liubo 2026-10-25 拍板）—— 官方 PE 14.90 没有公开 10 年分位，
+  分位只能跟第三方 Research Affiliates 的 CAPE 23.1（自身历史 91% 分位）绑定。
 - US REIT：用 P/FFO（MSCI/NAREIT 标准；REITs 用 PE 会被折旧扭曲）。
 - 中证 REITs：用 P/NAV（招商/中金/华泰国内券商惯例）。
 - 商品（黄金）：用 PE 不适用，标 PE 数据缺失 → SKIP。
@@ -41,10 +43,13 @@
 - 美股 PE 分位：螺丝钉估值表第 2999 期（2026-10-23，liubo 2026-10-24 拍板「美股用这个」）；
   PE 倍数沿用理杏仁 CSV（螺丝钉只给分位和 ROE，不给倍数）。
 - 国外发达 PE：Wind（估值日 2026-10-23，liubo 2026-10-25 查的）日经 225 / DAX / CAC40
-  → 见 WIND_PE_SNAPSHOT_BY_INDEX，优先于自动拉的 DY。
+  → 见 AUTHORITATIVE_SNAPSHOT_BY_INDEX，优先于自动拉的 DY。
+- 新兴市场：MSCI 官网（截至 2026-09-30）PE 14.90 / P/B 2.39 / 股息率 2.02%；
+  分位用第三方 Research Affiliates 口径的 CAPE 23.1（自身历史 91% 分位）
+  → 见 AUTHORITATIVE_SNAPSHOT_BY_INDEX，优先于自动拉的 DY。
 - 国外发达 + 新兴市场 DY 兜底：yfinance ETF 代理自动拉（fetch_overseas_valuation.py，
   liubo 2026-10-24 拍板）→ OVERSEAS_SNAPSHOT_BY_INDEX。
-- 新兴市场 PE：worldperatio / siblisresearch（2026-09-04）—— 仅作 DY 拉取失败时的兜底。
+- 新兴市场 PE：worldperatio / siblisresearch（2026-09-04）—— 仅作上面都取不到时的兜底。
 - US REIT P/FFO：MSCI factsheet + NAREIT（2026-08-31）。
 - 中证 REITs P/NAV：招商证券 REITs 月报（2026-08-31）。
 - HSI PE：hsi.com.hk / lixinger / 百分位网（2026-09）。
@@ -93,6 +98,8 @@ class ValuationMetric(str, Enum):
     GOLD_REAL_YIELD = "gold_real_yield"          # FRED DFII10 实际利率（fraction 0.0291 = 2.91%）
     # ── REITs 股息率（spec REITs-DY — liubo 2026-10-12 拍板）───
     DY = "dy"  # 股息率，percent number（3.76 = 3.76%；存 Decimal 不带 % 号）
+    # ── CAPE（liubo 2026-10-25：MSCI 新兴市场用第三方 CAPE 口径 + 自身历史分位）───
+    CAPE = "cape"  # 席勒 PE（CAPE），value = 倍数（23.1），分位 = 自身历史分位（0.91）
 
 
 # 指标在卡片 / 报告里的人类可读名
@@ -104,6 +111,7 @@ METRIC_DISPLAY_NAME: dict[ValuationMetric, str] = {
     ValuationMetric.GOLD_HISTORICAL_PCT: "金价分位",
     ValuationMetric.GOLD_REAL_YIELD: "实际利率",
     ValuationMetric.DY: "DY",  # 股息率（spec REITs-DY — liubo 2026-10-12）
+    ValuationMetric.CAPE: "CAPE",  # 席勒 PE（liubo 2026-10-25 MSCI 新兴市场）
 }
 
 
@@ -212,9 +220,10 @@ PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal | None, Decimal |
     # 2026-10-25 liubo 转 4 只债基建仓 018200 嘉实恒生消费 ETF 发起联接(QDII)A
     # → 从 watchlist 移出，改走持仓基金路径（fund → index 映射在 FUND_INDEX_MAP）
     "HSCGSI": (ValuationMetric.PE_TTM, Decimal("13.3542"), Decimal("0.0028")),  # 恒生消费（0.28% < 20% → 深价值）
-    # ── 国外发达（.N225 / .GDAXI / .FCHI）：见 WIND_PE_SNAPSHOT_BY_INDEX
+    # ── 国外发达（.N225 / .GDAXI / .FCHI）：见 AUTHORITATIVE_SNAPSHOT_BY_INDEX
     #    （liubo 2026-10-25 从 Wind 查的 PE-TTM，估值日 2026-10-23）
-    # ── 新兴市场（PE-TTM 兜底；正常路径走 OVERSEAS_SNAPSHOT_BY_INDEX 的 live DY）──
+    # ── 新兴市场：2026-10-25 起走 AUTHORITATIVE_SNAPSHOT_BY_INDEX（MSCI 官网 + RA CAPE），
+    #    这里的静态 PE 只作最后兜底（worldperatio 2026-09-04：PE 14.3 / 分位 60%）──
     ".MSCI_EM": (ValuationMetric.PE_TTM, Decimal("14.30"), Decimal("0.60")),   # MSCI Emerging Markets
     # ── 美国 REITs（DY + 5年估值分位，spec REITs-DY — liubo 2026-10-12 拍板；见 LIVE_REIT_SNAPSHOT_BY_INDEX）──
     # ".MSCI_US_REIT": 见 LIVE_REIT_SNAPSHOT_BY_INDEX（fetch_reit_valuation.py 注入）
@@ -228,12 +237,19 @@ PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal | None, Decimal |
 }
 
 
-# WIND_PE_SNAPSHOT_BY_INDEX: 国外发达市场的权威 PE-TTM 快照（liubo 2026-10-25 从 Wind 查的）
+# AUTHORITATIVE_SNAPSHOT_BY_INDEX: 权威机构给的指数级估值快照（优先于自动拉的 DY）
 #
-# 数据（Wind 口径，估值日 2026-10-23）：
+# 国外发达 3 个（Wind 口径，估值日 2026-10-23，liubo 2026-10-25 查的）：
 #   日经 225    N225.GI   PE-TTM 19.17   十年分位 52.60%
 #   德国 DAX    GDAXI.GI  PE-TTM 17.10   十年分位 52.92%
 #   法国 CAC 40 FCHI.PA   PE-TTM 16.74   十年分位 35.34%
+#
+# 新兴市场（liubo 2026-10-25 给的 MSCI 官网数据，截至 2026-09-30）：
+#   MSCI Emerging Markets  PE 14.90 / P/B 2.39 / 股息率 2.02%
+#                        成分股 1,165 / 市值 12.28 万亿美元
+#   分位用第三方 Research Affiliates 口径的 CAPE：23.1，自身历史 91% 分位
+#   → 卡片显示 CAPE 23.10 / 分位 91.00%（> 80% → 减仓，跟 liubo「这个指数偏贵」的判断一致）
+#   注：官方 PE 14.90 没有公开的 10 年分位，所以分位必须跟 CAPE 口径绑定，不跟 PE 混用。
 #
 # 为什么优先于自动拉的 DY（OVERSEAS_SNAPSHOT_BY_INDEX）：
 #   1. 口径一致 —— 卡片上 A 股 / 港股 / 美股都是 PE-TTM，Wind 给的是指数本身的 PE-TTM，
@@ -241,11 +257,12 @@ PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal | None, Decimal |
 #   2. 更准 —— 专业终端的指数 PE-TTM > ETF 代理的分红拼算 DY。
 # 分位窗口：10 年（跟组合统一，跟理杏仁 CSV / 螺丝钉同口径）。
 #
-# 兜底顺序：WIND_PE_SNAPSHOT_BY_INDEX > OVERSEAS_SNAPSHOT_BY_INDEX（自动拉 DY）> 静态 PE。
-WIND_PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal | None, Decimal | None]] = {
+# 兜底顺序：AUTHORITATIVE_SNAPSHOT_BY_INDEX > OVERSEAS_SNAPSHOT_BY_INDEX（自动拉 DY）> 静态 PE。
+AUTHORITATIVE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal | None, Decimal | None]] = {
     ".N225": (ValuationMetric.PE_TTM, Decimal("19.17"), Decimal("0.5260")),   # 日经 225（N225.GI）
     ".GDAXI": (ValuationMetric.PE_TTM, Decimal("17.10"), Decimal("0.5292")),  # 德国 DAX（GDAXI.GI）
     ".FCHI": (ValuationMetric.PE_TTM, Decimal("16.74"), Decimal("0.3534")),   # 法国 CAC 40（FCHI.PA）
+    ".MSCI_EM": (ValuationMetric.CAPE, Decimal("23.1"), Decimal("0.91")),    # MSCI 新兴市场（RA CAPE 口径）
 }
 
 
@@ -269,8 +286,9 @@ LIVE_REIT_SNAPSHOT_BY_INDEX: dict[
 # 覆盖 .GDAXI（德国 DAX）/ .N225（日经 225）/ .FCHI（法国 CAC 40）/ .MSCI_EM（全球新兴市场）
 # —— 这几个不在理杏仁 CSV 覆盖范围内，以前是 2026-09 的手抄静态值。
 #
-# ⚠️ 2026-10-25 起 .GDAXI / .N225 / .FCHI 优先用 WIND_PE_SNAPSHOT_BY_INDEX（liubo 从 Wind
-#    查的 PE-TTM），这里的 live DY 只作兜底；.MSCI_EM 仍然走 live DY。
+# ⚠️ 2026-10-25 起 .GDAXI / .N225 / .FCHI 优先用 AUTHORITATIVE_SNAPSHOT_BY_INDEX（liubo 从 Wind
+#    查的 PE-TTM），这里的 live DY 只作兜底；.MSCI_EM 同理优先走 AUTHORITATIVE（MSCI 官网 +
+#    Research Affiliates CAPE，liubo 2026-10-25 给的），live DY 同样只作兜底。
 #
 # 字段：index_code → (metric, value, valuation_percentile_10y, data_date)
 # - metric: DY（股息率）—— PE-TTM 的 10 年分位没有免费可拉的数据源，
@@ -350,7 +368,7 @@ INDEX_WATCHLIST: list[tuple[SwensenClass, str, str, ValuationMetric, Decimal, De
     # 港股剩下 3 个：HSCG（消费）/ HSIDI（创新药）/ HSTECH（科技；持仓 013127）
     # ── 国外发达市场（liubo 2026-09-29 加；457001 转走 0 持仓，跟踪 PE 等建仓时机；
     #    .GDAXI 在 2026-09-29 加 000614 后从 watchlist 移除（fund 替代 watchlist）。
-    #    ⚠️ 下面这两个是**最后兜底值**；正常路径优先走 WIND_PE_SNAPSHOT_BY_INDEX
+    #    ⚠️ 下面这两个是**最后兜底值**；正常路径优先走 AUTHORITATIVE_SNAPSHOT_BY_INDEX
     #    （liubo 2026-10-25 从 Wind 查的 PE-TTM，估值日 2026-10-23），
     #    其次 OVERSEAS_SNAPSHOT_BY_INDEX 的 live DY（liubo 2026-10-24 拍板自动拉数
     #    → EWJ / CAC.PA 代理）。──
@@ -1231,15 +1249,18 @@ def build_evaluations() -> list[FundPEvaluation]:
        现在统一用 live，飞书表格的「估值」列才会显示当周真实金价 + 真实分位。
     2. **REITs**（spec REITs-DY — liubo 2026-10-12） → LIVE_REIT_SNAPSHOT_BY_INDEX 的 DY 数据；
        空则 SKIP（reason 提示跑 `gap portfolio reit-fetch`）。
-    3. **国外发达**（liubo 2026-10-25） → WIND_PE_SNAPSHOT_BY_INDEX 的 PE-TTM
+    3. **国外发达**（liubo 2026-10-25） → AUTHORITATIVE_SNAPSHOT_BY_INDEX 的 PE-TTM
        （.N225 / .GDAXI / .FCHI，Wind 估值日 2026-10-23）—— 优先于自动拉的 DY。
-    4. **其它海外指数**（liubo 2026-10-24） → OVERSEAS_SNAPSHOT_BY_INDEX 的 DY 数据
-       （.MSCI_EM，ETF 代理 + 月度 DY-TTM 10 年分位）；空则回落静态 PE_SNAPSHOT 值。
-    5. 其它（股票 / 现金） → PE_SNAPSHOT_BY_INDEX 静态 or 缺失。
+    4. **新兴市场**（liubo 2026-10-25） → AUTHORITATIVE_SNAPSHOT_BY_INDEX 的 CAPE
+       （.MSCI_EM，MSCI 官网 PE 14.90 / P/B 2.39 / DY 2.02%，截至 2026-09-30；
+       分位用第三方 Research Affiliates 口径的 CAPE 23.1 / 自身历史 91% 分位）—— 优先于自动拉的 DY。
+    5. **其它海外指数**（liubo 2026-10-24） → OVERSEAS_SNAPSHOT_BY_INDEX 的 DY 数据
+       （ETF 代理 + 月度 DY-TTM 10 年分位）；空则回落静态 PE_SNAPSHOT 值。
+    6. 其它（股票 / 现金） → PE_SNAPSHOT_BY_INDEX 静态 or 缺失。
     """
     out: list[FundPEvaluation] = []
     for fund_code, (subclass, index_code, fund_name) in FUND_INDEX_MAP.items():
-        # 数据源选择：黄金 > REITs > Wind 海外 PE > live DY 海外 > 静态 PE_SNAPSHOT
+        # 数据源选择：黄金 > REITs > 权威机构快照 > live DY 海外 > 静态 PE_SNAPSHOT
         if fund_code in GOLD_SNAPSHOT_BY_FUND:
             # 黄金 live：3 字段 = (gold_price, gold_pct_5y, real_yield_dfii10)
             # action 只取前 2 个（价格 + 分位）展示在卡片估值列；
@@ -1250,8 +1271,8 @@ def build_evaluations() -> list[FundPEvaluation]:
             pct = gold_pct
         elif index_code in LIVE_REIT_SNAPSHOT_BY_INDEX:
             metric, value, pct, data_date = LIVE_REIT_SNAPSHOT_BY_INDEX[index_code]
-        elif index_code in WIND_PE_SNAPSHOT_BY_INDEX:
-            metric, value, pct = WIND_PE_SNAPSHOT_BY_INDEX[index_code]
+        elif index_code in AUTHORITATIVE_SNAPSHOT_BY_INDEX:
+            metric, value, pct = AUTHORITATIVE_SNAPSHOT_BY_INDEX[index_code]
         elif index_code in OVERSEAS_SNAPSHOT_BY_INDEX:
             metric, value, pct, data_date = OVERSEAS_SNAPSHOT_BY_INDEX[index_code]
         else:
@@ -1313,13 +1334,14 @@ def build_watchlist_evaluations() -> list[FundPEvaluation]:
     liubo 2026-09-24 加 HSI 恒生指数 — 当前没持仓，但想看估值等买入时机。
     评估规则跟持仓基金一致：仓位 0 + 分位 < 50% → BUILD，分位 >= 50% → HOLD。
 
-    海外指数（.N225 日经 225 等）：优先用 WIND_PE_SNAPSHOT_BY_INDEX（liubo 从 Wind 查的
-    PE-TTM），其次 OVERSEAS_SNAPSHOT_BY_INDEX 的 live DY，最后 INDEX_WATCHLIST 里的静态值。
+    海外指数（.N225 日经 225 等）：优先用 AUTHORITATIVE_SNAPSHOT_BY_INDEX（liubo 从 Wind 查的
+    PE-TTM / MSCI 官网 + RA CAPE），其次 OVERSEAS_SNAPSHOT_BY_INDEX 的 live DY，
+    最后 INDEX_WATCHLIST 里的静态值。
     """
     out: list[FundPEvaluation] = []
     for subclass, index_code, display_name, metric, value, pct in INDEX_WATCHLIST:
-        if index_code in WIND_PE_SNAPSHOT_BY_INDEX:
-            metric, value, pct = WIND_PE_SNAPSHOT_BY_INDEX[index_code]
+        if index_code in AUTHORITATIVE_SNAPSHOT_BY_INDEX:
+            metric, value, pct = AUTHORITATIVE_SNAPSHOT_BY_INDEX[index_code]
         elif index_code in OVERSEAS_SNAPSHOT_BY_INDEX:
             metric, value, pct, _data_date = OVERSEAS_SNAPSHOT_BY_INDEX[index_code]
         out.append(
@@ -1536,7 +1558,7 @@ __all__ = [
     "FundPEvaluation",
     "RebalanceAction",
     "PE_SNAPSHOT_BY_INDEX",
-    "WIND_PE_SNAPSHOT_BY_INDEX",
+    "AUTHORITATIVE_SNAPSHOT_BY_INDEX",
     "LIVE_REIT_SNAPSHOT_BY_INDEX",
     "FUND_INDEX_MAP",
     "INDEX_DISPLAY_NAME",

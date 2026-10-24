@@ -79,6 +79,8 @@ METRIC_DISPLAY: dict[ValuationMetric, str] = {
     ValuationMetric.GOLD_REAL_YIELD: "实际利率",          # value=FRED DFII10（fraction）
     # spec REITs-DY — liubo 2026-10-12 拍板
     ValuationMetric.DY: "DY",                            # value=股息率 percent number（3.76=3.76%）
+    # liubo 2026-10-25 — MSCI 新兴市场用 Research Affiliates 口径 CAPE
+    ValuationMetric.CAPE: "CAPE",                        # value=席勒 PE 倍数（23.10）
 }
 
 
