@@ -41,6 +41,7 @@ from global_allocation.portfolio.pe_rebalance import (
     RebalanceAction,
     FundPEvaluation,
     ValuationMetric,
+    WIND_PE_SNAPSHOT_BY_INDEX,
     build_evaluations,
     build_watchlist_evaluations,
     evaluate_fund,
@@ -1012,10 +1013,12 @@ class TestBuildEvaluations:
 
 
 class TestOverseasLiveSnapshot:
-    """OVERSEAS_SNAPSHOT_BY_INDEX 覆盖静态 PE_SNAPSHOT 值。
+    """海外指数估值的数据源优先级：Wind PE-TTM > live DY > 静态兜底。
 
     liubo 2026-10-24：「华安德国 DAX 联接、摩根全球新兴市场…这几个还是你去自动获取拉数据」
-    → 估值指标从静态 PE-TTM 换成 live DY（ETF 代理 + 月度 DY-TTM 10 年分位）。
+    → 自动拉的 live DY（ETF 代理 + 月度 DY-TTM 10 年分位）。
+    liubo 2026-10-25：又从 Wind 查了国外发达 3 个指数的 PE-TTM + 十年分位
+    → WIND_PE_SNAPSHOT_BY_INDEX 优先（口径跟 A 股 / 港股 / 美股一致，都是 PE-TTM）。
     """
 
     @staticmethod
@@ -1047,8 +1050,8 @@ class TestOverseasLiveSnapshot:
             ),
         }
 
-    def test_gdaxi_fund_uses_live_dy(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """000614 华安 DAX 联接走 live DY 数据（不再用静态 PE 16.90 / 47.1%）。"""
+    def test_wind_pe_wins_over_live_dy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Wind PE-TTM 优先于自动拉的 live DY（000614 华安 DAX 联接）。"""
         from global_allocation.portfolio import pe_rebalance as pr_mod
         monkeypatch.setattr(pr_mod, "OVERSEAS_SNAPSHOT_BY_INDEX", self._live_data())
 
@@ -1056,12 +1059,12 @@ class TestOverseasLiveSnapshot:
         gdaxi = [e for e in evals if e.etf_index_code == ".GDAXI"]
         assert len(gdaxi) == 1
         assert gdaxi[0].fund_code == "000614"
-        assert gdaxi[0].metric == ValuationMetric.DY
-        assert gdaxi[0].metric_value == Decimal("2.1629")
-        assert gdaxi[0].metric_percentile == Decimal("0.6154")
+        assert gdaxi[0].metric == ValuationMetric.PE_TTM
+        assert gdaxi[0].metric_value == Decimal("17.10")
+        assert gdaxi[0].metric_percentile == Decimal("0.5292")
 
     def test_em_fund_uses_live_dy(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """378006 摩根全球新兴市场走 live DY 数据。"""
+        """378006 摩根全球新兴市场走 live DY 数据（Wind 没覆盖这个指数）。"""
         from global_allocation.portfolio import pe_rebalance as pr_mod
         monkeypatch.setattr(pr_mod, "OVERSEAS_SNAPSHOT_BY_INDEX", self._live_data())
 
@@ -1072,35 +1075,65 @@ class TestOverseasLiveSnapshot:
         assert em[0].metric_value == Decimal("1.7965")
         assert em[0].metric_percentile == Decimal("0.8154")
 
-    def test_watchlist_uses_live_dy(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """watchlist 的 .N225 日经 225 / .FCHI 法国 CAC 40 也走 live 数据。"""
+    def test_watchlist_uses_wind_pe(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """watchlist 的 .N225 日经 225 / .FCHI 法国 CAC 40 也走 Wind PE-TTM。"""
         from global_allocation.portfolio import pe_rebalance as pr_mod
         monkeypatch.setattr(pr_mod, "OVERSEAS_SNAPSHOT_BY_INDEX", self._live_data())
 
         evals = build_watchlist_evaluations()
         by_idx = {e.etf_index_code: e for e in evals}
-        assert by_idx[".N225"].metric == ValuationMetric.DY
-        assert by_idx[".N225"].metric_value == Decimal("3.7853")
-        assert by_idx[".N225"].metric_percentile == Decimal("0.0615")
-        assert by_idx[".FCHI"].metric_value == Decimal("2.9423")
+        assert by_idx[".N225"].metric == ValuationMetric.PE_TTM
+        assert by_idx[".N225"].metric_value == Decimal("19.17")
+        assert by_idx[".N225"].metric_percentile == Decimal("0.5260")
+        assert by_idx[".FCHI"].metric_value == Decimal("16.74")
+        assert by_idx[".FCHI"].metric_percentile == Decimal("0.3534")
 
-    def test_falls_back_to_static_when_no_live_data(self) -> None:
-        """没有 live 数据时回落静态 PE_SNAPSHOT 值（不 SKIP）。"""
+    def test_live_dy_used_when_no_wind_data(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """没有 Wind 数据时（liubo 还没给）回落自动拉的 live DY。"""
+        from global_allocation.portfolio import pe_rebalance as pr_mod
+        monkeypatch.setattr(pr_mod, "OVERSEAS_SNAPSHOT_BY_INDEX", self._live_data())
+        monkeypatch.setattr(pr_mod, "WIND_PE_SNAPSHOT_BY_INDEX", {})
+
         evals = build_evaluations()
         gdaxi = [e for e in evals if e.etf_index_code == ".GDAXI"]
-        assert gdaxi[0].metric == ValuationMetric.PE_TTM
-        assert gdaxi[0].metric_value == Decimal("16.90")
-        assert gdaxi[0].metric_percentile == Decimal("0.471")
+        assert gdaxi[0].metric == ValuationMetric.DY
+        assert gdaxi[0].metric_value == Decimal("2.1629")
+        assert gdaxi[0].metric_percentile == Decimal("0.6154")
 
-    def test_n225_cheap_triggers_build_signal(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """日经 225 live 分位 6.15% < 50% → 空仓 BUILD（建仓信号）。"""
+    def test_falls_back_to_static_when_no_live_data(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Wind + live 都没有时回落 INDEX_WATCHLIST 静态值（不 SKIP）。"""
+        from global_allocation.portfolio import pe_rebalance as pr_mod
+        monkeypatch.setattr(pr_mod, "WIND_PE_SNAPSHOT_BY_INDEX", {})
+
+        evals = build_watchlist_evaluations()
+        by_idx = {e.etf_index_code: e for e in evals}
+        assert by_idx[".N225"].metric == ValuationMetric.PE_TTM
+        assert by_idx[".N225"].metric_value == Decimal("19.17")
+        assert by_idx[".N225"].metric_percentile == Decimal("0.5260")
+
+    def test_n225_wind_percentile_triggers_hold_signal(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """日经 225 Wind 分位 52.60% >= 50% → 空仓 HOLD（不是 BUILD）。"""
         from global_allocation.portfolio import pe_rebalance as pr_mod
         monkeypatch.setattr(pr_mod, "OVERSEAS_SNAPSHOT_BY_INDEX", self._live_data())
 
         actions = weekly_rebalance_plan()
         n225 = [a for a in actions if a.etf_index_code == ".N225"]
         assert len(n225) == 1
-        assert n225[0].signal == PESignal.BUILD
+        assert n225[0].signal == PESignal.HOLD
+
+    def test_fchi_wind_cheap_triggers_build_signal(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """法国 CAC 40 Wind 分位 35.34% < 50% → 空仓 BUILD（建仓信号）。"""
+        from global_allocation.portfolio import pe_rebalance as pr_mod
+        monkeypatch.setattr(pr_mod, "OVERSEAS_SNAPSHOT_BY_INDEX", self._live_data())
+
+        actions = weekly_rebalance_plan()
+        fchi = [a for a in actions if a.etf_index_code == ".FCHI"]
+        assert len(fchi) == 1
+        assert fchi[0].signal == PESignal.BUILD
 
     def test_msci_em_expensive_triggers_reduce_signal(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1297,10 +1330,10 @@ class TestWeeklyRebalancePlan:
         liubo 2026-09-29 拍板：跟踪 3 个国外发达指数方便建仓决策。
         第二十四轮（2026-09-29）liubo 加 000614 华安 DAX 联接 A → .GDAXI 从 watchlist 移到 fund map。
         2026-10-17 liubo 反馈"把定投的总成本算上去"——000614 cost 改为累计目标 10000 = 1 仓满仓 → HOLD。
-        当前 snapshot（guchacha.com 2026-09-22）：
-        - .N225  日经 225: PE 19.21 / 分位 69.8% → HOLD（空仓 + 分位 >= 50% → 等便宜）
-        - .GDAXI 德国 DAX: PE 16.90 / 分位 47.1% → HOLD（满仓 + 分位 47.1% → 不动；2026-10-17 改 cost=10000）
-        - .FCHI  法国 CAC 40: PE 17.31 / 分位 71.9% → HOLD（同 .N225）
+        当前 snapshot（Wind，估值日 2026-10-23，liubo 2026-10-25 查的）：
+        - .N225  日经 225: PE 19.17 / 分位 52.6% → HOLD（空仓 + 分位 >= 50% → 等便宜）
+        - .GDAXI 德国 DAX: PE 17.10 / 分位 52.9% → HOLD（满仓 + 分位在 20-80 中性区 → 不动）
+        - .FCHI  法国 CAC 40: PE 16.74 / 分位 35.3% → BUILD（空仓 + 分位 < 50% → 建仓）
         """
         actions = weekly_rebalance_plan()
         fdm_actions = [
@@ -1310,18 +1343,18 @@ class TestWeeklyRebalancePlan:
         assert len(fdm_actions) == 3
         codes = {a.etf_index_code for a in fdm_actions}
         assert codes == {".N225", ".GDAXI", ".FCHI"}
-        # 分位 + 信号断言（guchacha 2026-09-22 数据）
+        # 分位 + 信号断言（Wind 2026-10-23 数据）
         by_idx = {a.etf_index_code: a for a in fdm_actions}
         assert by_idx[".N225"].signal == PESignal.HOLD
-        assert by_idx[".N225"].metric_percentile == Decimal("0.698")
+        assert by_idx[".N225"].metric_percentile == Decimal("0.5260")
         assert by_idx[".N225"].fund_code == "(.N225)"  # 仍是 watchlist
-        # 关键：DAX 实际分位 47.1% < 50%，但 000614 cost 改为累计目标 10000 = 1 仓满仓 → HOLD
-        # 2026-10-17 改：之前 cost=0 是"未开始"状态 → BUILD，现在 cost=累计 → 满仓 → HOLD
+        # 关键：DAX 满仓（cost=累计目标 10000 = 1 仓）→ 任何分位都不加仓 → HOLD
         assert by_idx[".GDAXI"].signal == PESignal.HOLD
-        assert by_idx[".GDAXI"].metric_percentile == Decimal("0.471")
+        assert by_idx[".GDAXI"].metric_percentile == Decimal("0.5292")
         assert by_idx[".GDAXI"].fund_code == "000614"  # 来自 FUND_INDEX_MAP，不是 watchlist
-        assert by_idx[".FCHI"].signal == PESignal.HOLD
-        assert by_idx[".FCHI"].metric_percentile == Decimal("0.719")
+        # 法国 CAC 40 空仓 + 分位 35.3% < 50% → BUILD（建仓信号）
+        assert by_idx[".FCHI"].signal == PESignal.BUILD
+        assert by_idx[".FCHI"].metric_percentile == Decimal("0.3534")
         assert by_idx[".FCHI"].fund_code == "(.FCHI)"  # 仍是 watchlist
 
     def test_actions_ordered_by_subclass_then_code(self) -> None:
@@ -1507,10 +1540,11 @@ class TestWeeklyRebalancePlan:
         a = gdaxi[0]
         assert a.fund_code == "000614"
         assert a.subclass == SwensenClass.FOREIGN_DM_EQUITY
-        # 2026-10-17 改：cost=10000 = 1 仓满仓 + 分位 47.1% < 50% → HOLD（满仓即使便宜也不加仓）
+        # 2026-10-17 改：cost=10000 = 1 仓满仓 → HOLD（满仓即使便宜也不加仓）
+        # 2026-10-25：分位改走 Wind（PE 17.10 / 十年分位 52.92%）
         assert a.signal == PESignal.HOLD
         assert a.current_position == Decimal("1")  # 1 仓满仓（DCA 累计 10000 = 1 仓）
-        assert a.metric_percentile == Decimal("0.471")
+        assert a.metric_percentile == Decimal("0.5292")
         assert a.metric == ValuationMetric.PE_TTM
         # .GDAXI 不在 watchlist 里了
         watchlist_idx = {w[1] for w in INDEX_WATCHLIST}
@@ -1581,14 +1615,20 @@ class TestPESnapshotData:
         assert oex_pct == Decimal("0.7474")  # 标普 100 无螺丝钉行 → INX 代理
 
     def test_foreign_dm_indices_present(self) -> None:
-        """国外发达 3 个指数都在。"""
-        assert ".N225" in PE_SNAPSHOT_BY_INDEX
-        assert ".GDAXI" in PE_SNAPSHOT_BY_INDEX
-        assert ".FCHI" in PE_SNAPSHOT_BY_INDEX
+        """国外发达 3 个指数在 WIND_PE_SNAPSHOT_BY_INDEX（liubo 2026-10-25 从 Wind 查的）。"""
+        assert ".N225" in WIND_PE_SNAPSHOT_BY_INDEX
+        assert ".GDAXI" in WIND_PE_SNAPSHOT_BY_INDEX
+        assert ".FCHI" in WIND_PE_SNAPSHOT_BY_INDEX
+        # 静态兜底表里不再留旧值（避免两套数打架）
+        assert ".N225" not in PE_SNAPSHOT_BY_INDEX
+        assert ".GDAXI" not in PE_SNAPSHOT_BY_INDEX
+        assert ".FCHI" not in PE_SNAPSHOT_BY_INDEX
 
     def test_all_metric_percentiles_are_fraction(self) -> None:
         """所有分位值都是 fraction (0~1)，不是整数百分比。"""
         for idx, (metric, val, pct) in PE_SNAPSHOT_BY_INDEX.items():
+            assert Decimal("0") <= pct <= Decimal("1"), f"{idx} 分位 {pct} 超出 [0, 1]"
+        for idx, (metric, val, pct) in WIND_PE_SNAPSHOT_BY_INDEX.items():
             assert Decimal("0") <= pct <= Decimal("1"), f"{idx} 分位 {pct} 超出 [0, 1]"
 
     def test_em_reit_snapshot_entries(self) -> None:
