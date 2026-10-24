@@ -87,6 +87,25 @@ def _inject_reit_snapshot() -> None:
     pr_mod.LIVE_REIT_SNAPSHOT_BY_INDEX.clear()
 
 
+# ─── autouse fixture：清空 OVERSEAS_SNAPSHOT_BY_INDEX（liubo 2026-10-24）───
+#
+# 海外指数（.GDAXI / .N225 / .FCHI / .MSCI_EM）现在走 fetch_overseas_valuation 自动拉数，
+# 本机 ~/.local/share/gap/overseas_valuation/ 有没有 JSON 会让测试结果依赖环境。
+# 默认清空 → 所有 test 走**静态兜底路径**（PE_SNAPSHOT_BY_INDEX），结果确定。
+# 需要验 live 路径的 test 用 monkeypatch.setattr 显式注入（见 TestOverseasLiveSnapshot）。
+
+
+@pytest.fixture(autouse=True)
+def _clear_overseas_snapshot():
+    """默认清空海外指数 live snapshot，让 test 断言落在静态兜底值上。"""
+    from global_allocation.portfolio import pe_rebalance as pr_mod
+    original = dict(pr_mod.OVERSEAS_SNAPSHOT_BY_INDEX)
+    pr_mod.OVERSEAS_SNAPSHOT_BY_INDEX.clear()
+    yield
+    pr_mod.OVERSEAS_SNAPSHOT_BY_INDEX.clear()
+    pr_mod.OVERSEAS_SNAPSHOT_BY_INDEX.update(original)
+
+
 def _make_eval(
     fund_code: str = "TEST",
     fund_name: str = "测试基金",
@@ -987,6 +1006,159 @@ class TestBuildEvaluations:
         assert len(em) == 1
         assert em[0].metric == ValuationMetric.PE_TTM
         assert em[0].metric_value is not None
+
+
+# ─── 海外指数 live snapshot（liubo 2026-10-24 拍板自动拉数）───
+
+
+class TestOverseasLiveSnapshot:
+    """OVERSEAS_SNAPSHOT_BY_INDEX 覆盖静态 PE_SNAPSHOT 值。
+
+    liubo 2026-10-24：「华安德国 DAX 联接、摩根全球新兴市场…这几个还是你去自动获取拉数据」
+    → 估值指标从静态 PE-TTM 换成 live DY（ETF 代理 + 月度 DY-TTM 10 年分位）。
+    """
+
+    @staticmethod
+    def _live_data() -> dict:
+        return {
+            ".GDAXI": (
+                ValuationMetric.DY,
+                Decimal("2.1629"),
+                Decimal("0.6154"),
+                date(2026, 10, 24),
+            ),
+            ".N225": (
+                ValuationMetric.DY,
+                Decimal("3.7853"),
+                Decimal("0.0615"),
+                date(2026, 10, 24),
+            ),
+            ".FCHI": (
+                ValuationMetric.DY,
+                Decimal("2.9423"),
+                Decimal("0.5000"),
+                date(2026, 10, 24),
+            ),
+            ".MSCI_EM": (
+                ValuationMetric.DY,
+                Decimal("1.7965"),
+                Decimal("0.8154"),
+                date(2026, 10, 24),
+            ),
+        }
+
+    def test_gdaxi_fund_uses_live_dy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """000614 华安 DAX 联接走 live DY 数据（不再用静态 PE 16.90 / 47.1%）。"""
+        from global_allocation.portfolio import pe_rebalance as pr_mod
+        monkeypatch.setattr(pr_mod, "OVERSEAS_SNAPSHOT_BY_INDEX", self._live_data())
+
+        evals = build_evaluations()
+        gdaxi = [e for e in evals if e.etf_index_code == ".GDAXI"]
+        assert len(gdaxi) == 1
+        assert gdaxi[0].fund_code == "000614"
+        assert gdaxi[0].metric == ValuationMetric.DY
+        assert gdaxi[0].metric_value == Decimal("2.1629")
+        assert gdaxi[0].metric_percentile == Decimal("0.6154")
+
+    def test_em_fund_uses_live_dy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """378006 摩根全球新兴市场走 live DY 数据。"""
+        from global_allocation.portfolio import pe_rebalance as pr_mod
+        monkeypatch.setattr(pr_mod, "OVERSEAS_SNAPSHOT_BY_INDEX", self._live_data())
+
+        evals = build_evaluations()
+        em = [e for e in evals if e.subclass == SwensenClass.EM_EQUITY]
+        assert len(em) == 1
+        assert em[0].metric == ValuationMetric.DY
+        assert em[0].metric_value == Decimal("1.7965")
+        assert em[0].metric_percentile == Decimal("0.8154")
+
+    def test_watchlist_uses_live_dy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """watchlist 的 .N225 日经 225 / .FCHI 法国 CAC 40 也走 live 数据。"""
+        from global_allocation.portfolio import pe_rebalance as pr_mod
+        monkeypatch.setattr(pr_mod, "OVERSEAS_SNAPSHOT_BY_INDEX", self._live_data())
+
+        evals = build_watchlist_evaluations()
+        by_idx = {e.etf_index_code: e for e in evals}
+        assert by_idx[".N225"].metric == ValuationMetric.DY
+        assert by_idx[".N225"].metric_value == Decimal("3.7853")
+        assert by_idx[".N225"].metric_percentile == Decimal("0.0615")
+        assert by_idx[".FCHI"].metric_value == Decimal("2.9423")
+
+    def test_falls_back_to_static_when_no_live_data(self) -> None:
+        """没有 live 数据时回落静态 PE_SNAPSHOT 值（不 SKIP）。"""
+        evals = build_evaluations()
+        gdaxi = [e for e in evals if e.etf_index_code == ".GDAXI"]
+        assert gdaxi[0].metric == ValuationMetric.PE_TTM
+        assert gdaxi[0].metric_value == Decimal("16.90")
+        assert gdaxi[0].metric_percentile == Decimal("0.471")
+
+    def test_n225_cheap_triggers_build_signal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """日经 225 live 分位 6.15% < 50% → 空仓 BUILD（建仓信号）。"""
+        from global_allocation.portfolio import pe_rebalance as pr_mod
+        monkeypatch.setattr(pr_mod, "OVERSEAS_SNAPSHOT_BY_INDEX", self._live_data())
+
+        actions = weekly_rebalance_plan()
+        n225 = [a for a in actions if a.etf_index_code == ".N225"]
+        assert len(n225) == 1
+        assert n225[0].signal == PESignal.BUILD
+
+    def test_msci_em_expensive_triggers_reduce_signal(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """全球新兴市场 live 分位 81.54% > 80% + 有仓位 → REDUCE（减仓信号）。"""
+        from global_allocation.portfolio import pe_rebalance as pr_mod
+        monkeypatch.setattr(pr_mod, "OVERSEAS_SNAPSHOT_BY_INDEX", self._live_data())
+
+        actions = weekly_rebalance_plan()
+        em = [a for a in actions if a.etf_index_code == ".MSCI_EM"]
+        assert len(em) == 1
+        assert em[0].signal == PESignal.REDUCE
+
+    def test_load_live_overseas_snapshot_injects(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """load_live_overseas_snapshot 从 JSON 读数并注入 OVERSEAS_SNAPSHOT_BY_INDEX。"""
+        from global_allocation.portfolio import pe_rebalance as pr_mod
+        from global_allocation.portfolio.fetch_overseas_valuation import (
+            OverseasValuation,
+            save_snapshot,
+        )
+
+        snapshots = {
+            ".GDAXI": OverseasValuation(
+                index_code=".GDAXI",
+                metric="dy",
+                value=Decimal("2.16"),
+                dy_percentile_10y=Decimal("0.38"),
+                valuation_percentile_10y=Decimal("0.62"),
+                data_date=date(2026, 10, 24),
+                source="yfinance DAX",
+            ),
+            # 抓取失败的指数 → 不该被注入
+            ".FCHI": OverseasValuation(
+                index_code=".FCHI",
+                metric="dy",
+                value=None,
+                dy_percentile_10y=None,
+                valuation_percentile_10y=None,
+                data_date=date(2026, 10, 24),
+                source="yfinance CAC.PA",
+                error="yfinance 返回空数据",
+            ),
+        }
+        monkeypatch.setattr(
+            "global_allocation.portfolio.fetch_overseas_valuation.DATA_DIR", tmp_path
+        )
+        save_snapshot(snapshots)
+
+        pr_mod.OVERSEAS_SNAPSHOT_BY_INDEX.clear()
+        result = pr_mod.load_live_overseas_snapshot()
+        assert ".GDAXI" in result
+        assert result[".GDAXI"][0] == ValuationMetric.DY
+        assert result[".GDAXI"][1] == Decimal("2.16")
+        assert result[".GDAXI"][2] == Decimal("0.62")
+        # 抓取失败的跳过 → 回落静态值
+        assert ".FCHI" not in result
 
 
 class TestWatchlistEvaluations:

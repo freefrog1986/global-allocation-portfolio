@@ -206,6 +206,8 @@ PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal | None, Decimal |
     # ── 港股（PE-TTM，理杏仁 2026-10-23）──
     "HSTECH": (ValuationMetric.PE_TTM, Decimal("20.6272"), Decimal("0.0942")),  # 恒生科技（9.42% < 20% → 深价值买入信号；冷却期冻结）
     # ── 国外发达（PE-TTM，guchacha.com 2026-09-22）──
+    # ⚠️ 以下 4 个是**静态兜底值**（fetch 失败时才用）；正常路径走 OVERSEAS_SNAPSHOT_BY_INDEX
+    #    的 live DY 数据（liubo 2026-10-24 拍板自动拉数）。
     ".N225": (ValuationMetric.PE_TTM, Decimal("19.21"), Decimal("0.698")),      # 日经 225（日本整体市场口径）
     ".GDAXI": (ValuationMetric.PE_TTM, Decimal("16.90"), Decimal("0.471")),     # 德国 DAX（DAX 指数本身口径）
     ".FCHI": (ValuationMetric.PE_TTM, Decimal("17.31"), Decimal("0.719")),      # 法国 CAC 40（法国整体市场口径）
@@ -234,6 +236,24 @@ PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal | None, Decimal |
 # 如果 load_latest_snapshot() 没找到文件（首次跑、JSON 还没生成），这里就是空 dict。
 # build_evaluations() 在这种情况下会让 REITs 走 SKIP 路径 + reason 提示跑 reit-fetch。
 LIVE_REIT_SNAPSHOT_BY_INDEX: dict[
+    str, tuple[ValuationMetric, Decimal | None, Decimal | None, "date"]
+] = {}
+
+
+# OVERSEAS_SNAPSHOT_BY_INDEX: 海外指数的实时估值（liubo 2026-10-24 拍板自动拉数）
+# 来源：fetch_overseas_valuation.py → 写 JSON → load_live_overseas_snapshot() 注入这里
+# 覆盖 .GDAXI（德国 DAX）/ .N225（日经 225）/ .MSCI_EM（全球新兴市场）
+# —— 这三个不在理杏仁 CSV 覆盖范围内，以前是 2026-09 的手抄静态值。
+#
+# 字段：index_code → (metric, value, valuation_percentile_10y, data_date)
+# - metric: DY（股息率）—— PE-TTM 的 10 年分位没有免费可拉的数据源，
+#   改用 ETF 代理的月度 DY-TTM 序列（跟 spec REITs-DY 同一套方法）
+# - value: 股息率 percent number（2.16 = 2.16%）
+# - valuation_percentile_10y: 估值分位 fraction（低 = 便宜，跟 PE/PS 一致）
+# - data_date: 数据日期（不是 fetch 日期）
+#
+# 没有 live 数据时 → 回落 PE_SNAPSHOT_BY_INDEX 里的静态 PE 值（不 SKIP）。
+OVERSEAS_SNAPSHOT_BY_INDEX: dict[
     str, tuple[ValuationMetric, Decimal | None, Decimal | None, "date"]
 ] = {}
 
@@ -299,14 +319,15 @@ INDEX_WATCHLIST: list[tuple[SwensenClass, str, str, ValuationMetric, Decimal, De
     #   (SwensenClass.HK_EQUITY, "HSI", "恒生指数", ValuationMetric.PE_TTM, Decimal("10.6327"), Decimal("0.5524")),
     # 港股剩下 3 个：HSCG（消费）/ HSIDI（创新药）/ HSTECH（科技；持仓 013127）
     # ── 国外发达市场（liubo 2026-09-29 加；457001 转走 0 持仓，跟踪 PE 等建仓时机；
-    #    数据源 guchacha.com 2026-09-22。
-    #    .GDAXI 在 2026-09-29 加 000614 后从 watchlist 移除（fund 替代 watchlist））──
+    #    .GDAXI 在 2026-09-29 加 000614 后从 watchlist 移除（fund 替代 watchlist）。
+    #    ⚠️ 下面这两个是**静态兜底值**；正常路径走 OVERSEAS_SNAPSHOT_BY_INDEX 的 live DY
+    #    数据（liubo 2026-10-24 拍板自动拉数 → EWJ / CAC.PA 代理）。──
     (
         SwensenClass.FOREIGN_DM_EQUITY,
         ".N225",
         "日经 225",
         ValuationMetric.PE_TTM,
-        Decimal("19.21"),    # guchacha 日本整体市场口径
+        Decimal("19.21"),    # 静态兜底：guchacha 日本整体市场口径
         Decimal("0.698"),
     ),
     (
@@ -314,7 +335,7 @@ INDEX_WATCHLIST: list[tuple[SwensenClass, str, str, ValuationMetric, Decimal, De
         ".FCHI",
         "法国 CAC 40",
         ValuationMetric.PE_TTM,
-        Decimal("17.31"),    # guchacha 法国整体市场口径
+        Decimal("17.31"),    # 静态兜底：guchacha 法国整体市场口径
         Decimal("0.719"),
     ),
     # ── A 股 8 个 ETF 指数跟踪（liubo 2026-10-19 拍板：周报 A 股卡要覆盖全 8 个）──
@@ -1078,6 +1099,34 @@ def get_live_reit_data_date() -> date | None:
     return max(d for _, _, _, d in LIVE_REIT_SNAPSHOT_BY_INDEX.values())
 
 
+def load_live_overseas_snapshot() -> dict[
+    str, tuple[ValuationMetric, Decimal | None, Decimal | None, date]
+]:
+    """从 data/overseas_valuation/ 最新 JSON 读海外指数实时估值，注入 OVERSEAS_SNAPSHOT_BY_INDEX。
+
+    liubo 2026-10-24 拍板「华安德国 DAX 联接、摩根全球新兴市场这几个你去自动获取拉数据」。
+
+    没有可用快照 / 某个指数抓取失败 → 该指数不注入（回落静态 PE_SNAPSHOT 值）。
+    """
+    from global_allocation.portfolio.fetch_overseas_valuation import load_latest_snapshot
+
+    result = load_latest_snapshot()
+    if result is None:
+        return OVERSEAS_SNAPSHOT_BY_INDEX
+
+    _path, snapshots = result
+    for code, s in snapshots.items():
+        if s.error or s.value is None or s.valuation_percentile_10y is None:
+            continue
+        OVERSEAS_SNAPSHOT_BY_INDEX[code] = (
+            ValuationMetric.DY,
+            s.value,
+            s.valuation_percentile_10y,
+            s.data_date,
+        )
+    return OVERSEAS_SNAPSHOT_BY_INDEX
+
+
 def load_live_gold_snapshot() -> dict[str, tuple[Decimal, Decimal, Decimal]]:
     """从 data/gold_valuation/ 最新 JSON 读黄金实时估值，注入 GOLD_SNAPSHOT_BY_FUND。
 
@@ -1157,11 +1206,14 @@ def build_evaluations() -> list[FundPEvaluation]:
        现在统一用 live，飞书表格的「估值」列才会显示当周真实金价 + 真实分位。
     2. **REITs**（spec REITs-DY — liubo 2026-10-12） → LIVE_REIT_SNAPSHOT_BY_INDEX 的 DY 数据；
        空则 SKIP（reason 提示跑 `gap portfolio reit-fetch`）。
-    3. 其它（股票 / 现金） → PE_SNAPSHOT_BY_INDEX 静态 or 缺失。
+    3. **海外指数**（liubo 2026-10-24） → OVERSEAS_SNAPSHOT_BY_INDEX 的 DY 数据
+       （.GDAXI / .N225 / .MSCI_EM，ETF 代理 + 月度 DY-TTM 10 年分位）；
+       空则回落静态 PE_SNAPSHOT 值。
+    4. 其它（股票 / 现金） → PE_SNAPSHOT_BY_INDEX 静态 or 缺失。
     """
     out: list[FundPEvaluation] = []
     for fund_code, (subclass, index_code, fund_name) in FUND_INDEX_MAP.items():
-        # 数据源选择：黄金 > REITs > 静态 PE_SNAPSHOT
+        # 数据源选择：黄金 > REITs > 海外指数 > 静态 PE_SNAPSHOT
         if fund_code in GOLD_SNAPSHOT_BY_FUND:
             # 黄金 live：3 字段 = (gold_price, gold_pct_5y, real_yield_dfii10)
             # action 只取前 2 个（价格 + 分位）展示在卡片估值列；
@@ -1172,6 +1224,8 @@ def build_evaluations() -> list[FundPEvaluation]:
             pct = gold_pct
         elif index_code in LIVE_REIT_SNAPSHOT_BY_INDEX:
             metric, value, pct, data_date = LIVE_REIT_SNAPSHOT_BY_INDEX[index_code]
+        elif index_code in OVERSEAS_SNAPSHOT_BY_INDEX:
+            metric, value, pct, data_date = OVERSEAS_SNAPSHOT_BY_INDEX[index_code]
         else:
             snapshot = PE_SNAPSHOT_BY_INDEX.get(index_code)
             if snapshot is None:
@@ -1230,9 +1284,14 @@ def build_watchlist_evaluations() -> list[FundPEvaluation]:
 
     liubo 2026-09-24 加 HSI 恒生指数 — 当前没持仓，但想看估值等买入时机。
     评估规则跟持仓基金一致：仓位 0 + 分位 < 50% → BUILD，分位 >= 50% → HOLD。
+
+    海外指数（.N225 日经 225 等）在 OVERSEAS_SNAPSHOT_BY_INDEX 里有 live 数据时用 live，
+    否则用 INDEX_WATCHLIST 里的静态值。
     """
     out: list[FundPEvaluation] = []
     for subclass, index_code, display_name, metric, value, pct in INDEX_WATCHLIST:
+        if index_code in OVERSEAS_SNAPSHOT_BY_INDEX:
+            metric, value, pct, _data_date = OVERSEAS_SNAPSHOT_BY_INDEX[index_code]
         out.append(
             FundPEvaluation(
                 fund_code=f"({index_code})",   # 标记为 watchlist，不是真实基金代码
@@ -1482,6 +1541,7 @@ __all__ = [
 try:
     load_live_reit_snapshot()
     load_live_gold_snapshot()
+    load_live_overseas_snapshot()
 except Exception:
     # 加载失败（首次跑、文件系统问题等）→ 保持空/静态，不影响其他指数评估
     pass

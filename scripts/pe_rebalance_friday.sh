@@ -30,6 +30,11 @@ echo "[$(date +%FT%T)] 开始 PE-TTM 周调仓" >> "$LOG_FILE"
 echo "[$(date +%FT%T)] 拉 REITs DY 数据" >> "$LOG_FILE"
 uv run gap portfolio reit-fetch >> "$LOG_FILE" 2>&1 || echo "[$(date +%FT%T)] REITs 拉取失败，继续跑 report" >> "$LOG_FILE"
 
+# 1b. 拉海外指数估值（liubo 2026-10-24：DAX / 日经 225 / 法国 CAC 40 / 全球新兴市场）
+# 失败不阻断：report 仍跑（回落 PE_SNAPSHOT_BY_INDEX 里的静态值）
+echo "[$(date +%FT%T)] 拉海外指数 DY 数据" >> "$LOG_FILE"
+uv run gap portfolio overseas-fetch >> "$LOG_FILE" 2>&1 || echo "[$(date +%FT%T)] 海外指数拉取失败，继续跑 report" >> "$LOG_FILE"
+
 # 2. uv run gap portfolio pe-rebalance --send 通过飞书 OpenAPI 发卡片到话题 thread
 # topic root: om_x100b6410364be0b0c45b4dbfab88ab1 (botmux history 2026-09-24)
 TOPIC_ROOT="om_x100b6410364be0b0c45b4dbfab88ab1"

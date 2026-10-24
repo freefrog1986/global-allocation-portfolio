@@ -1675,7 +1675,10 @@ class TestPerFundSection:
         """NDX 基金估值列：metric_value=None 但 percentile 不为 None 时，显示分位估值。
 
         第三十二轮（liubo 2026-10-18）：螺丝钉数据只有分位没有 PE 绝对值，仍要显示分位。
-        修复前显示「—」，修复后显示「PE-TTM 分位 72.59%」。
+        修复前显示「—」，修复后显示「PE-TTM 分位 XX%」。
+
+        2026-10-24 liubo 提供螺丝钉估值表第 2999 期（2026-10-23）→
+        纳指 100 近十年 PE 分位 72.59% → 64.55%。
         """
         table = self._get_per_fund_table(journal)
         ndx_rows = [r for r in table["rows"] if "018966" in r["fund"] or "539001" in r["fund"] or "016452" in r["fund"] or "019172" in r["fund"] or "019441" in r["fund"]]
@@ -1687,8 +1690,8 @@ class TestPerFundSection:
             assert "分位" in r["valuation"], (
                 f"NDX 基金估值列应有分位，实际：{r['valuation']}"
             )
-            assert "72.59" in r["valuation"], (
-                f"NDX 基金估值列应显示 72.59%（螺丝钉 10 年分位），实际：{r['valuation']}"
+            assert "64.55" in r["valuation"], (
+                f"NDX 基金估值列应显示 64.55%（螺丝钉第 2999 期 10 年分位），实际：{r['valuation']}"
             )
 
     def test_sorted_by_subclass_then_etf_index_then_code(self, journal: PortfolioJournal) -> None:

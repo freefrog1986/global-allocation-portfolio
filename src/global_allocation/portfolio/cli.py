@@ -1733,6 +1733,28 @@ def cmd_reit_fetch() -> None:
     console.print(output)
 
 
+# ─── overseas-fetch subcommand（liubo 2026-10-24 拍板自动拉海外指数估值）───
+
+
+@app.command("overseas-fetch")
+def cmd_overseas_fetch() -> None:
+    """拉海外指数估值数据（DY + 10 年分位）→ 写 data/overseas_valuation/YYYY-MM-DD.json。
+
+    数据源（yfinance ETF 代理 + 月度 DY-TTM 序列）：
+    - .GDAXI 德国 DAX → DAX（Global X DAX Germany ETF）
+    - .N225 日经 225 → EWJ（iShares MSCI Japan ETF）
+    - .FCHI 法国 CAC 40 → CAC.PA（Amundi CAC 40 UCITS ETF）
+    - .MSCI_EM 全球新兴市场 → EEM（iShares MSCI Emerging Markets ETF）
+
+    每周五 cron 在 pe-rebalance 之前跑（pe_rebalance_friday.sh）。
+    失败不抛异常，exit code 0（让周报仍能跑用 fallback 静态值）。
+    """
+    from global_allocation.portfolio.fetch_overseas_valuation import run_fetch_cli
+
+    output = run_fetch_cli()
+    console.print(output)
+
+
 # ─── left-layout subcommand (liubo 2026-09-29 拍板，2026-10-19 改名) ───
 
 
