@@ -1194,8 +1194,8 @@ class TestWeeklyRebalancePlan:
         fund_code = 5 只 "+" 串联；仓位 = 1 联接 + 3 直接 QDII 累计 / 10000 = 0.30 仓
         （019172/019441 初始成本 0；019524 已卖 -20）。
 
-        2026-10-18 liubo 提供螺丝钉估值表 2026-10-16 数据（理杏仁 CSV 无 NDX）：
-        PE-TTM 10 年分位 72.59% → 50-80% 区间 → 仓位 >= 1 → HOLD。
+        2026-10-24 liubo 提供螺丝钉估值表第 2999 期（2026-10-23）数据：
+        PE-TTM 10 年分位 64.55%（近五年 52.03%）→ 50-80% 区间 → 仓位 >= 1 → HOLD。
         """
         actions = weekly_rebalance_plan()
         ndx_actions = [a for a in actions if ".NDX" in a.etf_index_code]
@@ -1204,7 +1204,7 @@ class TestWeeklyRebalancePlan:
         assert ndx.signal == PESignal.HOLD
         assert ndx.change == Decimal("0")
         assert ndx.metric == ValuationMetric.PE_TTM
-        assert ndx.metric_percentile == Decimal("0.7259")
+        assert ndx.metric_percentile == Decimal("0.6455")
         # 5 只合并（含 1 联接 018966 + 539001/016452/019172/019441 4 直接 QDII 场外）
         ndx_fund = ndx.fund_code
         assert "018966" in ndx_fund and "539001" in ndx_fund
@@ -1395,14 +1395,18 @@ class TestPESnapshotData:
             assert idx in PE_SNAPSHOT_BY_INDEX
 
     def test_us_indices_present(self) -> None:
-        """美股 INX + OEX + NDX 都在（2026-10-18 liubo 加 NDX 数据）。"""
+        """美股 INX + OEX + NDX 都在（2026-10-24 liubo 拍板美股统一走螺丝钉估值表）。"""
         assert ".INX" in PE_SNAPSHOT_BY_INDEX
         assert ".OEX" in PE_SNAPSHOT_BY_INDEX
-        # .NDX 螺丝钉 2026-10-16 提供（理杏仁 CSV 无数据，liubo 截图）
         assert ".NDX" in PE_SNAPSHOT_BY_INDEX
         ndx_metric, _, ndx_pct = PE_SNAPSHOT_BY_INDEX[".NDX"]
         assert ndx_metric == ValuationMetric.PE_TTM
-        assert ndx_pct == Decimal("0.7259")  # 10 年 PE 分位 72.59%
+        assert ndx_pct == Decimal("0.6455")  # 螺丝钉第 2999 期 10 年 PE 分位 64.55%
+        # 标普 500 / 标普 100 同样走螺丝钉分位
+        _, _, inx_pct = PE_SNAPSHOT_BY_INDEX[".INX"]
+        _, _, oex_pct = PE_SNAPSHOT_BY_INDEX[".OEX"]
+        assert inx_pct == Decimal("0.7474")  # 螺丝钉 10 年 PE 分位 74.74%
+        assert oex_pct == Decimal("0.7474")  # 标普 100 无螺丝钉行 → INX 代理
 
     def test_foreign_dm_indices_present(self) -> None:
         """国外发达 3 个指数都在。"""

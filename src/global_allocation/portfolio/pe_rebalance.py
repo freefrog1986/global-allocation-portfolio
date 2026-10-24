@@ -37,8 +37,10 @@
   BUILD（提醒建仓）或 HOLD（等便宜），跟跑分数显示「无持仓」标签。
 
 数据来源（snapshot 写死在 PE_SNAPSHOT_BY_INDEX + INDEX_WATCHLIST）：
-- A 股 PE：理杏仁 CSV（2026-09-24 总市值加权 10 年窗口）。
-- 美股 PE：理杏仁 INX + WebSearch NDX/DAX/CAC40/日经。
+- A 股 PE：理杏仁 CSV（2026-10-23 总市值加权 10 年窗口）。
+- 美股 PE 分位：螺丝钉估值表第 2999 期（2026-10-23，liubo 2026-10-24 拍板「美股用这个」）；
+  PE 倍数沿用理杏仁 CSV（螺丝钉只给分位和 ROE，不给倍数）。
+- 国外发达 PE：guchacha.com（2026-09-22）日经 / DAX / CAC40。
 - 新兴市场 PE：worldperatio / siblisresearch（2026-09-04）。
 - US REIT P/FFO：MSCI factsheet + NAREIT（2026-08-31）。
 - 中证 REITs P/NAV：招商证券 REITs 月报（2026-08-31）。
@@ -169,9 +171,9 @@ class RebalanceAction:
 # 数据来源（最新一期 2026-10-23，liubo 给的理杏仁 CSV，已归档 data/lixinger/frog_20261023.csv；
 # 上一期 2026-10-16 → data/lixinger/frog_20261016.csv）：
 #   A 股: 理杏仁 CSV（000510/000852/000903/930050/931643 + 2026-10-09 新加 000688/000698/399673）
-#   美股 INX/OEX: 同上 CSV（OEX 用 INX 代理）
-#   美股 NDX: 理杏仁 CSV **两期都无数据**（2026-10-16 / 2026-10-23 都只有空行）→
-#     数值留 None，分位改用螺丝钉估值表口径（liubo 2026-10-18 提供）
+#   美股 INX/NDX/OEX: **分位走螺丝钉估值表第 2999 期（2026-10-23）** ——
+#     liubo 2026-10-24 拍板「美股用这个」。螺丝钉只给近五年/近十年 PE 分位 + ROE，不给倍数，
+#     所以倍数仍取理杏仁 CSV（.NDX 仍无倍数 → None）。本组合统一 10 年窗口。
 #   国外发达 (N225/GDAXI/FCHI): guchacha.com 2026-09-22
 #     - N225 用日本股市整体市场口径月频（不是 N225 指数本身）
 #     - GDAXI 用 DAX 指数本身周频 2016 起
@@ -180,7 +182,7 @@ class RebalanceAction:
 #   US REIT + 中证 REITs: 见 LIVE_REIT_SNAPSHOT_BY_INDEX（spec REITs-DY — liubo 2026-10-12 拍板，
 #     每周五 cron 跑 fetch_reit_valuation.py 注入；不再用陈旧 P/FFO / P/NAV 硬编码）
 #   HSI: hsi.com.hk / 百分位网 2026-09-28（PE 10.8557 / 分位 58.06%）
-#   HSTECH: 理杏仁 2026-10-09（PE 21.8289 / 分位 19.69%；触发 ADD +1 — 欠配 0.65 仓 + PE < 20%）
+#   HSTECH: 理杏仁 2026-10-23（PE 20.6272 / 分位 9.42% → 跌回 <20% 深价值区；冷却期冻结至 2026-11-08）
 #   baifenwei.com 2026-09-24 也提供 PE 分位（沪深300/科创50 等 A 股）作为交叉验证。
 PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal | None, Decimal | None]] = {
     # ── A 股（PE-TTM，理杏仁 2026-10-23）──
@@ -193,12 +195,14 @@ PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal | None, Decimal |
     "000688": (ValuationMetric.PS_TTM, Decimal("8.2313"), Decimal("0.6948")),   # 科创 50
     "000698": (ValuationMetric.PS_TTM, Decimal("5.8879"), Decimal("0.3969")),   # 科创 100（< 50% → 欠配就 ADD；冷却期冻结）
     "399673": (ValuationMetric.PS_TTM, Decimal("3.5209"), Decimal("0.1050")),   # 创业板 50（< 20% 深价值 → ADD；冷却期冻结）
-    # ── 美股（PE-TTM，理杏仁 2026-10-23）──
-    ".INX": (ValuationMetric.PE_TTM, Decimal("25.4957"), Decimal("0.5633")),    # 标普 500
-    # .NDX: 理杏仁 CSV 两期都无数据 → 数值 None，分位沿用螺丝钉估值表 2026-10-16
-    # （liubo 2026-10-18 提供；口径 PE-TTM 10 年分位，跟其他指数保持一致）
-    ".NDX": (ValuationMetric.PE_TTM, None, Decimal("0.7259")),                  # 纳指 100（10 年 PE 分位 72.59% → 50-80% 区间 → HOLD）
-    ".OEX": (ValuationMetric.PE_TTM, Decimal("25.4957"), Decimal("0.5633")),    # 标普 100（INX 代理，2026-10-23 更新）
+    # ── 美股（PE-TTM 分位：螺丝钉估值表第 2999 期 2026-10-23；倍数：理杏仁 CSV 2026-10-23）──
+    # liubo 2026-10-24 拍板「美股用这个」→ 美股分位统一走螺丝钉口径。
+    # 螺丝钉只给「近五年 / 近十年市盈率分位数」+ ROE，不给 PE 倍数 → 倍数沿用理杏仁 CSV。
+    # 本组合统一用 10 年窗口（跟理杏仁 CSV 同口径）。
+    ".INX": (ValuationMetric.PE_TTM, Decimal("25.4957"), Decimal("0.7474")),    # 标普 500（螺丝钉 10 年分位 74.74% / 5 年 67.66%）
+    # .NDX: 理杏仁 CSV 无数据 → 倍数 None；分位取螺丝钉
+    ".NDX": (ValuationMetric.PE_TTM, None, Decimal("0.6455")),                  # 纳指 100（螺丝钉 10 年分位 64.55% / 5 年 52.03%）
+    ".OEX": (ValuationMetric.PE_TTM, Decimal("25.4957"), Decimal("0.7474")),    # 标普 100（螺丝钉无此行 → INX 代理）
     # ── 港股（PE-TTM，理杏仁 2026-10-23）──
     "HSTECH": (ValuationMetric.PE_TTM, Decimal("20.6272"), Decimal("0.0942")),  # 恒生科技（9.42% < 20% → 深价值买入信号；冷却期冻结）
     # ── 国外发达（PE-TTM，guchacha.com 2026-09-22）──
