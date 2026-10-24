@@ -122,8 +122,10 @@ SUBCLASS_BY_CODE: dict[str, SwensenClass] = {
     "011612": SwensenClass.CN_EQUITY,  # 华夏科创50ETF联接A
     "019857": SwensenClass.CN_EQUITY,  # 博时上证科创板100ETF联接A（2026-10-09 拍板换掉 020291，建仓 1 仓）
     "023414": SwensenClass.CN_EQUITY,  # 工银创业板50ETF联接A（2026-10-09 拍板换掉 160422，建仓 1 仓）
-    # 港股 (1) - 2026-09-29 liubo 把 013127 从左侧布局组合转过来，跟踪恒生科技 HSTECH
+    # 港股 (2) - 2026-09-29 liubo 把 013127 从左侧布局组合转过来，跟踪恒生科技 HSTECH
     "013127": SwensenClass.HK_EQUITY,  # 汇添富恒生科技 ETF 联接发起式(QDII)A
+    # 2026-10-25 liubo 转 4 只债基建仓 018200，跟踪恒生消费指数 HSCGSI
+    "018200": SwensenClass.HK_EQUITY,  # 嘉实恒生消费ETF发起联接(QDII)A
     # 美股股票 (7 宽基) - 519981 标普100 + 017641 标普500 + 5 只纳100
     "519981": SwensenClass.US_EQUITY,  # 长信标普100
     "018966": SwensenClass.US_EQUITY,  # 汇添富纳100（联接基金）
@@ -210,8 +212,9 @@ FUND_NAME_BY_CODE: dict[str, str] = {
     "011612": "华夏科创50ETF联接A",
     "019857": "博时上证科创板100ETF联接A",
     "023414": "工银创业板50ETF联接A",
-    # 港股 (1)
+    # 港股 (2)
     "013127": "汇添富恒生科技 ETF 联接发起式(QDII)A",
+    "018200": "嘉实恒生消费ETF发起联接(QDII)A",  # 2026-10-25 转 4 只债基建仓 1 仓
     # 美股股票 (7 宽基)
     "519981": "长信标普100",
     "018966": "汇添富纳100",

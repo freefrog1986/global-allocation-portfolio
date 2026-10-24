@@ -140,17 +140,17 @@ class TestSubclassByCode:
             "004098", "006809", "014673", "016495",
         }
 
-    def test_no_more_hk_equity_in_mapping(self) -> None:
-        """第二十二轮（2026-09-29）：013127 汇添富恒生科技 转回大类资产，HK_EQUITY 子类 1 只。
+    def test_hk_equity_in_mapping(self) -> None:
+        """HK_EQUITY 子类 2 只。
 
-        之前第十八轮砍完后 HK_EQUITY 0 只；2026-09-29 liubo 把 013127 从
-        左侧布局组合转过来 → HK_EQUITY 现在 1 只。
+        - 013127 汇添富恒生科技：2026-09-29 liubo 从左侧布局组合转回大类资产
+        - 018200 嘉实恒生消费：第三十八轮（2026-10-25）转 4 只债基建仓 1 仓
         """
         hk_funds = [
             code for code, sub in SUBCLASS_BY_CODE.items()
             if sub == SwensenClass.HK_EQUITY
         ]
-        assert hk_funds == ["013127"]
+        assert hk_funds == ["013127", "018200"]
 
     def test_unknown_code_returns_none(self) -> None:
         assert get_subclass("999999") is None

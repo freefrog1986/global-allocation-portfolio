@@ -30,8 +30,8 @@ from global_allocation.portfolio.cost_basis import (
 
 
 class TestCostBasisByCode:
-    def test_has_fifty_two_funds(self) -> None:
-        """52 只大类资产配置基金有成本数字（第二十五轮 liubo 2026-10-09 加 011612/019857/023414 3 只科创/创业宽基后）。
+    def test_has_fifty_three_funds(self) -> None:
+        """53 只大类资产配置基金有成本数字（第三十八轮 liubo 2026-10-25 加 018200 嘉实恒生消费后）。
 
         019441 万家纳指100 发起式 QDII A：直接 QDII（非联接），DCA ¥10/天 → 2000 CNY，
         跟 019172 双只备份；初始成本 0。NDX 总共 5 只合并（1 联接 + 4 直接 QDII 场外）。
@@ -40,10 +40,10 @@ class TestCostBasisByCode:
         011612 华夏科创50ETF联接A：2026-10-09 加，占位 0；019857 博时上证科创板100 + 023414 工银创业板50
         各建仓 1 仓 = 10000。
         """
-        assert len(COST_BASIS_BY_CODE) == 52
+        assert len(COST_BASIS_BY_CODE) == 53
 
     def test_total_matches_sum(self) -> None:
-        """总和等于 liubo 算出的 626454.47（52 只；2026-10-17 liubo 反馈"把定投的总成本算上去"，
+        """总和等于 liubo 算出的 626454.47（53 只；2026-10-17 liubo 反馈"把定投的总成本算上去"，
         5 只 DCA 基金 cost 改为累计目标 +20650：000614 0→10000, 016452 60→1800, 019172 40→2000,
         019441 40→2000, 000216 2510→7500；2026-10-09 之前是 605804.47）。
         """
@@ -69,6 +69,27 @@ class TestCostBasisByCode:
         """港股：013127 汇添富恒生科技 ETF 联接发起式(QDII)A（2026-09-29 第二十三轮加 + 2026-10-09 加仓 +1 仓）。
         跟踪恒生科技 HSTECH 指数。"""
         assert COST_BASIS_BY_CODE["013127"] == Decimal("35000")  # 汇添富恒生科技 ETF 联接发起式(QDII)A（2026-10-09 加仓）
+
+    def test_hk_consumer_018200_from_bond_conversion(self) -> None:
+        """第三十八轮（liubo 2026-10-25）：4 只债基超级转换 → 018200 嘉实恒生消费 ETF 发起联接(QDII)A。
+
+        蚂蚁截图（转换方式 = 超级转换，组合「全球资产配置」）：
+        - 007520 富安达富利纯债A：1908 份 / 2207.36 元（部分转，总 8677.84 份）
+        - 005690 中银安享债券A：958.70 份 / 1006.52 元（全部）
+        - 008505 浙商中短债A：3987.50 份 / 4640.25 元（全部）
+        - 004827 平安中短债A：1795.60 份 / 2146.28 元（全部）
+        实际转出合计 10000.41 元 ≈ 1 仓。
+
+        记账：3 只全转的债基成本上限 = 各自记录成本（1000 / 4493.47 / 2000），
+        差额由 007520 吸收 → 目标 018200 = 整 10000（1 仓），总额净 0。
+        """
+        assert COST_BASIS_BY_CODE["018200"] == Decimal("10000")
+        assert COST_BASIS_BY_CODE["005690"] == Decimal("0")
+        assert COST_BASIS_BY_CODE["008505"] == Decimal("0")
+        assert COST_BASIS_BY_CODE["004827"] == Decimal("0")
+        assert COST_BASIS_BY_CODE["007520"] == Decimal("7493.47")
+        # 源 -10000 / 目标 +10000 → 总额不变
+        assert sum(COST_BASIS_BY_CODE.values()) == TOTAL_COST_CNY
 
     def test_specific_us_amounts(self) -> None:
         """7 只美股宽基（标普500/标普100 + 5 只纳100；第二十二轮 liubo 2026-09-29 卖出 019524）。
@@ -128,11 +149,11 @@ class TestCostBasisByCode:
     def test_unlocked_short_bond_funds(self) -> None:
         """第十九轮解锁：008505/004827 不再按现金，进 cost_basis。
         2026-09-24 liubo 转换：第一次 008505 8000 → 014532，第二次 008505 4999.39 → 028277。
-        现在 008505 剩 4493.47（= 9492.86 - 4999.39 - 0；17492.86 减两次转出）。
         004827 2026-10-09 转 20000 给 019857/023414 → 22000 变 2000。
+        2026-10-25 liubo 把 008505（4640.25）/ 004827（2146.28）全部转成 018200 → 都归零。
         """
-        assert COST_BASIS_BY_CODE["008505"] == Decimal("4493.47")
-        assert COST_BASIS_BY_CODE["004827"] == Decimal("2000")
+        assert COST_BASIS_BY_CODE["008505"] == Decimal("0")
+        assert COST_BASIS_BY_CODE["004827"] == Decimal("0")
 
     def test_007997_moved_from_dividend_strategy(self) -> None:
         """第十九轮：007997 易方达年年恒秋一年定开债A 从红利策略组合移过来。"""
@@ -143,7 +164,7 @@ class TestCostBasisByCode:
         assert COST_BASIS_BY_CODE["004534"] == Decimal("20000")  # 汇添富双盈回报
         assert COST_BASIS_BY_CODE["110017"] == Decimal("1000")   # 易方达增强回报
         assert COST_BASIS_BY_CODE["009625"] == Decimal("1000")   # 天弘中债3-5年政金债
-        assert COST_BASIS_BY_CODE["005690"] == Decimal("1000")   # 中银安享
+        assert COST_BASIS_BY_CODE["005690"] == Decimal("0")      # 中银安享（2026-10-25 全部转 018200）
         assert COST_BASIS_BY_CODE["400030"] == Decimal("1000")   # 东方添益
         assert COST_BASIS_BY_CODE["010942"] == Decimal("20000")  # 招商瑞乐6个月
         assert COST_BASIS_BY_CODE["008420"] == Decimal("20000")  # 广发招泰
@@ -242,12 +263,11 @@ class TestPositionUnitByIndexCode:
         assert get_cost_basis("004137") is None
 
     def test_unlocked_funds_have_cost(self) -> None:
-        """008505/004827 第十九轮解锁后有成本数字。
-        008505: 17492.86 → 9492.86（第一次转 8000 到 014532）→ 4493.47（第二次转 4999.39 到 028277）。
-        004827: 22000 → 2000（2026-10-09 转 20000 给 019857 + 023414，每次 10000）。
+        """008505/004827 第十九轮解锁后进 cost_basis。
+        2026-10-25 liubo 全部转成 018200 嘉实恒生消费 → 成本归零（表里保留条目）。
         """
-        assert get_cost_basis("008505") == Decimal("4493.47")
-        assert get_cost_basis("004827") == Decimal("2000")
+        assert get_cost_basis("008505") == Decimal("0")
+        assert get_cost_basis("004827") == Decimal("0")
 
     def test_moved_from_dividend_has_cost(self) -> None:
         """007997 第十九轮从红利策略组合移过来，有成本数字。"""

@@ -208,6 +208,10 @@ PE_SNAPSHOT_BY_INDEX: dict[str, tuple[ValuationMetric, Decimal | None, Decimal |
     ".OEX": (ValuationMetric.PE_TTM, Decimal("25.4957"), Decimal("0.7474")),    # 标普 100（螺丝钉无此行 → INX 代理）
     # ── 港股（PE-TTM，理杏仁 2026-10-23）──
     "HSTECH": (ValuationMetric.PE_TTM, Decimal("20.6272"), Decimal("0.0942")),  # 恒生科技（9.42% < 20% → 深价值买入信号；冷却期冻结）
+    # 恒生消费 HSCGSI：2026-10-19 先加进 INDEX_WATCHLIST（0 仓跟踪）；
+    # 2026-10-25 liubo 转 4 只债基建仓 018200 嘉实恒生消费 ETF 发起联接(QDII)A
+    # → 从 watchlist 移出，改走持仓基金路径（fund → index 映射在 FUND_INDEX_MAP）
+    "HSCGSI": (ValuationMetric.PE_TTM, Decimal("13.3542"), Decimal("0.0028")),  # 恒生消费（0.28% < 20% → 深价值）
     # ── 国外发达（.N225 / .GDAXI / .FCHI）：见 WIND_PE_SNAPSHOT_BY_INDEX
     #    （liubo 2026-10-25 从 Wind 查的 PE-TTM，估值日 2026-10-23）
     # ── 新兴市场（PE-TTM 兜底；正常路径走 OVERSEAS_SNAPSHOT_BY_INDEX 的 live DY）──
@@ -296,10 +300,13 @@ FUND_INDEX_MAP: dict[str, tuple[SwensenClass, str, str]] = {
     "011612": (SwensenClass.CN_EQUITY, "000688", "华夏科创 50ETF 联接 A"),
     "019857": (SwensenClass.CN_EQUITY, "000698", "博时上证科创板 100ETF 联接 A"),
     "023414": (SwensenClass.CN_EQUITY, "399673", "工银创业板 50ETF 联接 A"),
-    # 港股股票 (1 → HSTECH)
+    # 港股股票 (2 → HSTECH + HSCGSI)
     # 2026-09-29 liubo 把 013127 汇添富恒生科技 ETF 联接发起式(QDII)A
     # 从左侧布局组合转到大类资产配置（港股子类）
     "013127": (SwensenClass.HK_EQUITY, "HSTECH", "汇添富恒生科技 ETF 联接发起式"),
+    # 2026-10-25 liubo 用 4 只债基超级转换建仓 018200 嘉实恒生消费 ETF 发起联接(QDII)A
+    # （场内 ETF 520620，跟踪恒生消费指数 HSCGSI）—— 恒生消费从 watchlist 转为持仓基金
+    "018200": (SwensenClass.HK_EQUITY, "HSCGSI", "嘉实恒生消费 ETF 联接"),
     # 美股股票 (7 只 → 4 个 ETF)
     # 2026-09-29 liubo 卖出 019524（华泰柏瑞纳 100 联接），8 → 7
     # 2026-09-29 liubo 确认 539001 是直接 QDII 场外（不是场内 ETF）
@@ -431,18 +438,10 @@ INDEX_WATCHLIST: list[tuple[SwensenClass, str, str, ValuationMetric, Decimal, De
         Decimal("5.8879"),
         Decimal("0.3969"),
     ),
-    # ── 港股 恒生消费指数（liubo 2026-10-19 拍板：港股也要跟踪）──
-    # 理杏仁代码 = HSCGSI（Hang Seng Consumer Goods & Services Index，不是 HSCG）。
-    # 数据源：data/lixinger/frog_20261023.csv（liubo 2026-10-23 提供）。
-    # 分位 0.28% < 20% → 深价值，建仓窗口。
-    (
-        SwensenClass.HK_EQUITY,
-        "HSCGSI",
-        "恒生消费指数",
-        ValuationMetric.PE_TTM,
-        Decimal("13.3542"),   # 理杏仁 2026-10-23
-        Decimal("0.0028"),    # 10 年分位 0.28% < 20% → 深价值
-    ),
+    # ── 港股 恒生消费指数 HSCGSI ──
+    # 2026-10-19 liubo 拍板加进 watchlist（0 仓跟踪，PE 13.3542 / 分位 0.28% → 深价值）；
+    # 2026-10-25 liubo 转 4 只债基建仓 018200 嘉实恒生消费 ETF 发起联接(QDII)A
+    # → 已从 watchlist 移出，改走持仓基金路径（PE 值见 PE_SNAPSHOT_BY_INDEX["HSCGSI"]）。
     # ── 港股 恒生创新药指数（liubo 2026-10-19 拍板：港股加跟踪）──
     # HSIDI = Hang Seng Innovative Drug Index。
     # URL: https://www.lixinger.com/analytics/index/detail/hk/HSIDI/2198
@@ -488,6 +487,7 @@ LAST_REBALANCE_BY_ETF: dict[str, date] = {
     "000698": date(2026, 10, 9),  # 科创 100 — liubo 2026-10-09 新建仓 1 仓
     "399673": date(2026, 10, 9),  # 创业板 50 — liubo 2026-10-09 新建仓 1 仓
     "HSTECH": date(2026, 10, 9),  # 恒生科技 — liubo 2026-10-09 +1 仓 25000→35000（commit 664b6d6）
+    "HSCGSI": date(2026, 10, 25),  # 恒生消费 — liubo 2026-10-25 转 4 只债基建仓 018200 嘉实恒生消费 1 仓
     # liubo 2026-09-29 加 019172/019441 纳指定投（commit 9e70495 之前的 5a5d3c0 等）
     ".NDX": date(2026, 9, 29),    # 纳指 100 — liubo 2026-09-29 加 2 只定投基金
 }

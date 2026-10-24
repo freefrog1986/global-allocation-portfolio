@@ -324,23 +324,23 @@ class TestEvaluateFundMultiMetric:
     def test_watchlist_zero_position_can_build(self) -> None:
         """watchlist（0 仓位）分位 < 50% → BUILD（提醒建仓）。
 
-        第三十六轮（liubo 2026-10-19）：用 HSCGSI（恒生消费指数，理杏仁代码）做示例
-        （HSI 已从 watchlist 移除）。
+        第三十八轮（liubo 2026-10-25）：HSCGSI 建仓 018200 后已从 watchlist 移出，
+        这里用仍在 watchlist 的 HSIDI（恒生创新药指数）做示例。
         """
         eval_ = _make_eval(
-            fund_code="(HSCGSI)",
-            fund_name="恒生消费指数（无持仓）",
+            fund_code="(HSIDI)",
+            fund_name="恒生创新药指数（无持仓）",
             subclass=SwensenClass.HK_EQUITY,
-            etf_index_code="HSCGSI",
-            metric=ValuationMetric.PE_TTM,
-            metric_value=Decimal("11.30"),
+            etf_index_code="HSIDI",
+            metric=ValuationMetric.PS_TTM,
+            metric_value=Decimal("2.7499"),
             metric_percentile=Decimal("0.40"),  # < 50% → BUILD
             current_position=Decimal("0"),
         )
         action = evaluate_fund(eval_)
         assert action.signal == PESignal.BUILD
         assert action.change == Decimal("1")
-        assert action.fund_code == "(HSCGSI)"
+        assert action.fund_code == "(HSIDI)"
 
 
 # ─── evaluate_fund 不变量 ─────────────────────────────
@@ -1203,19 +1203,22 @@ class TestWatchlistEvaluations:
         index_codes = [w[1] for w in INDEX_WATCHLIST]
         assert "HSI" not in index_codes
 
-    def test_hscg_hsidi_hsschky_in_watchlist(self) -> None:
-        """港股 3 个 watchlist ETF 指数都在 INDEX_WATCHLIST（HSCGSI + HSIDI + HSSCHKY）。
+    def test_hsidi_hsschky_in_watchlist(self) -> None:
+        """港股 watchlist ETF 指数在 INDEX_WATCHLIST（HSIDI + HSSCHKY）。
 
         liubo 2026-10-19 拍板：
         - HSCG 理杏仁代码 = HSCGSI（不是 HSCG），不要混淆
         - 港股加 HSSCHKY 恒生港股通高股息率指数（跟踪 ETF = 513690 港股红利 ETF 博时）
+        第三十八轮（liubo 2026-10-25）：HSCGSI 恒生消费建仓 018200 → 从 watchlist 移出
+        （改走持仓基金路径）。
         """
         index_codes = [w[1] for w in INDEX_WATCHLIST]
-        assert "HSCGSI" in index_codes  # 恒生消费指数（理杏仁代码）
         assert "HSIDI" in index_codes  # 恒生创新药指数
         assert "HSSCHKY" in index_codes  # 恒生港股通高股息率指数（2026-10-19 加）
         assert "HSCG" not in index_codes  # 不是 HSCG！
         assert "HSHDYI" not in index_codes  # 第三十七轮后段：liubo 拍板用 HSSCHKY 替代
+        # 2026-10-25 建仓 018200 嘉实恒生消费后，恒生消费不再是 watchlist
+        assert "HSCGSI" not in index_codes
 
     def test_build_watchlist_returns_one_per_entry(self) -> None:
         """每个 watchlist 项 1 个 eval。"""
@@ -1439,20 +1442,24 @@ class TestWeeklyRebalancePlan:
         assert len(hsi_actions) == 0
 
     def test_hscg_appears_with_real_pe(self) -> None:
-        """HSCGSI 恒生消费指数 watchlist 出现在 plan 里。
+        """HSCGSI 恒生消费指数出现在 plan 里（第三十八轮起是**持仓基金** 018200）。
 
         liubo 2026-10-23 提供 lixinger 2026-10-23 CSV：
-        PE-TTM = 13.3542 / 分位 0.28% < 20% → 深价值 → BUILD +1（不是占位 0 的 SKIP 路径）。
+        PE-TTM = 13.3542 / 分位 0.28% < 20% → 深价值。
+        2026-10-25 liubo 转 4 只债基建仓 018200 嘉实恒生消费 1 仓 → 仓位 1，
+        ADD 信号被冷却期冻结（当天建仓，30 天内不再动）。
         """
         actions = weekly_rebalance_plan()
         hscgsi_actions = [a for a in actions if a.etf_index_code == "HSCGSI"]
         assert len(hscgsi_actions) == 1
         hscgsi = hscgsi_actions[0]
+        assert hscgsi.fund_code == "018200"  # 持仓基金（不再是 watchlist 标记）
         assert hscgsi.subclass == SwensenClass.HK_EQUITY
-        assert hscgsi.current_position == Decimal("0")
+        assert hscgsi.current_position == Decimal("1")
         assert hscgsi.metric == ValuationMetric.PE_TTM
-        # 分位 0.28% < 20% → 深价值 → BUILD（空仓 + 分位 < 50%）
-        assert hscgsi.signal == PESignal.BUILD
+        # 分位 0.28% < 20% → 深价值（ADD），但当天建仓 → 冷却期冻结成 HOLD
+        assert hscgsi.signal == PESignal.HOLD
+        assert "冷却期" in hscgsi.reason
         assert hscgsi.metric_percentile == Decimal("0.0028")
         assert hscgsi.metric_value == Decimal("13.3542")
 

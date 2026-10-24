@@ -1877,10 +1877,11 @@ class TestPerFundSection:
         覆盖 → dedupe 跳过。
         第三十七轮（liubo 2026-10-19）：加 HSSCHKY 恒生港股通高股息率指数到 watchlist（HK，0 持仓）。
         跟踪 ETF = 513690 港股红利 ETF 博时。
+        第三十八轮（liubo 2026-10-25）：恒生消费 HSCGSI 建仓 018200 → 从 watchlist 移出，
+        改走持仓基金行（见 test_hk_consumer_018200_is_holdings_row）。
         """
         table = self._get_per_fund_table(journal)
         watchlist_names = {
-            "恒生消费指数",
             "恒生创新药指数",
             "恒生港股通高股息率指数",  # 第三十七轮（替换了原来的恒生高股息率指数）
             "日经 225",
@@ -1901,6 +1902,20 @@ class TestPerFundSection:
         assert seen == watchlist_names, (
             f"watchlist 5 个指数都应出现，实际：{seen}"
         )
+
+    def test_hk_consumer_018200_is_holdings_row(self, journal: PortfolioJournal) -> None:
+        """第三十八轮（liubo 2026-10-25）：018200 嘉实恒生消费走**持仓基金行**，不是 watchlist 行。
+
+        liubo 转 4 只债基建仓 1 仓 → cost 10000，etf_index = 恒生消费指数（HSCGSI）。
+        """
+        table = self._get_per_fund_table(journal)
+        rows = [r for r in table["rows"] if "018200" in r["fund"]]
+        assert len(rows) == 1, f"应有 1 行 018200，实际 {len(rows)}"
+        row = rows[0]
+        assert row["etf_index"] == "恒生消费指数"
+        assert row["cost"] == "10,000.00", f"018200 cost 应为 10,000.00，实际 '{row['cost']}'"
+        # 不再是 watchlist 行（无「（无持仓）」标记）
+        assert "（无持仓）" not in row["fund"]
 
 
 # ─── A 股策略建议行（spec 098 第二十五轮 — liubo 2026-09-19 反馈）───

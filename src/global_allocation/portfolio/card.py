@@ -463,7 +463,8 @@ def _build_cost_basis_section() -> list[dict[str, object]]:
 #   - 剩下 30 只左右（中短债/美债/现金）→ 估值 "—"，调仓建议 "不动"
 #   - NDX 5 只（NDX 指数估值数据缺失）→ metric_value=None → 估值 "—"，advice 标 "跳过（数据缺失）"
 # 排序：SwensenClass 枚举顺序（A 股 → 港股 → 美股 → 国外发达 → 新兴市场 → 国内 REITs → 美国 REITs → 国内利率债 → 美债 → 商品 → 现金）+ fund_code
-# 不在 COST_BASIS_BY_CODE 但在 actions 里的（watchlist 的 5 个指数 HSCGSI/HSIDI/N225/FCHI/A100）→ 渲染（无成本显式 0.00）
+# 不在 COST_BASIS_BY_CODE 但在 actions 里的（watchlist 的指数 HSIDI/HSSCHKY/N225/FCHI/A100）→ 渲染（无成本显式 0.00）
+# （HSCGSI 恒生消费 2026-10-25 建仓 018200 后已从 watchlist 移到持仓基金行）
 
 
 # 第三十六轮（liubo 2026-10-19）：per-fund 表按「合理 ETF 顺序」排，数字小 → 大。
@@ -534,7 +535,7 @@ def _build_per_fund_section(region: SwensenClass | None = None) -> list[dict[str
     # 第三十三轮（liubo 2026-10-18 反馈）：
     # - 大类顺序：A股 → 港股 → 美股 → ...
     # - 同 ETF 指数聚一起（如 NDX 5 只挨着）
-    # - INDEX_WATCHLIST 里的指数（HSCGSI/HSIDI/N225/FCHI/A100）也列出，持仓 0
+    # - INDEX_WATCHLIST 里的指数（HSIDI/HSSCHKY/N225/FCHI/A100）也列出，持仓 0
     from global_allocation.portfolio.pe_rebalance import INDEX_WATCHLIST
 
     items: list[tuple[int, str, str, Decimal, str]] = []
